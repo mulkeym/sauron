@@ -1,0 +1,8 @@
+Meeting: Engineering Standup
+Date: 2026-04-10
+---
+Mike: Are we on track for the Q2 release?
+Sarah: Yes, but the API migration is behind schedule.
+Mike: What's blocking the API migration?
+Sarah: We're waiting on the new auth library to be approved.
+Bob: I can help with testing once it's ready.
