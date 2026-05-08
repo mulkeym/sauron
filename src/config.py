@@ -8,8 +8,10 @@ class Settings(BaseSettings):
     vllm_model_name: str = "google/gemma-4-31b-it"
 
     # Embeddings
+    embedding_mode: str = "api"  # "api" (external OpenAI-compat endpoint) or "local" (sentence-transformers)
+    embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint
     embedding_model_name: str = "intfloat/e5-large-v2"
-    embedding_device: str = "cpu"
+    embedding_device: str = "cpu"  # only used when embedding_mode=local
 
     # Qdrant
     qdrant_host: str = "localhost"
