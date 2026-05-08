@@ -1,4 +1,8 @@
-"""Standalone MCP server runner."""
+"""Standalone MCP server runner.
+
+Phase 3 complete: resources, server wiring, config, Docker service, and runner.
+Start with: python -m src.mcp.run
+"""
 from src.api.routes_ingest import get_vector_store, get_metadata_store, get_schema_registry
 from src.mcp.agent_registry import AgentRegistry
 from src.mcp.server import create_mcp_server
