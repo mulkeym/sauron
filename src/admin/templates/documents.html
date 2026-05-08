@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Documents - RAG Admin{% endblock %}
+{% block content %}
+<h1>Documents</h1>
+<table>
+    <thead><tr><th>Filename</th><th>Type</th><th>Category</th><th>ACL Groups</th><th>Chunks</th><th>Uploaded By</th><th>Actions</th></tr></thead>
+    <tbody>
+        {% for doc in documents %}
+        <tr>
+            <td>{{ doc.filename }}</td><td>{{ doc.doc_type }}</td>
+            <td>{{ doc.category or "uncategorized" }}</td>
+            <td>{{ doc.acl_groups | join(", ") }}</td>
+            <td>{{ doc.chunk_count }}</td><td>{{ doc.uploaded_by }}</td>
+            <td><button class="danger" hx-delete="/admin/api/documents/{{ doc.doc_id }}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

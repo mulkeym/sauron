@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Categories - RAG Admin{% endblock %}
+{% block content %}
+<h1>Categories</h1>
+<table>
+    <thead><tr><th>Name</th><th>Description</th><th>ACL Groups</th><th>Routing Keywords</th></tr></thead>
+    <tbody>
+        {% for cat in categories %}
+        <tr><td>{{ cat.name }}</td><td>{{ cat.description }}</td><td>{{ cat.acl_groups | join(", ") }}</td><td>{{ cat.routing_keywords | join(", ") }}</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

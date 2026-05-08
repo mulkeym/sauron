@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Audit Log - RAG Admin{% endblock %}
+{% block content %}
+<h1>Audit Log</h1>
+<table>
+    <thead><tr><th>Timestamp</th><th>Agent</th><th>User</th><th>Tool</th><th>Query</th></tr></thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr><td>{{ entry.timestamp }}</td><td>{{ entry.agent_id }}</td><td>{{ entry.username }}</td><td>{{ entry.tool }}</td><td>{{ entry.query }}</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
