@@ -1,0 +1,63 @@
+import pytest
+from unittest.mock import patch
+from src.agent.synthesizer import synthesize_answer
+from src.agent.state import AgentState, QueryType
+from src.retrieval.models import RetrievedChunk, ChunkMetadata
+
+
+def _make_chunk(text, doc_id="d1", filename="policy.pdf", page=None, score=0.9):
+    return RetrievedChunk(
+        text=text,
+        score=score,
+        metadata=ChunkMetadata(
+            doc_id=doc_id,
+            filename=filename,
+            doc_type="pdf",
+            chunk_index=0,
+            start_char=0,
+            acl_groups=["finance"],
+            page=page,
+        ),
+    )
+
+
+def test_synthesize_with_chunks():
+    with patch("src.agent.synthesizer.generate", return_value="Expenses over $500 need approval [1]."):
+        state = AgentState(
+            question="What is the expense policy?",
+            user_groups=["finance"],
+            query_type=QueryType.LOOKUP,
+            retrieved_chunks=[_make_chunk("All expenses over $500 require manager approval.", page=12)],
+            sql_results=[],
+        )
+        result = synthesize_answer(state)
+    assert "approval" in result["answer"].lower() or "500" in result["answer"]
+    assert len(result["citations"]) == 1
+    assert result["citations"][0].filename == "policy.pdf"
+    assert result["citations"][0].page == 12
+
+
+def test_synthesize_with_sql_results():
+    with patch("src.agent.synthesizer.generate", return_value="Q3 2026 revenue was $1,500,000."):
+        state = AgentState(
+            question="What was Q3 revenue?",
+            user_groups=["finance"],
+            query_type=QueryType.ANALYTICAL,
+            retrieved_chunks=[],
+            sql_results=[{"quarter": "Q3", "revenue": 1500000, "year": 2026}],
+        )
+        result = synthesize_answer(state)
+    assert "1,500,000" in result["answer"] or "1500000" in result["answer"]
+
+
+def test_synthesize_no_context():
+    state = AgentState(
+        question="Something with no results",
+        user_groups=["finance"],
+        query_type=QueryType.LOOKUP,
+        retrieved_chunks=[],
+        sql_results=[],
+    )
+    result = synthesize_answer(state)
+    assert "could not find" in result["answer"].lower()
+    assert result["citations"] == []
