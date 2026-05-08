@@ -1,5 +1,6 @@
 # Core
 fastapi[standard]>=0.136.0
+fastmcp>=3.0.0
 langgraph>=0.3.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
