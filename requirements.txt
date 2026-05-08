@@ -1,0 +1,30 @@
+# Core
+fastapi[standard]>=0.136.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-multipart>=0.0.12
+
+# Auth
+PyJWT>=2.9.0
+cryptography>=43.0.0
+
+# Ingestion
+unstructured[pdf,docx,xlsx]>=0.22.0
+python-docx>=1.2.0
+openpyxl>=3.1.0
+
+# Embeddings & Vector DB
+sentence-transformers>=3.3.0
+qdrant-client>=1.17.0
+
+# LLM
+openai>=1.55.0
+
+# Database (metadata store)
+sqlalchemy>=2.0.36
+aiosqlite>=0.20.0
+
+# Testing
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+httpx>=0.28.0
