@@ -23,8 +23,10 @@ def test_ingest_document(client, auth_headers):
     mock_result.doc_type = "pdf"
     mock_result.chunk_count = 3
     with patch("src.api.routes_ingest.ingest_document", new_callable=AsyncMock, return_value=mock_result):
-        with open(FIXTURES / "sample.pdf", "rb") as f:
-            resp = client.post("/api/v1/ingest", files={"file": ("sample.pdf", f, "application/pdf")}, data={"acl_groups": '["finance"]'}, headers=auth_headers)
+        with patch("src.api.routes_ingest.get_vector_store", return_value=MagicMock()):
+            with patch("src.api.routes_ingest.get_metadata_store", return_value=AsyncMock()):
+                with open(FIXTURES / "sample.pdf", "rb") as f:
+                    resp = client.post("/api/v1/ingest", files={"file": ("sample.pdf", f, "application/pdf")}, data={"acl_groups": '["finance"]'}, headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["doc_id"] == "doc-123"
 
