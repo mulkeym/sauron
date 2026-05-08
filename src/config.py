@@ -28,9 +28,19 @@ class Settings(BaseSettings):
     # Metadata DB
     database_url: str = "sqlite+aiosqlite:///./data/metadata.db"
 
+    # Database Registry (for text-to-SQL)
+    registered_databases: str = ""  # comma-separated list of "name=url" pairs
+
     @property
     def api_key_list(self) -> list[str]:
         return [k.strip() for k in self.api_keys.split(",") if k.strip()]
+
+    @property
+    def database_registry(self) -> dict[str, str]:
+        if not self.registered_databases:
+            return {}
+        pairs = [p.strip() for p in self.registered_databases.split(",") if "=" in p]
+        return {k.strip(): v.strip() for p in pairs for k, v in [p.split("=", 1)]}
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
