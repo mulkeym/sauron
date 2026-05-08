@@ -8,6 +8,7 @@ from src.ingestion.embedder import embed_texts
 from src.retrieval.models import ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 from src.db.metadata import MetadataStore
+from src.knowledge.categorizer import categorize_document
 
 
 @dataclass
@@ -27,9 +28,29 @@ async def ingest_document(
     category="",
     chunk_size=512,
     chunk_overlap=50,
+    auto_categorize=False,
 ):
     doc_id = str(uuid.uuid4())
     parsed = parse_document(file_path)
+
+    if not category and auto_categorize:
+        cat_result = categorize_document(
+            filename=parsed.filename,
+            doc_type=parsed.doc_type,
+            text_preview=parsed.text[:500],
+            metadata_store=metadata_store,
+        )
+        if cat_result.is_new:
+            await metadata_store.add_proposal(
+                proposed_name=cat_result.category,
+                proposed_description=cat_result.description,
+                proposed_acl_groups=cat_result.suggested_acl_groups,
+                proposed_keywords=cat_result.suggested_keywords,
+                proposed_by="auto-categorizer",
+            )
+            category = "uncategorized"
+        else:
+            category = cat_result.category
     chunks = chunk_text(parsed.text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     texts = [c.text for c in chunks]
     metadatas = [
