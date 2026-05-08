@@ -55,6 +55,32 @@ services:
       - vllm
     restart: unless-stopped
 
+  # MCP Server (Knowledge Service for AI agents)
+  mcp:
+    build: .
+    command: ["python", "-m", "src.mcp.run"]
+    ports:
+      - "8090:8090"
+    environment:
+      - VLLM_BASE_URL=http://vllm:8000/v1
+      - VLLM_MODEL_NAME=google/gemma-4-31b-it
+      - EMBEDDING_MODEL_NAME=intfloat/e5-large-v2
+      - EMBEDDING_DEVICE=cpu
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION_NAME=documents
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - API_KEYS=${API_KEYS:-dev-key-1}
+      - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
+      - MCP_PORT=8090
+    volumes:
+      - api_data:/app/data
+      - embedding_cache:/root/.cache/huggingface
+    depends_on:
+      - qdrant
+      - vllm
+    restart: unless-stopped
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:v0.9.0
     ports:

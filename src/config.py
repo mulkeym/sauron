@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Database Registry (for text-to-SQL)
     registered_databases: str = ""  # comma-separated list of "name=url" pairs
 
+    # MCP Server
+    mcp_server_name: str = "rag-knowledge-service"
+    mcp_port: int = 8090
+
+    # Audit
+    audit_log_path: str = "data/audit.jsonl"
+
     @property
     def api_key_list(self) -> list[str]:
         return [k.strip() for k in self.api_keys.split(",") if k.strip()]
