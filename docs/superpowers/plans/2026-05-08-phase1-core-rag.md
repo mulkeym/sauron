@@ -6,7 +6,7 @@
 
 **Architecture:** A FastAPI backend handles document ingestion (parse, chunk, embed) and query serving. Documents are stored in Qdrant with ACL metadata. Gemma 4 31B served via vLLM generates answers from retrieved context. Open WebUI provides the chat interface. JWT + API key authentication enforces access control. Docker Compose orchestrates all services.
 
-**Tech Stack:** Python 3.11+, FastAPI, Qdrant, vLLM, Gemma 4 31B, E5-large (intfloat/multilingual-e5-large), Unstructured.io, Open WebUI, Docker Compose, PyJWT, python-multipart
+**Tech Stack:** Python 3.11+, FastAPI, Qdrant, vLLM, Gemma 4 31B, E5-large (intfloat/e5-large-v2), Unstructured.io, Open WebUI, Docker Compose, PyJWT, python-multipart
 
 ---
 
@@ -118,8 +118,7 @@ rag/
 
 ```
 # Core
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
+fastapi[standard]>=0.136.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 python-multipart>=0.0.12
@@ -127,16 +126,15 @@ python-multipart>=0.0.12
 # Auth
 PyJWT>=2.9.0
 cryptography>=43.0.0
-passlib[bcrypt]>=1.7.4
 
 # Ingestion
-unstructured[pdf,docx,xlsx]>=0.16.0
-python-docx>=1.1.0
+unstructured[pdf,docx,xlsx]>=0.22.0
+python-docx>=1.2.0
 openpyxl>=3.1.0
 
 # Embeddings & Vector DB
 sentence-transformers>=3.3.0
-qdrant-client>=1.12.0
+qdrant-client>=1.17.0
 
 # LLM
 openai>=1.55.0
@@ -159,7 +157,7 @@ VLLM_BASE_URL=http://localhost:8000/v1
 VLLM_MODEL_NAME=google/gemma-4-31b-it
 
 # Embeddings
-EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-large
+EMBEDDING_MODEL_NAME=intfloat/e5-large-v2
 EMBEDDING_DEVICE=cpu
 
 # Qdrant
@@ -197,7 +195,7 @@ class Settings(BaseSettings):
     vllm_model_name: str = "google/gemma-4-31b-it"
 
     # Embeddings
-    embedding_model_name: str = "intfloat/multilingual-e5-large"
+    embedding_model_name: str = "intfloat/e5-large-v2"
     embedding_device: str = "cpu"
 
     # Qdrant
@@ -2666,7 +2664,7 @@ version: "3.9"
 services:
   # Qdrant vector database
   qdrant:
-    image: qdrant/qdrant:v1.13.2
+    image: qdrant/qdrant:v1.17.1
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -2683,7 +2681,7 @@ services:
     command: >
       --model google/gemma-4-31b-it
       --max-model-len 32768
-      --tensor-parallel-size 1
+      --tensor-parallel-size 2
       --gpu-memory-utilization 0.9
     ports:
       - "8000:8000"
@@ -2706,7 +2704,7 @@ services:
     environment:
       - VLLM_BASE_URL=http://vllm:8000/v1
       - VLLM_MODEL_NAME=google/gemma-4-31b-it
-      - EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-large
+      - EMBEDDING_MODEL_NAME=intfloat/e5-large-v2
       - EMBEDDING_DEVICE=cpu
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
@@ -2724,7 +2722,7 @@ services:
 
   # Open WebUI (chat interface)
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.9.0
     ports:
       - "3000:8080"
     environment:
