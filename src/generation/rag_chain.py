@@ -56,3 +56,8 @@ def rag_query(question, user_groups, vector_store, top_k=10):
         for c in chunks
     ]
     return RAGResponse(answer=answer, citations=citations)
+
+
+async def agent_query(question: str, user_groups: list[str], vector_store, schema_registry) -> RAGResponse:
+    from src.agent.graph import run_agent
+    return await run_agent(question=question, user_groups=user_groups, vector_store=vector_store, schema_registry=schema_registry)

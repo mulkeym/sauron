@@ -25,6 +25,16 @@ def get_metadata_store():
         _metadata_store = MetadataStore()
     return _metadata_store
 
+from src.db.schema_registry import SchemaRegistry
+
+_schema_registry = None
+
+def get_schema_registry():
+    global _schema_registry
+    if _schema_registry is None:
+        _schema_registry = SchemaRegistry()
+    return _schema_registry
+
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_file(file: UploadFile = File(...), acl_groups: str = Form(default="[]"), category: str = Form(default=""), user: UserContext = Depends(require_auth)):
     groups = json.loads(acl_groups)
