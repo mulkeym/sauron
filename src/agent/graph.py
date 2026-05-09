@@ -8,12 +8,14 @@ from src.agent.strategies.lookup import retrieve_lookup
 from src.agent.strategies.sweep import retrieve_sweep
 from src.agent.strategies.analytical import retrieve_analytical
 from src.agent.strategies.cross_reference import retrieve_cross_reference
+from src.db.metadata import MetadataStore
 from src.db.schema_registry import SchemaRegistry
 from src.generation.rag_chain import RAGResponse
+from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 
 
-def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry):
+def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None):
     graph = StateGraph(AgentState)
 
     graph.add_node("classify", classify_query)
@@ -33,12 +35,55 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         return retrieve_lookup(state, vector_store=vector_store)
 
     graph.add_node("retrieve", retrieve)
+
+    # Enrich retrieved context with knowledge graph relationships
+    async def enrich_with_graph(state: AgentState) -> dict:
+        if not metadata_store:
+            return {}
+        chunks = state.get("retrieved_chunks", [])
+        if not chunks:
+            return {}
+        # Extract key terms from the question to search the knowledge graph
+        question = state.get("question", "")
+        try:
+            entities = await metadata_store.search_entities(question.split()[-1] if question else "")
+            if not entities:
+                # Try first noun-like word
+                for word in question.split():
+                    if len(word) > 3 and word[0].isupper():
+                        entities = await metadata_store.search_entities(word)
+                        if entities:
+                            break
+            if entities:
+                details = await metadata_store.get_entity_details(entities[0].id)
+                if details["relationships"]:
+                    # Add knowledge graph context as a synthetic chunk
+                    kg_text = f"Knowledge Graph for '{entities[0].name}' ({entities[0].entity_type}):\n"
+                    for r in details["relationships"]:
+                        kg_text += f"  - {r['relationship_type']} → {r['related_entity']} ({r['entity_type']})\n"
+                    for m in details["mentions"][:3]:
+                        if m["context_snippet"]:
+                            kg_text += f"  Mentioned in: {m['context_snippet'][:150]}\n"
+                    kg_chunk = RetrievedChunk(
+                        text=kg_text, score=0.5,
+                        metadata=ChunkMetadata(
+                            doc_id="knowledge-graph", filename="knowledge_graph",
+                            doc_type="graph", chunk_index=0, start_char=0, acl_groups=["ALL"],
+                        ),
+                    )
+                    return {"retrieved_chunks": chunks + [kg_chunk]}
+        except Exception:
+            pass
+        return {}
+
+    graph.add_node("enrich", enrich_with_graph)
     graph.add_node("evaluate", evaluate_context)
     graph.add_node("synthesize", synthesize_answer)
 
     graph.set_entry_point("classify")
     graph.add_edge("classify", "retrieve")
-    graph.add_edge("retrieve", "evaluate")
+    graph.add_edge("retrieve", "enrich")
+    graph.add_edge("enrich", "evaluate")
 
     def should_reretrieval(state: AgentState) -> str:
         if state.get("needs_reretrieval", False):
@@ -50,8 +95,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     return graph.compile()
 
 
-async def run_agent(question: str, user_groups: list[str], vector_store: VectorStore, schema_registry: SchemaRegistry) -> RAGResponse:
-    graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry)
+async def run_agent(question: str, user_groups: list[str], vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None) -> RAGResponse:
+    graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
     initial_state = AgentState(
         question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
         retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
@@ -73,12 +118,12 @@ class AgentTrace:
     retrieval_attempts: int = 0
 
 
-async def run_agent_with_trace(question: str, user_groups: list[str], vector_store: VectorStore, schema_registry: SchemaRegistry) -> tuple[RAGResponse, AgentTrace]:
+async def run_agent_with_trace(question: str, user_groups: list[str], vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None) -> tuple[RAGResponse, AgentTrace]:
     import time
     trace = AgentTrace()
     total_start = time.time()
 
-    graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry)
+    graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
     initial_state = AgentState(
         question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
         retrieved_chunks=[], sql_results=[], retrieval_attempts=0,

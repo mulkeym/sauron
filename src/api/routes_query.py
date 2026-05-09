@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from src.api.models import CitationResponse, QueryRequest, QueryResponse
-from src.api.routes_ingest import get_vector_store, get_schema_registry
+from src.api.routes_ingest import get_vector_store, get_schema_registry, get_metadata_store
 from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.generation.rag_chain import agent_query
@@ -12,6 +12,7 @@ async def query(request: QueryRequest, user: UserContext = Depends(require_auth)
     result = await agent_query(
         question=request.question, user_groups=user.groups,
         vector_store=get_vector_store(), schema_registry=get_schema_registry(),
+        metadata_store=get_metadata_store(),
     )
     return QueryResponse(
         answer=result.answer,

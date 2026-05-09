@@ -193,12 +193,14 @@ async def playground_query(question: str = Form(""), play_user: str = Form("fina
             user_groups=user_groups,
             vector_store=get_vector_store(),
             schema_registry=get_schema_registry(),
+            metadata_store=get_metadata_store(),
         )
 
         # Build trace timeline
         step_labels = {
             "classify": "Classify Query",
             "retrieve": "Retrieve Documents",
+            "enrich": "Knowledge Graph Enrichment",
             "evaluate": "Evaluate Context",
             "synthesize": "Generate Answer",
         }
