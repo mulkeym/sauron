@@ -43,12 +43,29 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         chunks = state.get("retrieved_chunks", [])
         if not chunks:
             return {}
-        # Extract key terms from the question to search the knowledge graph
         question = state.get("question", "")
         try:
-            entities = await metadata_store.search_entities(question.split()[-1] if question else "")
+            # Use LLM to extract the key entity from the question
+            import asyncio
+            from src.generation.llm_client import generate as llm_generate, parse_json_response as parse_json
+            extract_resp = await asyncio.to_thread(
+                llm_generate,
+                system_prompt='Extract the main entity name from this question. Respond with ONLY JSON: {"entity": "name"}',
+                user_prompt=question,
+                temperature=0.0, max_tokens=128,
+            )
+            try:
+                parsed = parse_json(extract_resp)
+                search_term = parsed.get("entity", "")
+            except Exception:
+                search_term = ""
+
+            # Search knowledge graph with extracted entity
+            entities = []
+            if search_term:
+                entities = await metadata_store.search_entities(search_term)
+            # Fallback: try individual capitalized words
             if not entities:
-                # Try first noun-like word
                 for word in question.split():
                     if len(word) > 3 and word[0].isupper():
                         entities = await metadata_store.search_entities(word)
