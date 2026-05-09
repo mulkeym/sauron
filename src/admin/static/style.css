@@ -29,5 +29,7 @@ p { color: #6b7280; }
 .form-actions { margin-top: 1rem; }
 button.secondary { background: #6b7280; }
 button.secondary:hover { background: #4b5563; }
+.input-with-button { display: flex; gap: 0.5rem; align-items: center; }
+.input-with-button input { flex: 1; max-width: 500px; }
 .status-ok { color: #16a34a; font-weight: 600; }
 .status-err { color: #dc2626; font-weight: 600; }

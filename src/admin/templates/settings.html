@@ -12,11 +12,18 @@
         <p class="section-desc">OpenAI-compatible endpoint for text generation (e.g., vLLM, Ollama, TGI)</p>
         <div class="form-group">
             <label for="vllm_base_url">API Base URL</label>
-            <input type="text" id="vllm_base_url" name="vllm_base_url" value="{{ settings.vllm_base_url }}" placeholder="http://gpu-server:8000/v1">
+            <div class="input-with-button">
+                <input type="text" id="vllm_base_url" name="vllm_base_url" value="{{ settings.vllm_base_url }}" placeholder="http://gpu-server:8000/v1">
+                <button type="button" class="secondary" hx-post="/admin/api/settings/list-llm-models" hx-include="#vllm_base_url" hx-target="#llm-model-select" hx-swap="innerHTML">Refresh Models</button>
+            </div>
         </div>
         <div class="form-group">
-            <label for="vllm_model_name">Model Name</label>
-            <input type="text" id="vllm_model_name" name="vllm_model_name" value="{{ settings.vllm_model_name }}" placeholder="google/gemma-4-31b-it">
+            <label for="vllm_model_name">Model</label>
+            <div id="llm-model-select">
+                <select name="vllm_model_name" id="vllm_model_name">
+                    <option value="{{ settings.vllm_model_name }}" selected>{{ settings.vllm_model_name }}</option>
+                </select>
+            </div>
         </div>
         <div class="form-group">
             <button type="button" class="secondary" hx-post="/admin/api/settings/test-llm" hx-target="#llm-status" hx-swap="innerHTML">Test Connection</button>
@@ -36,11 +43,18 @@
         </div>
         <div class="form-group">
             <label for="embedding_api_url">API Base URL</label>
-            <input type="text" id="embedding_api_url" name="embedding_api_url" value="{{ settings.embedding_api_url }}" placeholder="http://gpu-server:8000/v1">
+            <div class="input-with-button">
+                <input type="text" id="embedding_api_url" name="embedding_api_url" value="{{ settings.embedding_api_url }}" placeholder="http://gpu-server:8000/v1">
+                <button type="button" class="secondary" hx-post="/admin/api/settings/list-embedding-models" hx-include="#embedding_api_url" hx-target="#embed-model-select" hx-swap="innerHTML">Refresh Models</button>
+            </div>
         </div>
         <div class="form-group">
-            <label for="embedding_model_name">Model Name</label>
-            <input type="text" id="embedding_model_name" name="embedding_model_name" value="{{ settings.embedding_model_name }}" placeholder="nvidia/llama-embed-nemotron-8b">
+            <label for="embedding_model_name">Model</label>
+            <div id="embed-model-select">
+                <select name="embedding_model_name" id="embedding_model_name">
+                    <option value="{{ settings.embedding_model_name }}" selected>{{ settings.embedding_model_name }}</option>
+                </select>
+            </div>
         </div>
         <div class="form-group">
             <button type="button" class="secondary" hx-post="/admin/api/settings/test-embedding" hx-target="#embed-status" hx-swap="innerHTML">Test Connection</button>

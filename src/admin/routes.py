@@ -128,6 +128,38 @@ async def save_settings(
     return HTMLResponse('<div class="status-ok">Settings saved successfully.</div>')
 
 
+@router.post("/api/settings/list-llm-models")
+async def list_llm_models(vllm_base_url: str = Form("")):
+    url = vllm_base_url or settings.vllm_base_url
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=url, api_key="not-needed")
+        models = client.models.list()
+        model_ids = [m.id for m in models.data]
+        if not model_ids:
+            return HTMLResponse('<select name="vllm_model_name" id="vllm_model_name"><option value="">No models found</option></select>')
+        options = "".join(f'<option value="{m}">{m}</option>' for m in model_ids)
+        return HTMLResponse(f'<select name="vllm_model_name" id="vllm_model_name">{options}</select>')
+    except Exception as e:
+        return HTMLResponse(f'<select name="vllm_model_name" id="vllm_model_name"><option value="">Error: {e}</option></select>')
+
+
+@router.post("/api/settings/list-embedding-models")
+async def list_embedding_models(embedding_api_url: str = Form("")):
+    url = embedding_api_url or settings.embedding_api_url
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=url, api_key="not-needed")
+        models = client.models.list()
+        model_ids = [m.id for m in models.data]
+        if not model_ids:
+            return HTMLResponse('<select name="embedding_model_name" id="embedding_model_name"><option value="">No models found</option></select>')
+        options = "".join(f'<option value="{m}">{m}</option>' for m in model_ids)
+        return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name">{options}</select>')
+    except Exception as e:
+        return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name"><option value="">Error: {e}</option></select>')
+
+
 @router.post("/api/settings/test-llm")
 async def test_llm_connection():
     try:
