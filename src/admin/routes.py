@@ -161,30 +161,38 @@ async def list_embedding_models(embedding_api_url: str = Form("")):
 
 
 @router.post("/api/settings/test-llm")
-async def test_llm_connection():
+async def test_llm_connection(vllm_base_url: str = Form("")):
+    url = vllm_base_url or settings.vllm_base_url
     try:
         from openai import OpenAI
-        client = OpenAI(base_url=settings.vllm_base_url, api_key="not-needed")
+        client = OpenAI(base_url=url, api_key="not-needed")
         models = client.models.list()
         model_ids = [m.id for m in models.data]
-        return HTMLResponse(f'<span class="status-ok">Connected. Models: {", ".join(model_ids[:3])}</span>')
+        return HTMLResponse(f'<span class="status-ok">Connected to {url}. Models: {", ".join(model_ids[:3])}</span>')
     except Exception as e:
-        return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')
+        return HTMLResponse(f'<span class="status-err">Failed connecting to {url}: {e}</span>')
 
 
 @router.post("/api/settings/test-embedding")
-async def test_embedding_connection():
+async def test_embedding_connection(
+    embedding_mode: str = Form(""),
+    embedding_api_url: str = Form(""),
+    embedding_model_name: str = Form(""),
+):
+    mode = embedding_mode or settings.embedding_mode
+    url = embedding_api_url or settings.embedding_api_url
+    model_name = embedding_model_name or settings.embedding_model_name
     try:
-        if settings.embedding_mode == "api":
+        if mode == "api":
             from openai import OpenAI
-            client = OpenAI(base_url=settings.embedding_api_url, api_key="not-needed")
-            result = client.embeddings.create(model=settings.embedding_model_name, input=["test"])
+            client = OpenAI(base_url=url, api_key="not-needed")
+            result = client.embeddings.create(model=model_name, input=["test"])
             dim = len(result.data[0].embedding)
-            return HTMLResponse(f'<span class="status-ok">Connected. Dimension: {dim}</span>')
+            return HTMLResponse(f'<span class="status-ok">Connected to {url}. Model: {model_name}, Dimension: {dim}</span>')
         else:
             from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(settings.embedding_model_name, device=settings.embedding_device)
+            model = SentenceTransformer(model_name, device=settings.embedding_device)
             dim = model.get_sentence_embedding_dimension()
-            return HTMLResponse(f'<span class="status-ok">Loaded locally. Dimension: {dim}</span>')
+            return HTMLResponse(f'<span class="status-ok">Loaded locally. Model: {model_name}, Dimension: {dim}</span>')
     except Exception as e:
         return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')

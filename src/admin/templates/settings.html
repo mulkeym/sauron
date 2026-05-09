@@ -26,7 +26,7 @@
             </div>
         </div>
         <div class="form-group">
-            <button type="button" class="secondary" hx-post="/admin/api/settings/test-llm" hx-target="#llm-status" hx-swap="innerHTML">Test Connection</button>
+            <button type="button" class="secondary" hx-post="/admin/api/settings/test-llm" hx-include="#vllm_base_url" hx-target="#llm-status" hx-swap="innerHTML">Test Connection</button>
             <span id="llm-status"></span>
         </div>
     </div>
@@ -57,7 +57,7 @@
             </div>
         </div>
         <div class="form-group">
-            <button type="button" class="secondary" hx-post="/admin/api/settings/test-embedding" hx-target="#embed-status" hx-swap="innerHTML">Test Connection</button>
+            <button type="button" class="secondary" hx-post="/admin/api/settings/test-embedding" hx-include="#embedding_mode, #embedding_api_url, #embedding_model_name" hx-target="#embed-status" hx-swap="innerHTML">Test Connection</button>
             <span id="embed-status"></span>
         </div>
     </div>
