@@ -43,15 +43,14 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
 
     cat_descriptions = []
     for cat in categories:
-        keywords = ", ".join(cat.routing_keywords) if cat.routing_keywords else "none"
-        grs = f" [GRS {cat.grs_number}]" if getattr(cat, "grs_number", "") else ""
-        cat_descriptions.append(f"- {cat.name}: {cat.description}{grs} (keywords: {keywords})")
+        keywords = ", ".join(cat.routing_keywords[:5]) if cat.routing_keywords else ""
+        cat_descriptions.append(f"- {cat.name}: {cat.description[:60]} ({keywords})")
     categories_text = "\n".join(cat_descriptions) if cat_descriptions else "No existing categories."
 
     response = generate(
         system_prompt=CATEGORIZATION_PROMPT.format(categories=categories_text),
-        user_prompt=f"Filename: {filename}\nType: {doc_type}\nPreview: {text_preview[:500]}",
-        temperature=0.0, max_tokens=256,
+        user_prompt=f"Filename: {filename}\nType: {doc_type}\nPreview: {text_preview[:300]}",
+        temperature=0.0, max_tokens=512,
     )
     try:
         parsed = parse_json_response(response)
