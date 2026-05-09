@@ -10,14 +10,16 @@ Rules:
 - Cite document sources using [N] notation, where N corresponds to the context chunk number.
 - If SQL results are provided, reference them in your answer.
 - If the context does not contain enough information, say so clearly.
-- Be concise and accurate."""
+- Be THOROUGH and COMPLETE. Include ALL relevant information from the context, not just the first match.
+- When asked about what someone said or asked, list EVERY instance found in the context.
+- When listing items, use bullet points or numbered lists for clarity."""
 
 USER_PROMPT_TEMPLATE = """Context:
 {context}
 
 Question: {question}
 
-Answer the question based only on the context above. Cite sources using [N] notation."""
+Answer the question thoroughly based on ALL the context above. Include every relevant detail found. Cite sources using [N] notation."""
 
 
 def synthesize_answer(state: AgentState) -> dict:
