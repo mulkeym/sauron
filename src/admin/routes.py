@@ -156,6 +156,51 @@ async def bulk_upload(
     return HTMLResponse("\n".join(results_html))
 
 
+@router.get("/knowledge-graph", response_class=HTMLResponse)
+async def knowledge_graph_page(request: Request):
+    store = get_metadata_store()
+    entities = await store.list_entities(limit=50)
+    return templates.TemplateResponse(request, "knowledge_graph.html", {"entities": entities})
+
+
+@router.post("/api/knowledge-graph/search")
+async def search_knowledge_graph_api(query: str = Form(""), entity_type: str = Form("")):
+    store = get_metadata_store()
+    entities = await store.search_entities(query, entity_type=entity_type or None)
+    rows = ""
+    for e in entities:
+        rows += f'<tr><td>{e.name}</td><td>{e.entity_type}</td><td>{e.first_seen_doc_id}</td><td><button hx-post="/admin/api/knowledge-graph/details" hx-vals=\'{{"entity_id": "{e.id}"}}\' hx-target="#kg-results" hx-swap="innerHTML">View</button></td></tr>'
+    if not rows:
+        return HTMLResponse(f'<p>No entities found matching "{query}".</p>')
+    return HTMLResponse(f'<table><thead><tr><th>Name</th><th>Type</th><th>First Seen In</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table>')
+
+
+@router.post("/api/knowledge-graph/details")
+async def knowledge_graph_details(entity_id: int = Form(0)):
+    store = get_metadata_store()
+    details = await store.get_entity_details(entity_id)
+    if not details["entity"]:
+        return HTMLResponse("<p>Entity not found.</p>")
+    entity = details["entity"]
+    html = f'<div class="result-card"><h2>{entity["name"]} <span class="result-meta">({entity["type"]})</span></h2>'
+    html += f'<h3>Mentioned in ({len(details["mentions"])} occurrences)</h3>'
+    if details["mentions"]:
+        html += '<table><thead><tr><th>Document</th><th>Chunk</th><th>Context</th></tr></thead><tbody>'
+        for m in details["mentions"]:
+            html += f'<tr><td>{m["doc_id"][:12]}...</td><td>{m["chunk_index"]}</td><td>{m["context_snippet"][:100]}</td></tr>'
+        html += '</tbody></table>'
+    html += f'<h3>Relationships ({len(details["relationships"])})</h3>'
+    if details["relationships"]:
+        html += '<table><thead><tr><th>Related Entity</th><th>Type</th><th>Relationship</th><th>Direction</th><th>Source Doc</th></tr></thead><tbody>'
+        for r in details["relationships"]:
+            html += f'<tr><td>{r["related_entity"]}</td><td>{r["entity_type"]}</td><td>{r["relationship_type"]}</td><td>{r["direction"]}</td><td>{r["doc_id"][:12]}...</td></tr>'
+        html += '</tbody></table>'
+    else:
+        html += '<p>No relationships found.</p>'
+    html += '<br><button onclick="window.location.href=\'/admin/knowledge-graph\'">Back to list</button></div>'
+    return HTMLResponse(html)
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", {"settings": settings})

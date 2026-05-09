@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Graph - RAG Admin{% endblock %}
+{% block content %}
+<h1>Knowledge Graph</h1>
+
+<div class="settings-section">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="kg-search">Search Entities</label>
+            <div class="input-with-button">
+                <input type="text" id="kg-search" name="query" placeholder="e.g., TOEE 26, Mike, Policy 4.2">
+                <button type="button" hx-post="/admin/api/knowledge-graph/search" hx-include="#kg-search, #kg-type-filter" hx-target="#kg-results" hx-swap="innerHTML">Search</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="kg-type-filter">Filter by type</label>
+            <select id="kg-type-filter" name="entity_type">
+                <option value="">All types</option>
+                <option value="person">Person</option>
+                <option value="organization">Organization</option>
+                <option value="policy">Policy</option>
+                <option value="project">Project</option>
+                <option value="system">System</option>
+                <option value="date">Date</option>
+                <option value="location">Location</option>
+                <option value="document_section">Document Section</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<div id="kg-results">
+{% if entities %}
+<table>
+    <thead><tr><th>Name</th><th>Type</th><th>First Seen In</th><th>Actions</th></tr></thead>
+    <tbody>
+        {% for e in entities %}
+        <tr>
+            <td>{{ e.name }}</td>
+            <td>{{ e.entity_type }}</td>
+            <td>{{ e.first_seen_doc_id }}</td>
+            <td><button hx-post="/admin/api/knowledge-graph/details" hx-vals='{"entity_id": "{{ e.id }}"}' hx-target="#kg-results" hx-swap="innerHTML">View</button></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No entities found. Upload documents to populate the knowledge graph.</p>
+{% endif %}
+</div>
+{% endblock %}
