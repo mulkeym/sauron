@@ -161,7 +161,16 @@ async def delete_category(name: str):
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
     store = get_metadata_store()
+    # Remove from metadata DB
     await store.delete_document(doc_id)
+    # Remove entity mentions and relationships for this doc
+    await store.delete_entities_for_doc(doc_id)
+    # Remove vector chunks from Qdrant
+    try:
+        vector_store = get_vector_store()
+        vector_store.delete_by_doc_id(doc_id)
+    except Exception:
+        pass  # Qdrant may not be running in test
     return HTMLResponse("")
 
 

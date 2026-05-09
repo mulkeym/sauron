@@ -56,6 +56,9 @@ class MetadataStore:
     async def delete_document(self, doc_id):
         async with self.session_factory() as session:
             await session.execute(delete(DocumentRecord).where(DocumentRecord.doc_id == doc_id))
+            # Also clean up entity mentions and relationships for this doc
+            await session.execute(delete(EntityMention).where(EntityMention.doc_id == doc_id))
+            await session.execute(delete(Relationship).where(Relationship.doc_id == doc_id))
             await session.commit()
 
     async def add_category(self, name, description, acl_groups, routing_keywords, grs_number=""):
