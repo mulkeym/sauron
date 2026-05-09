@@ -1,6 +1,5 @@
-import json
 from dataclasses import dataclass, field
-from src.generation.llm_client import generate
+from src.generation.llm_client import generate, parse_json_response
 
 CATEGORIZATION_PROMPT = """You are a document categorizer. Given a document's filename, type, and text preview, classify it into one of the existing categories OR propose a new category.
 
@@ -45,7 +44,8 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
     cat_descriptions = []
     for cat in categories:
         keywords = ", ".join(cat.routing_keywords) if cat.routing_keywords else "none"
-        cat_descriptions.append(f"- {cat.name}: {cat.description} (keywords: {keywords})")
+        grs = f" [GRS {cat.grs_number}]" if getattr(cat, "grs_number", "") else ""
+        cat_descriptions.append(f"- {cat.name}: {cat.description}{grs} (keywords: {keywords})")
     categories_text = "\n".join(cat_descriptions) if cat_descriptions else "No existing categories."
 
     response = generate(
@@ -54,12 +54,12 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
         temperature=0.0, max_tokens=256,
     )
     try:
-        parsed = json.loads(response)
+        parsed = parse_json_response(response)
         return CategorizationResult(
             category=parsed["category"], confidence=parsed.get("confidence", 0.5),
             is_new=parsed.get("is_new", False), description=parsed.get("description", ""),
             suggested_acl_groups=parsed.get("suggested_acl_groups", []),
             suggested_keywords=parsed.get("suggested_keywords", []),
         )
-    except (json.JSONDecodeError, KeyError):
+    except Exception:
         return CategorizationResult(category="uncategorized", confidence=0.0, is_new=False)
