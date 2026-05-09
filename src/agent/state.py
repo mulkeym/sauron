@@ -11,6 +11,7 @@ class QueryType(StrEnum):
 
 class AgentState(TypedDict, total=False):
     question: str
+    original_question: str  # preserved across retries
     user_groups: list[str]
     query_type: QueryType | None
     sub_tasks: list[str]
@@ -18,6 +19,7 @@ class AgentState(TypedDict, total=False):
     sql_results: list[dict]
     retrieval_attempts: int
     needs_reretrieval: bool
+    reformulated_query: str  # alternative query for retry
     answer: str
     citations: list[Citation]
     warnings: list[str]

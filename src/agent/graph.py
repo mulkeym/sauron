@@ -22,17 +22,41 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
     async def retrieve(state: AgentState) -> dict:
         query_type = state.get("query_type", QueryType.LOOKUP)
+        attempts = state.get("retrieval_attempts", 0)
+
+        # On retry, use reformulated query if available
+        if attempts > 0 and state.get("reformulated_query"):
+            # Create a modified state with the new question for retrieval
+            retry_state = dict(state)
+            retry_state["question"] = state["reformulated_query"]
+        else:
+            retry_state = state
+
         if query_type == QueryType.LOOKUP:
-            return retrieve_lookup(state, vector_store=vector_store)
+            result = retrieve_lookup(retry_state, vector_store=vector_store)
         elif query_type == QueryType.SWEEP:
-            return retrieve_sweep(state, vector_store=vector_store)
+            result = retrieve_sweep(retry_state, vector_store=vector_store)
         elif query_type == QueryType.ANALYTICAL:
-            return await retrieve_analytical(state, schema_registry=schema_registry)
+            result = await retrieve_analytical(retry_state, schema_registry=schema_registry)
         elif query_type == QueryType.CROSS_REFERENCE:
-            return await retrieve_cross_reference(state, vector_store=vector_store, schema_registry=schema_registry)
+            result = await retrieve_cross_reference(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.TEMPORAL:
-            return retrieve_lookup(state, vector_store=vector_store)
-        return retrieve_lookup(state, vector_store=vector_store)
+            result = retrieve_lookup(retry_state, vector_store=vector_store)
+        else:
+            result = retrieve_lookup(retry_state, vector_store=vector_store)
+
+        # On retry, merge new chunks with existing (don't lose previous results)
+        if attempts > 0:
+            existing = state.get("retrieved_chunks", [])
+            new_chunks = result.get("retrieved_chunks", [])
+            seen = {(c.metadata.doc_id, c.metadata.chunk_index) for c in existing}
+            for c in new_chunks:
+                if (c.metadata.doc_id, c.metadata.chunk_index) not in seen:
+                    existing.append(c)
+                    seen.add((c.metadata.doc_id, c.metadata.chunk_index))
+            result["retrieved_chunks"] = existing
+
+        return result
 
     graph.add_node("retrieve", retrieve)
 
@@ -115,9 +139,10 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 async def run_agent(question: str, user_groups: list[str], vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None) -> RAGResponse:
     graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
     initial_state = AgentState(
-        question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
-        retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
-        needs_reretrieval=False, answer="", citations=[], warnings=[],
+        question=question, original_question=question, user_groups=user_groups,
+        query_type=None, sub_tasks=[], retrieved_chunks=[], sql_results=[],
+        retrieval_attempts=0, needs_reretrieval=False, reformulated_query="",
+        answer="", citations=[], warnings=[],
     )
     result = await graph.ainvoke(initial_state)
     return RAGResponse(
@@ -142,9 +167,10 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
 
     graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
     initial_state = AgentState(
-        question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
-        retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
-        needs_reretrieval=False, answer="", citations=[], warnings=[],
+        question=question, original_question=question, user_groups=user_groups,
+        query_type=None, sub_tasks=[], retrieved_chunks=[], sql_results=[],
+        retrieval_attempts=0, needs_reretrieval=False, reformulated_query="",
+        answer="", citations=[], warnings=[],
     )
 
     # Stream through nodes to capture step timings
