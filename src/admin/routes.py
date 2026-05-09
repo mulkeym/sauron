@@ -234,6 +234,100 @@ async def knowledge_graph_page(request: Request):
     return templates.TemplateResponse(request, "knowledge_graph.html", {"entities": entities})
 
 
+@router.get("/api/knowledge-graph/graph-data")
+async def knowledge_graph_data(query: str = "", entity_type: str = "", entity_id: int = 0):
+    """Return graph data in Cytoscape.js format."""
+    from fastapi.responses import JSONResponse
+    store = get_metadata_store()
+
+    TYPE_COLORS = {
+        "person": "#2563eb", "organization": "#16a34a", "policy": "#dc2626",
+        "project": "#ea580c", "system": "#9333ea", "date": "#6b7280",
+        "location": "#0891b2", "document_section": "#ca8a04", "unknown": "#9ca3af",
+    }
+
+    nodes = {}
+    edges = []
+
+    if entity_id:
+        # Show focused entity + its neighbors
+        details = await store.get_entity_details(entity_id)
+        if details["entity"]:
+            ent = details["entity"]
+            nodes[ent["id"]] = {"name": ent["name"], "type": ent["type"], "mentions": len(details["mentions"])}
+            for r in details["relationships"]:
+                # Add related entity as node
+                related_entities = await store.search_entities(r["related_entity"], entity_type=r["entity_type"] or None)
+                if related_entities:
+                    rel_ent = related_entities[0]
+                    rel_details = await store.get_entity_details(rel_ent.id)
+                    nodes[rel_ent.id] = {"name": rel_ent.name, "type": rel_ent.entity_type, "mentions": len(rel_details["mentions"])}
+                    if r["direction"] == "outgoing":
+                        edges.append({"source": ent["id"], "target": rel_ent.id, "label": r["relationship_type"]})
+                    else:
+                        edges.append({"source": rel_ent.id, "target": ent["id"], "label": r["relationship_type"]})
+    elif query:
+        entities = await store.search_entities(query, entity_type=entity_type or None)
+        for ent in entities[:20]:
+            details = await store.get_entity_details(ent.id)
+            nodes[ent.id] = {"name": ent.name, "type": ent.entity_type, "mentions": len(details["mentions"])}
+            for r in details["relationships"]:
+                related = await store.search_entities(r["related_entity"], entity_type=r["entity_type"] or None)
+                if related:
+                    rel = related[0]
+                    rel_d = await store.get_entity_details(rel.id)
+                    nodes[rel.id] = {"name": rel.name, "type": rel.entity_type, "mentions": len(rel_d["mentions"])}
+                    if r["direction"] == "outgoing":
+                        edges.append({"source": ent.id, "target": rel.id, "label": r["relationship_type"]})
+                    else:
+                        edges.append({"source": rel.id, "target": ent.id, "label": r["relationship_type"]})
+    else:
+        # Show all entities
+        entities = await store.list_entities(entity_type=entity_type or None, limit=100)
+        for ent in entities:
+            details = await store.get_entity_details(ent.id)
+            nodes[ent.id] = {"name": ent.name, "type": ent.entity_type, "mentions": len(details["mentions"])}
+            for r in details["relationships"]:
+                related = await store.search_entities(r["related_entity"], entity_type=r["entity_type"] or None)
+                if related:
+                    rel = related[0]
+                    nodes[rel.id] = {"name": rel.name, "type": rel.entity_type, "mentions": 0}
+                    if r["direction"] == "outgoing":
+                        edges.append({"source": ent.id, "target": rel.id, "label": r["relationship_type"]})
+                    else:
+                        edges.append({"source": rel.id, "target": ent.id, "label": r["relationship_type"]})
+
+    # Build Cytoscape elements
+    elements = []
+    for nid, data in nodes.items():
+        size = max(20, min(60, 20 + data["mentions"] * 5))
+        elements.append({
+            "data": {
+                "id": str(nid), "entityId": nid, "label": data["name"],
+                "color": TYPE_COLORS.get(data["type"], "#9ca3af"), "size": size,
+            }
+        })
+
+    seen_edges = set()
+    for e in edges:
+        key = (e["source"], e["target"], e["label"])
+        if key not in seen_edges:
+            seen_edges.add(key)
+            elements.append({
+                "data": {"source": str(e["source"]), "target": str(e["target"]), "label": e["label"]}
+            })
+
+    return JSONResponse({"elements": elements})
+
+
+@router.get("/api/knowledge-graph/detail-json")
+async def knowledge_graph_detail_json(entity_id: int = 0):
+    from fastapi.responses import JSONResponse
+    store = get_metadata_store()
+    details = await store.get_entity_details(entity_id)
+    return JSONResponse(details)
+
+
 @router.post("/api/knowledge-graph/search")
 async def search_knowledge_graph_api(query: str = Form(""), entity_type: str = Form("")):
     store = get_metadata_store()

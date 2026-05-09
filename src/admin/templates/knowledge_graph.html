@@ -9,12 +9,13 @@
             <label for="kg-search">Search Entities</label>
             <div class="input-with-button">
                 <input type="text" id="kg-search" name="query" placeholder="e.g., TOEE 26, Mike, Policy 4.2">
-                <button type="button" hx-post="/admin/api/knowledge-graph/search" hx-include="#kg-search, #kg-type-filter" hx-target="#kg-results" hx-swap="innerHTML">Search</button>
+                <button type="button" onclick="searchGraph()">Search</button>
+                <button type="button" class="secondary" onclick="loadFullGraph()">Show All</button>
             </div>
         </div>
         <div class="form-group">
             <label for="kg-type-filter">Filter by type</label>
-            <select id="kg-type-filter" name="entity_type">
+            <select id="kg-type-filter" name="entity_type" onchange="loadFullGraph()">
                 <option value="">All types</option>
                 <option value="person">Person</option>
                 <option value="organization">Organization</option>
@@ -29,8 +30,16 @@
     </div>
 </div>
 
-<div id="kg-results">
+<div id="graph-container" style="width:100%; height:500px; background:white; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-bottom:1.5rem;"></div>
+
+<div id="entity-detail" class="settings-section" style="display:none;">
+    <h2 id="detail-name"></h2>
+    <div id="detail-content"></div>
+</div>
+
+<div id="kg-table">
 {% if entities %}
+<h2 style="margin-bottom:1rem;">Entity List</h2>
 <table>
     <thead><tr><th>Name</th><th>Type</th><th>First Seen In</th><th>Actions</th></tr></thead>
     <tbody>
@@ -38,14 +47,157 @@
         <tr>
             <td>{{ e.name }}</td>
             <td>{{ e.entity_type }}</td>
-            <td>{{ e.first_seen_doc_id }}</td>
-            <td><button hx-post="/admin/api/knowledge-graph/details" hx-vals='{"entity_id": "{{ e.id }}"}' hx-target="#kg-results" hx-swap="innerHTML">View</button></td>
+            <td>{{ e.first_seen_doc_id[:12] }}...</td>
+            <td><button onclick="focusEntity({{ e.id }})">View</button></td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
-{% else %}
-<p>No entities found. Upload documents to populate the knowledge graph.</p>
 {% endif %}
 </div>
+
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script>
+const TYPE_COLORS = {
+    person: '#2563eb',
+    organization: '#16a34a',
+    policy: '#dc2626',
+    project: '#ea580c',
+    system: '#9333ea',
+    date: '#6b7280',
+    location: '#0891b2',
+    document_section: '#ca8a04',
+    unknown: '#9ca3af',
+};
+
+let cy = null;
+
+function initGraph(elements) {
+    if (cy) cy.destroy();
+    cy = cytoscape({
+        container: document.getElementById('graph-container'),
+        elements: elements,
+        style: [
+            {
+                selector: 'node',
+                style: {
+                    'label': 'data(label)',
+                    'background-color': 'data(color)',
+                    'color': '#1f2937',
+                    'text-valign': 'bottom',
+                    'text-margin-y': 6,
+                    'font-size': '11px',
+                    'width': 'data(size)',
+                    'height': 'data(size)',
+                    'text-wrap': 'ellipsis',
+                    'text-max-width': '100px',
+                }
+            },
+            {
+                selector: 'edge',
+                style: {
+                    'label': 'data(label)',
+                    'width': 2,
+                    'line-color': '#d1d5db',
+                    'target-arrow-color': '#9ca3af',
+                    'target-arrow-shape': 'triangle',
+                    'curve-style': 'bezier',
+                    'font-size': '9px',
+                    'color': '#6b7280',
+                    'text-rotation': 'autorotate',
+                    'text-margin-y': -10,
+                }
+            },
+            {
+                selector: 'node:selected',
+                style: {
+                    'border-width': 3,
+                    'border-color': '#1f2937',
+                }
+            },
+            {
+                selector: '.highlighted',
+                style: {
+                    'border-width': 3,
+                    'border-color': '#2563eb',
+                    'background-color': '#2563eb',
+                }
+            }
+        ],
+        layout: {
+            name: 'cose',
+            animate: true,
+            animationDuration: 500,
+            nodeRepulsion: 8000,
+            idealEdgeLength: 120,
+            gravity: 0.3,
+        },
+    });
+
+    cy.on('tap', 'node', function(evt) {
+        const id = evt.target.data('entityId');
+        if (id) showEntityDetail(id);
+    });
+}
+
+async function loadFullGraph() {
+    const typeFilter = document.getElementById('kg-type-filter').value;
+    const url = '/admin/api/knowledge-graph/graph-data' + (typeFilter ? '?entity_type=' + typeFilter : '');
+    const resp = await fetch(url);
+    const data = await resp.json();
+    initGraph(data.elements);
+}
+
+async function searchGraph() {
+    const query = document.getElementById('kg-search').value;
+    if (!query) { loadFullGraph(); return; }
+    const resp = await fetch('/admin/api/knowledge-graph/graph-data?query=' + encodeURIComponent(query));
+    const data = await resp.json();
+    initGraph(data.elements);
+}
+
+async function focusEntity(entityId) {
+    const resp = await fetch('/admin/api/knowledge-graph/graph-data?entity_id=' + entityId);
+    const data = await resp.json();
+    initGraph(data.elements);
+    showEntityDetail(entityId);
+}
+
+async function showEntityDetail(entityId) {
+    const resp = await fetch('/admin/api/knowledge-graph/detail-json?entity_id=' + entityId);
+    const data = await resp.json();
+    if (!data.entity) return;
+
+    const detail = document.getElementById('entity-detail');
+    document.getElementById('detail-name').textContent = data.entity.name + ' (' + data.entity.type + ')';
+
+    let html = '';
+    if (data.mentions.length > 0) {
+        html += '<h3>Mentioned in ' + data.mentions.length + ' places</h3><table><thead><tr><th>Document</th><th>Context</th></tr></thead><tbody>';
+        data.mentions.forEach(m => {
+            html += '<tr><td>' + m.doc_id.substring(0,12) + '...</td><td>' + (m.context_snippet || '').substring(0,120) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    if (data.relationships.length > 0) {
+        html += '<h3>' + data.relationships.length + ' Relationships</h3><table><thead><tr><th>Entity</th><th>Relationship</th><th>Direction</th></tr></thead><tbody>';
+        data.relationships.forEach(r => {
+            html += '<tr><td>' + r.related_entity + '</td><td>' + r.relationship_type + '</td><td>' + r.direction + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+
+    document.getElementById('detail-content').innerHTML = html;
+    detail.style.display = 'block';
+
+    // Highlight the node in the graph
+    if (cy) {
+        cy.nodes().removeClass('highlighted');
+        cy.nodes('[entityId="' + entityId + '"]').addClass('highlighted');
+    }
+}
+
+// Load graph on page load
+document.addEventListener('DOMContentLoaded', loadFullGraph);
+</script>
 {% endblock %}
