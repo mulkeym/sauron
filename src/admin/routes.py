@@ -199,6 +199,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         try:
             from src.agent.graph import create_agent_graph
             from src.agent.state import AgentState
+            import time, html as html_mod
 
             graph = create_agent_graph(
                 vector_store=get_vector_store(),
@@ -211,37 +212,88 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 needs_reretrieval=False, answer="", citations=[], warnings=[],
             )
 
-            import time
-            steps_timing = []
+            steps_data = []
             step_start = time.time()
             prev_node = None
+            prev_output = None
+            final_state = {}
 
             async for event in graph.astream(initial_state, stream_mode="updates"):
                 now = time.time()
                 for node_name, node_output in event.items():
                     if prev_node:
-                        steps_timing.append({"step": prev_node, "time": round(now - step_start, 2)})
+                        steps_data.append({"step": prev_node, "time": round(now - step_start, 2), "output": prev_output})
                     _playground_jobs[query_id]["step"] = node_name
                     prev_node = node_name
+                    prev_output = dict(node_output) if isinstance(node_output, dict) else {}
                     step_start = now
+                    final_state.update(node_output if isinstance(node_output, dict) else {})
 
             if prev_node:
-                steps_timing.append({"step": prev_node, "time": round(time.time() - step_start, 2)})
+                steps_data.append({"step": prev_node, "time": round(time.time() - step_start, 2), "output": prev_output})
 
-            # Get final result
-            total_time = sum(s["time"] for s in steps_timing)
-            result = await graph.ainvoke(initial_state)
+            total_time = sum(s["time"] for s in steps_data)
+            answer = final_state.get("answer", "No answer")
+            chunks = final_state.get("retrieved_chunks", [])
+            citations = final_state.get("citations", [])
+            query_type = str(final_state.get("query_type", "lookup"))
 
-            answer = result.get("answer", "No answer")
-            chunks = result.get("retrieved_chunks", [])
-            query_type = str(result.get("query_type", "lookup"))
-
-            # Build trace HTML
+            # Build trace with expandable step details
             step_labels = {"classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "evaluate": "Evaluate Context", "synthesize": "Generate Answer"}
+
+            def format_step_detail(step_name, output):
+                """Format step output for display."""
+                if step_name == "classify":
+                    qt = output.get("query_type", "")
+                    subs = output.get("sub_tasks", [])
+                    detail = f"<strong>Query Type:</strong> {qt}<br>"
+                    if subs:
+                        detail += "<strong>Sub-tasks:</strong><ul>" + "".join(f"<li>{s}</li>" for s in subs) + "</ul>"
+                    return detail
+                elif step_name == "retrieve":
+                    rc = output.get("retrieved_chunks", [])
+                    attempts = output.get("retrieval_attempts", 0)
+                    detail = f"<strong>Chunks retrieved:</strong> {len(rc)}<br><strong>Attempts:</strong> {attempts}<br>"
+                    if rc:
+                        detail += "<strong>Sources:</strong><ul>"
+                        seen = set()
+                        for c in rc:
+                            fn = c.metadata.filename if hasattr(c, 'metadata') else str(c.get('metadata', {}).get('filename', ''))
+                            score = c.score if hasattr(c, 'score') else ''
+                            key = fn
+                            if key not in seen:
+                                seen.add(key)
+                                detail += f"<li>{fn} (relevance: {score:.2f})</li>" if score else f"<li>{fn}</li>"
+                        detail += "</ul>"
+                    return detail
+                elif step_name == "enrich":
+                    rc = output.get("retrieved_chunks", [])
+                    kg_chunks = [c for c in rc if (c.metadata.filename if hasattr(c, 'metadata') else '') == 'knowledge_graph']
+                    if kg_chunks:
+                        text = kg_chunks[0].text if hasattr(kg_chunks[0], 'text') else ''
+                        return f"<strong>Knowledge graph context added:</strong><pre style='font-size:0.8rem; white-space:pre-wrap;'>{html_mod.escape(text[:500])}</pre>"
+                    return "<em>No knowledge graph enrichment applied</em>"
+                elif step_name == "evaluate":
+                    needs = output.get("needs_reretrieval", False)
+                    return f"<strong>Sufficient context:</strong> {'No — re-retrieving' if needs else 'Yes'}"
+                elif step_name == "synthesize":
+                    ans = output.get("answer", "")
+                    cits = output.get("citations", [])
+                    return f"<strong>Answer length:</strong> {len(ans)} chars<br><strong>Citations:</strong> {len(cits)}"
+                return f"<pre style='font-size:0.75rem;'>{html_mod.escape(str(output)[:500])}</pre>"
+
             steps_html = ""
-            for s in steps_timing:
+            for i, s in enumerate(steps_data):
                 label = step_labels.get(s["step"], s["step"])
-                steps_html += f'<div class="trace-step"><span>&#9989; {label}</span><span class="trace-time">{s["time"]}s</span></div>'
+                detail = format_step_detail(s["step"], s["output"])
+                step_id = f"step-detail-{query_id}-{i}"
+                steps_html += f"""<div class="trace-step-wrap">
+                    <div class="trace-step" onclick="document.getElementById('{step_id}').classList.toggle('expanded')" style="cursor:pointer;">
+                        <span>&#9989; Step {i+1} of {len(steps_data)}: {label} &#9660;</span>
+                        <span class="trace-time">{s['time']}s</span>
+                    </div>
+                    <div id="{step_id}" class="trace-detail">{detail}</div>
+                </div>"""
 
             trace_html = f"""<div class="trace-panel">
                 <div class="trace-header">
@@ -249,11 +301,10 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     <span>Chunks: <strong>{len(chunks)}</strong></span>
                     <span>Total: <strong>{round(total_time, 1)}s</strong></span>
                 </div>
-                <div class="trace-steps">{steps_html}</div>
+                {steps_html}
             </div>"""
 
             citations_html = ""
-            citations = result.get("citations", [])
             for i, c in enumerate(citations, 1):
                 page = f' &mdash; page {c.page}' if c.page else ''
                 citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.filename}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
@@ -270,7 +321,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
 
         except Exception as e:
             import traceback
-            _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": str(e)}
+            _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": f"{e}\n{traceback.format_exc()}"}
 
     asyncio.create_task(run_query())
     return JSONResponse({"query_id": query_id})

@@ -51,5 +51,11 @@ button.secondary:hover { background: #4b5563; }
 .trace-header { display: flex; gap: 2rem; font-size: 0.9rem; margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid #374151; }
 .trace-header strong { color: #93c5fd; }
 .trace-steps { display: flex; flex-direction: column; gap: 0.25rem; }
+.trace-step-wrap { margin-bottom: 2px; }
 .trace-step { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0.5rem; background: #374151; border-radius: 4px; font-size: 0.85rem; }
 .trace-time { color: #9ca3af; font-family: monospace; }
+.trace-detail { display: none; padding: 0.5rem 0.75rem; background: #1e293b; border-radius: 0 0 4px 4px; font-size: 0.8rem; color: #d1d5db; margin-top: -2px; line-height: 1.5; }
+.trace-detail.expanded { display: block; }
+.trace-detail ul { margin: 0.25rem 0 0.25rem 1.2rem; }
+.trace-detail pre { background: #0f172a; padding: 0.5rem; border-radius: 4px; margin-top: 0.25rem; overflow-x: auto; }
+.trace-detail strong { color: #93c5fd; }
