@@ -187,13 +187,36 @@ async def playground_query(question: str = Form(""), play_user: str = Form("fina
     user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
 
     try:
-        from src.generation.rag_chain import agent_query
-        result = await agent_query(
+        from src.agent.graph import run_agent_with_trace
+        result, trace = await run_agent_with_trace(
             question=question,
             user_groups=user_groups,
             vector_store=get_vector_store(),
             schema_registry=get_schema_registry(),
         )
+
+        # Build trace timeline
+        step_labels = {
+            "classify": "Classify Query",
+            "retrieve": "Retrieve Documents",
+            "evaluate": "Evaluate Context",
+            "synthesize": "Generate Answer",
+        }
+        steps_html = ""
+        for s in trace.steps:
+            label = step_labels.get(s["step"], s["step"])
+            status_icon = "&#9989;" if s["status"] == "done" else "&#x1F504;"
+            steps_html += f'<div class="trace-step"><span>{status_icon} {label}</span><span class="trace-time">{s["time"]}s</span></div>'
+
+        trace_html = f"""
+        <div class="trace-panel">
+            <div class="trace-header">
+                <span>Query Type: <strong>{trace.query_type or 'lookup'}</strong></span>
+                <span>Chunks: <strong>{trace.chunks_retrieved}</strong></span>
+                <span>Total: <strong>{trace.total_time}s</strong></span>
+            </div>
+            <div class="trace-steps">{steps_html}</div>
+        </div>"""
 
         citations_html = ""
         for i, c in enumerate(result.citations, 1):
@@ -206,6 +229,7 @@ async def playground_query(question: str = Form(""), play_user: str = Form("fina
             </div>"""
 
         return HTMLResponse(f"""
+        {trace_html}
         <div class="result-card">
             <div class="result-meta">Groups: {', '.join(user_groups)}</div>
             <div class="result-answer">{result.answer}</div>
@@ -213,7 +237,8 @@ async def playground_query(question: str = Form(""), play_user: str = Form("fina
             {citations_html or '<p>No citations.</p>'}
         </div>""")
     except Exception as e:
-        return HTMLResponse(f'<div class="status-err">Error: {e}</div>')
+        import traceback
+        return HTMLResponse(f'<div class="status-err">Error: {e}<br><pre style="font-size:0.75rem;">{traceback.format_exc()}</pre></div>')
 
 
 @router.post("/api/documents/upload")

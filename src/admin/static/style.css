@@ -47,3 +47,9 @@ button.secondary:hover { background: #4b5563; }
 .upload-result { padding: 0.5rem; margin-bottom: 0.25rem; border-radius: 4px; }
 .upload-ok { background: #dcfce7; color: #166534; }
 .upload-err { background: #fef2f2; color: #991b1b; }
+.trace-panel { background: #1f2937; color: white; border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 1rem; }
+.trace-header { display: flex; gap: 2rem; font-size: 0.9rem; margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid #374151; }
+.trace-header strong { color: #93c5fd; }
+.trace-steps { display: flex; flex-direction: column; gap: 0.25rem; }
+.trace-step { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0.5rem; background: #374151; border-radius: 4px; font-size: 0.85rem; }
+.trace-time { color: #9ca3af; font-family: monospace; }
