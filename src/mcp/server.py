@@ -74,7 +74,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_lookup_document(doc_id: str) -> dict:
-        """Read the full content of a specific document by its doc_id. Use this when you need to read or display an entire document's contents. Get the doc_id from tool_search_documents or tool_list_sources first."""
+        """Read the full content of a document. Accepts either a doc_id (UUID) or a filename. Use this when the user asks to read, view, summarize, or display a specific file. You can pass the filename directly (e.g., 'sample.pdf') or a doc_id from tool_list_documents."""
         return lookup_document(
             doc_id=doc_id,
             user_groups=["ALL"],

@@ -76,9 +76,10 @@ def lookup_document(
 ) -> dict:
     vector = embed_query(f"document {doc_id}")
     chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=100)
-    matching = [c for c in chunks if c.metadata.doc_id == doc_id]
+    # Match by doc_id (UUID) or by filename
+    matching = [c for c in chunks if c.metadata.doc_id == doc_id or c.metadata.filename == doc_id]
     if not matching:
-        return {"content": "", "metadata": {}, "error": "not found"}
+        return {"content": "", "metadata": {}, "error": f"Document '{doc_id}' not found. Use tool_list_documents to get valid doc_ids or filenames."}
     matching_sorted = sorted(matching, key=lambda c: c.metadata.chunk_index)
     content = "\n".join(c.text for c in matching_sorted)
     first_meta = matching_sorted[0].metadata
