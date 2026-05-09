@@ -147,6 +147,12 @@ class IngestQueue:
             else:
                 category = cat_result.category
 
+        # Inherit default ACL from category if none provided
+        if not job.acl_groups and category and category != "uncategorized":
+            cat_record = await metadata_store.get_category(category)
+            if cat_record and cat_record.acl_groups:
+                job.acl_groups = cat_record.acl_groups
+
         # Step 3: Chunk (fast, ok on event loop)
         self.update_step(job.job_id, IngestStep.CHUNKING, "Splitting into chunks")
         chunks = chunk_text(parsed.text, chunk_size=512, chunk_overlap=50)

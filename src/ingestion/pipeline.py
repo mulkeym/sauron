@@ -55,6 +55,12 @@ async def ingest_document(
             category = "uncategorized"
         else:
             category = cat_result.category
+    # Inherit default ACL from category if none provided
+    if not acl_groups and category and category != "uncategorized":
+        cat_record = await metadata_store.get_category(category)
+        if cat_record and cat_record.acl_groups:
+            acl_groups = cat_record.acl_groups
+
     chunks = chunk_text(parsed.text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     texts = [c.text for c in chunks]
     metadatas = [
