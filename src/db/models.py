@@ -74,6 +74,19 @@ class EntityMention(Base):
     context_snippet: Mapped[str] = mapped_column(String, default="")
 
 
+class EntityMergeProposal(Base):
+    __tablename__ = "entity_merge_proposals"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_a_id: Mapped[int] = mapped_column(nullable=False)
+    entity_a_name: Mapped[str] = mapped_column(String, default="")
+    entity_b_id: Mapped[int] = mapped_column(nullable=False)
+    entity_b_name: Mapped[str] = mapped_column(String, default="")
+    confidence: Mapped[float] = mapped_column(default=0.0)
+    reason: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending, approved, rejected, auto_merged
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class Relationship(Base):
     __tablename__ = "relationships"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

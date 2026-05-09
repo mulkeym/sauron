@@ -86,8 +86,32 @@
         </div>
     </div>
 
+    <div class="settings-section">
+        <h2>Entity Reconciliation</h2>
+        <p class="section-desc">Automatic merging of duplicate entities in the knowledge graph</p>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="entity_merge_auto_threshold">Auto-merge threshold</label>
+                <input type="number" id="entity_merge_auto_threshold" name="entity_merge_auto_threshold" value="{{ settings.entity_merge_auto_threshold }}" step="0.05" min="0" max="1" style="max-width:100px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Above this confidence, merge automatically</span>
+            </div>
+            <div class="form-group">
+                <label for="entity_merge_review_threshold">Review threshold</label>
+                <input type="number" id="entity_merge_review_threshold" name="entity_merge_review_threshold" value="{{ settings.entity_merge_review_threshold }}" step="0.05" min="0" max="1" style="max-width:100px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Above this, propose for admin review</span>
+            </div>
+        </div>
+    </div>
+
     <div class="form-actions">
         <button type="submit">Save Settings</button>
     </div>
 </form>
+
+<div class="settings-section" style="margin-top:1.5rem;">
+    <h2>Run Entity Reconciliation</h2>
+    <p class="section-desc">Scan all entities for duplicates. High-confidence matches merge automatically, others go to the Knowledge Graph page for review.</p>
+    <button type="button" hx-post="/admin/api/settings/reconcile" hx-target="#reconcile-status" hx-swap="innerHTML">Run Now</button>
+    <span id="reconcile-status" style="margin-left:0.5rem;"></span>
+</div>
 {% endblock %}

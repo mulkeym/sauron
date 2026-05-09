@@ -1,7 +1,8 @@
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, Relationship
+from sqlalchemy import update
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship
 
 
 class MetadataStore:
@@ -176,6 +177,48 @@ class MetadataStore:
             await session.commit()
         # Clean up orphaned entities (no remaining mentions)
         await self._cleanup_orphaned_entities()
+
+    async def add_merge_proposal(self, entity_a_id, entity_a_name, entity_b_id, entity_b_name, confidence, reason, status="pending"):
+        async with self.session_factory() as session:
+            proposal = EntityMergeProposal(
+                entity_a_id=entity_a_id, entity_a_name=entity_a_name,
+                entity_b_id=entity_b_id, entity_b_name=entity_b_name,
+                confidence=confidence, reason=reason, status=status,
+            )
+            session.add(proposal)
+            await session.commit()
+
+    async def list_merge_proposals(self, status="pending"):
+        async with self.session_factory() as session:
+            result = await session.execute(select(EntityMergeProposal).where(EntityMergeProposal.status == status))
+            return list(result.scalars().all())
+
+    async def merge_entities(self, keep_id, remove_id):
+        """Merge remove_id into keep_id: move all mentions and relationships, then delete."""
+        async with self.session_factory() as session:
+            # Update mentions
+            await session.execute(update(EntityMention).where(EntityMention.entity_id == remove_id).values(entity_id=keep_id))
+            # Update relationships
+            await session.execute(update(Relationship).where(Relationship.source_entity_id == remove_id).values(source_entity_id=keep_id))
+            await session.execute(update(Relationship).where(Relationship.target_entity_id == remove_id).values(target_entity_id=keep_id))
+            # Delete the merged entity
+            await session.execute(delete(Entity).where(Entity.id == remove_id))
+            await session.commit()
+
+    async def approve_merge(self, proposal_id):
+        async with self.session_factory() as session:
+            proposal = await session.get(EntityMergeProposal, proposal_id)
+            if proposal:
+                proposal.status = "approved"
+                await session.commit()
+        await self.merge_entities(proposal.entity_a_id, proposal.entity_b_id)
+
+    async def reject_merge(self, proposal_id):
+        async with self.session_factory() as session:
+            proposal = await session.get(EntityMergeProposal, proposal_id)
+            if proposal:
+                proposal.status = "rejected"
+                await session.commit()
 
     async def _cleanup_orphaned_entities(self):
         from sqlalchemy import func

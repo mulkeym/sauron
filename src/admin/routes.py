@@ -502,7 +502,22 @@ async def queue_status():
 async def knowledge_graph_page(request: Request):
     store = get_metadata_store()
     entities = await store.list_entities(limit=50)
-    return templates.TemplateResponse(request, "knowledge_graph.html", {"entities": entities})
+    merge_proposals = await store.list_merge_proposals(status="pending")
+    return templates.TemplateResponse(request, "knowledge_graph.html", {"entities": entities, "merge_proposals": merge_proposals})
+
+
+@router.post("/api/knowledge-graph/merge/{proposal_id}/approve")
+async def approve_merge(proposal_id: int):
+    store = get_metadata_store()
+    await store.approve_merge(proposal_id)
+    return HTMLResponse('<td colspan="5" class="status-ok">Merged</td>')
+
+
+@router.post("/api/knowledge-graph/merge/{proposal_id}/reject")
+async def reject_merge(proposal_id: int):
+    store = get_metadata_store()
+    await store.reject_merge(proposal_id)
+    return HTMLResponse('<td colspan="5">Rejected</td>')
 
 
 @router.get("/api/knowledge-graph/graph-data")
@@ -653,6 +668,8 @@ async def save_settings(
     qdrant_port: int = Form(6333),
     qdrant_collection_name: str = Form(""),
     mcp_port: int = Form(8090),
+    entity_merge_auto_threshold: float = Form(0.9),
+    entity_merge_review_threshold: float = Form(0.7),
 ):
     # Update in-memory settings
     if vllm_base_url:
@@ -671,6 +688,8 @@ async def save_settings(
     if qdrant_collection_name:
         settings.qdrant_collection_name = qdrant_collection_name
     settings.mcp_port = mcp_port
+    settings.entity_merge_auto_threshold = entity_merge_auto_threshold
+    settings.entity_merge_review_threshold = entity_merge_review_threshold
 
     # Persist to .env file
     env_path = Path(".env")
@@ -690,6 +709,8 @@ async def save_settings(
     env_lines["QDRANT_PORT"] = str(settings.qdrant_port)
     env_lines["QDRANT_COLLECTION_NAME"] = settings.qdrant_collection_name
     env_lines["MCP_PORT"] = str(settings.mcp_port)
+    env_lines["ENTITY_MERGE_AUTO_THRESHOLD"] = str(settings.entity_merge_auto_threshold)
+    env_lines["ENTITY_MERGE_REVIEW_THRESHOLD"] = str(settings.entity_merge_review_threshold)
 
     env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
 
@@ -726,6 +747,13 @@ async def list_embedding_models(embedding_api_url: str = Form("")):
         return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name">{options}</select>')
     except Exception as e:
         return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name"><option value="">Error: {e}</option></select>')
+
+
+@router.post("/api/settings/reconcile")
+async def run_reconciliation():
+    from src.knowledge.reconciler import reconcile_entities
+    result = await reconcile_entities(get_metadata_store())
+    return HTMLResponse(f'<span class="status-ok">Done. Auto-merged: {result["auto_merged"]}, Proposed for review: {result["proposed"]}, Pairs scanned: {result["scanned"]}</span>')
 
 
 @router.post("/api/settings/test-llm")

@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     chunk_size: int = 1024
     chunk_overlap: int = 100
 
+    # Entity Reconciliation
+    entity_merge_auto_threshold: float = 0.9  # auto-merge above this confidence
+    entity_merge_review_threshold: float = 0.7  # propose for review above this
+
     # Audit
     audit_log_path: str = "data/audit.jsonl"
 
