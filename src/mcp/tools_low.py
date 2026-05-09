@@ -152,6 +152,16 @@ def list_documents_in_category(
     ]
 
 
+async def search_knowledge_graph(query, metadata_store, entity_type=None):
+    entities = await metadata_store.search_entities(query, entity_type=entity_type)
+    if not entities:
+        return {"entity": None, "error": f"No entity found matching '{query}'", "suggestions": "Try a different name or use tool_list_documents to find documents first."}
+    best = entities[0]
+    details = await metadata_store.get_entity_details(best.id)
+    other_matches = [{"name": e.name, "type": e.entity_type} for e in entities[1:5]]
+    return {"entity": details["entity"], "mentions_in": details["mentions"], "relationships": details["relationships"], "other_matches": other_matches}
+
+
 def list_sources(
     user_groups: list[str],
     metadata_store,

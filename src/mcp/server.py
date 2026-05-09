@@ -4,7 +4,7 @@ from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
 from src.mcp.jobs import JobStore
 from src.mcp.tools_high import ask, summarize_topic, compare, summarize_documents
-from src.mcp.tools_low import search_documents, query_database, lookup_document, search_meetings, list_sources, list_documents_in_category
+from src.mcp.tools_low import search_documents, query_database, lookup_document, search_meetings, list_sources, list_documents_in_category, search_knowledge_graph
 from src.mcp.resources import get_document_resource, get_category_resource, get_schema_resource
 from src.retrieval.vector_store import VectorStore
 
@@ -121,6 +121,11 @@ def create_mcp_server(
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 docs = executor.submit(asyncio.run, metadata_store.list_documents(None)).result()
         return [{"doc_id": d.doc_id, "filename": d.filename, "doc_type": d.doc_type, "category": d.category or "uncategorized", "chunk_count": d.chunk_count, "uploaded_by": d.uploaded_by} for d in docs]
+
+    @mcp.tool()
+    async def tool_search_knowledge_graph(query: str, entity_type: str = "") -> dict:
+        """Search the knowledge graph for an entity (person, policy, project, organization, etc.) and find all related entities, relationships, and source documents. Use this to understand how concepts are connected across documents. Example: 'TOEE 26' returns related projects, people, and organizations."""
+        return await search_knowledge_graph(query=query, metadata_store=metadata_store, entity_type=entity_type or None)
 
     @mcp.tool()
     def tool_get_result(job_id: str) -> dict:
