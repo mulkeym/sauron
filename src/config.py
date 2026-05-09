@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     mcp_server_name: str = "rag-knowledge-service"
     mcp_port: int = 8090
 
+    # Chunking
+    chunk_size: int = 1024
+    chunk_overlap: int = 100
+
     # Audit
     audit_log_path: str = "data/audit.jsonl"
 

@@ -155,7 +155,7 @@ class IngestQueue:
 
         # Step 3: Chunk (fast, ok on event loop)
         self.update_step(job.job_id, IngestStep.CHUNKING, "Splitting into chunks")
-        chunks = chunk_text(parsed.text, chunk_size=512, chunk_overlap=50)
+        chunks = chunk_text(parsed.text, chunk_size=1024, chunk_overlap=100)
 
         # Step 4: Embed (API call — run in thread)
         self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(chunks)} chunks")

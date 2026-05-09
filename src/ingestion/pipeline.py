@@ -27,8 +27,8 @@ async def ingest_document(
     vector_store,
     metadata_store,
     category="",
-    chunk_size=512,
-    chunk_overlap=50,
+    chunk_size=1024,
+    chunk_overlap=100,
     auto_categorize=False,
     original_filename="",
 ):
