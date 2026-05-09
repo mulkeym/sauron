@@ -19,7 +19,24 @@ async def dashboard(request: Request):
     docs = await store.list_documents()
     categories = await store.list_categories()
     proposals = await store.list_proposals(status="pending")
-    return templates.TemplateResponse(request, "dashboard.html", {"doc_count": len(docs), "category_count": len(categories), "pending_proposals": len(proposals)})
+    entities = await store.list_entities(limit=10000)
+
+    # Qdrant stats
+    vector_count = 0
+    try:
+        import httpx
+        from src.config import settings
+        resp = httpx.get(f"http://{settings.qdrant_host}:{settings.qdrant_port}/collections/{settings.qdrant_collection_name}")
+        if resp.status_code == 200:
+            vector_count = resp.json().get("result", {}).get("points_count", 0)
+    except Exception:
+        pass
+
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "doc_count": len(docs), "category_count": len(categories),
+        "pending_proposals": len(proposals), "entity_count": len(entities),
+        "vector_count": vector_count,
+    })
 
 @router.get("/documents", response_class=HTMLResponse)
 async def documents_page(request: Request):

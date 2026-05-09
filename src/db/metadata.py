@@ -174,3 +174,19 @@ class MetadataStore:
             await session.execute(delete(EntityMention).where(EntityMention.doc_id == doc_id))
             await session.execute(delete(Relationship).where(Relationship.doc_id == doc_id))
             await session.commit()
+        # Clean up orphaned entities (no remaining mentions)
+        await self._cleanup_orphaned_entities()
+
+    async def _cleanup_orphaned_entities(self):
+        from sqlalchemy import func
+        async with self.session_factory() as session:
+            # Find entities with zero mentions
+            subq = select(EntityMention.entity_id).distinct()
+            result = await session.execute(
+                select(Entity).where(Entity.id.notin_(subq))
+            )
+            orphans = list(result.scalars().all())
+            if orphans:
+                orphan_ids = [e.id for e in orphans]
+                await session.execute(delete(Entity).where(Entity.id.in_(orphan_ids)))
+                await session.commit()
