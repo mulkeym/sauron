@@ -20,7 +20,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_ask(question: str, depth: str = "thorough", context: str = "") -> dict:
-        """Ask a question and get a complete cited answer from the knowledge base."""
+        """Ask a question about the organization's documents and get a complete answer with citations. Use this as the primary way to get answers. It searches all documents, reasons about the query, and generates a cited response. The 'context' parameter lets you provide background about why you're asking to improve results."""
         return await ask(
             question=question,
             user_groups=["ALL"],
@@ -32,7 +32,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_summarize_topic(topic: str, format: str = "brief") -> dict:
-        """Summarize a topic from the knowledge base."""
+        """Summarize a specific topic by searching across all documents and generating a summary with source references."""
         return await summarize_topic(
             topic=topic,
             user_groups=["ALL"],
@@ -43,7 +43,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_compare(item_a: str, item_b: str) -> dict:
-        """Compare two items using the knowledge base."""
+        """Compare and contrast two items, policies, or topics by searching the documents for both and listing differences."""
         return await compare(
             item_a=item_a,
             item_b=item_b,
@@ -54,7 +54,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_search_documents(query: str, doc_type: str = "", top_k: int = 10) -> list[dict]:
-        """Search documents by semantic similarity with optional type filter."""
+        """Search for relevant document snippets matching a query. Returns matching text chunks with filenames, doc_ids, and relevance scores. Use this to find which documents mention a topic. Each result includes a doc_id that can be used with tool_lookup_document to read the full document. Optional doc_type filter: pdf, docx, xlsx, transcript."""
         return search_documents(
             query=query,
             user_groups=["ALL"],
@@ -65,7 +65,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_query_database(question: str) -> dict:
-        """Query a registered database using natural language (text-to-SQL)."""
+        """Query a structured database using natural language. Converts your question to SQL, executes it, and returns the results. Use for questions about numbers, financial data, or anything stored in tables."""
         return await query_database(
             question=question,
             user_groups=["ALL"],
@@ -74,7 +74,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_lookup_document(doc_id: str) -> dict:
-        """Retrieve a specific document by ID."""
+        """Read the full content of a specific document by its doc_id. Use this when you need to read or display an entire document's contents. Get the doc_id from tool_search_documents or tool_list_sources first."""
         return lookup_document(
             doc_id=doc_id,
             user_groups=["ALL"],
@@ -83,7 +83,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_search_meetings(topic: str = "", speaker: str = "", type_filter: str = "") -> list[dict]:
-        """Search meeting transcripts with optional speaker and type filters."""
+        """Search meeting transcripts. Filter by speaker name, topic, or utterance type (question, statement, action_item). Use this to find what someone said in meetings or to find specific discussions."""
         return search_meetings(
             user_groups=["ALL"],
             vector_store=vector_store,
@@ -94,7 +94,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_list_sources() -> list[dict]:
-        """List available knowledge sources and their document counts."""
+        """List all available document categories and their document counts. Shows what knowledge sources exist in the system (e.g., finance_policies, it_runbooks, meeting_notes)."""
         return list_sources(user_groups=["ALL"], metadata_store=metadata_store)
 
     @mcp.tool()
