@@ -49,6 +49,67 @@ async def ingest_file(file: UploadFile = File(...), acl_groups: str = Form(defau
         tmp_path.unlink(missing_ok=True)
     return IngestResponse(doc_id=result.doc_id, filename=result.filename, doc_type=result.doc_type, chunk_count=result.chunk_count)
 
+@router.post("/ingest/async", response_model=dict)
+async def ingest_file_async(
+    file: UploadFile = File(...),
+    acl_groups: str = Form(default="[]"),
+    category: str = Form(default=""),
+    auto_categorize: str = Form(default="true"),
+    user: UserContext = Depends(require_auth),
+):
+    """Queue a document for async ingestion. Returns immediately with a job_id."""
+    from src.ingestion.queue import ingest_queue
+    groups = json.loads(acl_groups)
+    suffix = Path(file.filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+    await ingest_queue.start_worker(get_vector_store(), get_metadata_store())
+    job_id = ingest_queue.enqueue(
+        filename=file.filename, file_path=tmp_path,
+        acl_groups=groups, uploaded_by=user.username,
+        category=category, auto_categorize=auto_categorize == "true",
+    )
+    return {"job_id": job_id, "status": "queued", "filename": file.filename}
+
+
+@router.get("/ingest/status/{job_id}", response_model=dict)
+async def ingest_status(job_id: str):
+    """Check the status of an async ingestion job."""
+    from src.ingestion.queue import ingest_queue
+    job = ingest_queue.get_job(job_id)
+    if not job:
+        return {"error": "Job not found"}
+    return {
+        "job_id": job.job_id,
+        "filename": job.filename,
+        "status": job.step,
+        "progress": job.progress,
+        "doc_id": job.doc_id or None,
+        "chunk_count": job.chunk_count,
+        "error": job.error or None,
+    }
+
+
+@router.get("/ingest/queue", response_model=list)
+async def ingest_queue_list():
+    """List all ingestion jobs and their status."""
+    from src.ingestion.queue import ingest_queue
+    return [
+        {
+            "job_id": j.job_id,
+            "filename": j.filename,
+            "status": j.step,
+            "progress": j.progress,
+            "doc_id": j.doc_id or None,
+            "chunk_count": j.chunk_count,
+            "error": j.error or None,
+        }
+        for j in ingest_queue.list_jobs()
+    ]
+
+
 @router.get("/documents", response_model=list[DocumentInfo])
 async def list_documents(user: UserContext = Depends(require_auth)):
     store = get_metadata_store()
