@@ -3,7 +3,7 @@ from src.db.metadata import MetadataStore
 from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
 from src.mcp.jobs import JobStore
-from src.mcp.tools_high import ask, summarize_topic, compare
+from src.mcp.tools_high import ask, summarize_topic, compare, summarize_documents
 from src.mcp.tools_low import search_documents, query_database, lookup_document, search_meetings, list_sources, list_documents_in_category
 from src.mcp.resources import get_document_resource, get_category_resource, get_schema_resource
 from src.retrieval.vector_store import VectorStore
@@ -96,6 +96,16 @@ def create_mcp_server(
     def tool_list_sources() -> list[dict]:
         """List all available document categories and their document counts. Shows what knowledge sources exist in the system (e.g., finance_policies, it_runbooks, meeting_notes)."""
         return list_sources(user_groups=["ALL"], metadata_store=metadata_store)
+
+    @mcp.tool()
+    def tool_summarize_documents(category: str = "") -> dict:
+        """Read and summarize every document in a category. Returns a list of filenames with a 2-3 sentence summary of each. Use this when the user asks to summarize multiple documents, summarize a category, or wants an overview of what's in a group of files. For a single file, use tool_lookup_document instead."""
+        return summarize_documents(
+            category=category or "uncategorized",
+            user_groups=["ALL"],
+            vector_store=vector_store,
+            metadata_store=metadata_store,
+        )
 
     @mcp.tool()
     def tool_list_documents(category: str = "") -> list[dict]:

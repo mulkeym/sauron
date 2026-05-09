@@ -1,4 +1,6 @@
+from src.generation.llm_client import generate
 from src.generation.rag_chain import agent_query
+from src.mcp.tools_low import list_documents_in_category, lookup_document
 
 
 async def ask(
@@ -89,3 +91,44 @@ async def compare(
     ]
 
     return {"comparison": response.answer, "sources": sources}
+
+
+def summarize_documents(
+    category: str,
+    user_groups: list[str],
+    vector_store,
+    metadata_store,
+) -> dict:
+    """List all docs in a category, read each one, and return a summary per document."""
+    docs = list_documents_in_category(
+        category=category, user_groups=user_groups, metadata_store=metadata_store,
+    )
+    if not docs:
+        # If no category filter, list all
+        import asyncio
+        try:
+            all_docs = asyncio.run(metadata_store.list_documents(None))
+        except RuntimeError:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                all_docs = pool.submit(asyncio.run, metadata_store.list_documents(None)).result()
+        docs = [{"doc_id": d.doc_id, "filename": d.filename, "doc_type": d.doc_type, "category": d.category or "uncategorized"} for d in all_docs]
+
+    summaries = []
+    for doc in docs:
+        content_result = lookup_document(
+            doc_id=doc["doc_id"], user_groups=user_groups, vector_store=vector_store,
+        )
+        content = content_result.get("content", "")
+        if not content:
+            summaries.append({"filename": doc["filename"], "summary": "Could not read document content."})
+            continue
+
+        summary = generate(
+            system_prompt="Summarize the following document in 2-3 sentences.",
+            user_prompt=content[:3000],
+            max_tokens=256,
+        )
+        summaries.append({"filename": doc["filename"], "doc_id": doc["doc_id"], "doc_type": doc.get("doc_type", ""), "summary": summary})
+
+    return {"category": category, "document_count": len(summaries), "summaries": summaries}
