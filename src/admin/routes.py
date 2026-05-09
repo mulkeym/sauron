@@ -179,6 +179,110 @@ async def playground_page(request: Request):
     return templates.TemplateResponse(request, "playground.html", {})
 
 
+_playground_jobs: dict = {}
+
+
+@router.post("/api/playground/start")
+async def playground_start(question: str = Form(""), play_user: str = Form("finance")):
+    import uuid, asyncio
+    from fastapi.responses import JSONResponse
+
+    if not question.strip():
+        return JSONResponse({"error": "No question"})
+
+    query_id = str(uuid.uuid4())[:8]
+    user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
+
+    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": ""}
+
+    async def run_query():
+        try:
+            from src.agent.graph import create_agent_graph
+            from src.agent.state import AgentState
+
+            graph = create_agent_graph(
+                vector_store=get_vector_store(),
+                schema_registry=get_schema_registry(),
+                metadata_store=get_metadata_store(),
+            )
+            initial_state = AgentState(
+                question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
+                retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
+                needs_reretrieval=False, answer="", citations=[], warnings=[],
+            )
+
+            import time
+            steps_timing = []
+            step_start = time.time()
+            prev_node = None
+
+            async for event in graph.astream(initial_state, stream_mode="updates"):
+                now = time.time()
+                for node_name, node_output in event.items():
+                    if prev_node:
+                        steps_timing.append({"step": prev_node, "time": round(now - step_start, 2)})
+                    _playground_jobs[query_id]["step"] = node_name
+                    prev_node = node_name
+                    step_start = now
+
+            if prev_node:
+                steps_timing.append({"step": prev_node, "time": round(time.time() - step_start, 2)})
+
+            # Get final result
+            total_time = sum(s["time"] for s in steps_timing)
+            result = await graph.ainvoke(initial_state)
+
+            answer = result.get("answer", "No answer")
+            chunks = result.get("retrieved_chunks", [])
+            query_type = str(result.get("query_type", "lookup"))
+
+            # Build trace HTML
+            step_labels = {"classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "evaluate": "Evaluate Context", "synthesize": "Generate Answer"}
+            steps_html = ""
+            for s in steps_timing:
+                label = step_labels.get(s["step"], s["step"])
+                steps_html += f'<div class="trace-step"><span>&#9989; {label}</span><span class="trace-time">{s["time"]}s</span></div>'
+
+            trace_html = f"""<div class="trace-panel">
+                <div class="trace-header">
+                    <span>Query Type: <strong>{query_type}</strong></span>
+                    <span>Chunks: <strong>{len(chunks)}</strong></span>
+                    <span>Total: <strong>{round(total_time, 1)}s</strong></span>
+                </div>
+                <div class="trace-steps">{steps_html}</div>
+            </div>"""
+
+            citations_html = ""
+            citations = result.get("citations", [])
+            for i, c in enumerate(citations, 1):
+                page = f' &mdash; page {c.page}' if c.page else ''
+                citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.filename}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
+
+            result_html = f"""{trace_html}
+            <div class="result-card">
+                <div class="result-meta">Groups: {', '.join(user_groups)}</div>
+                <div class="result-answer">{answer}</div>
+                <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
+                {citations_html or '<p>No citations.</p>'}
+            </div>"""
+
+            _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+
+        except Exception as e:
+            import traceback
+            _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": str(e)}
+
+    asyncio.create_task(run_query())
+    return JSONResponse({"query_id": query_id})
+
+
+@router.get("/api/playground/status/{query_id}")
+async def playground_status(query_id: str):
+    from fastapi.responses import JSONResponse
+    job = _playground_jobs.get(query_id, {"step": "error", "error": "Not found"})
+    return JSONResponse(job)
+
+
 @router.post("/api/playground/query")
 async def playground_query(question: str = Form(""), play_user: str = Form("finance")):
     if not question.strip():

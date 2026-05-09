@@ -17,9 +17,106 @@
         <label for="play_question">Question</label>
         <textarea id="play_question" name="question" rows="3" placeholder="What is the expense policy?" style="width:100%; max-width:700px; padding:0.5rem 0.75rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.9rem; font-family:inherit;"></textarea>
     </div>
-    <button type="button" hx-post="/admin/api/playground/query" hx-include="#play_question, #play_user" hx-target="#play-results" hx-swap="innerHTML" hx-indicator="#play-spinner">Ask</button>
-    <span id="play-spinner" class="htmx-indicator">Thinking...</span>
+    <button type="button" id="ask-btn" onclick="runQuery()">Ask</button>
 </div>
 
-<div id="play-results" style="margin-top: 1.5rem;"></div>
+<div id="play-progress" style="margin-top: 1.5rem; display: none;"></div>
+<div id="play-results" style="margin-top: 1rem;"></div>
+
+<script>
+const STEPS = [
+    {id: "classify", label: "Classify Query", num: 1},
+    {id: "retrieve", label: "Retrieve Documents", num: 2},
+    {id: "enrich", label: "Knowledge Graph Enrichment", num: 3},
+    {id: "evaluate", label: "Evaluate Context", num: 4},
+    {id: "synthesize", label: "Generate Answer", num: 5},
+];
+
+function buildProgressHTML(currentStep, elapsed) {
+    let html = '<div class="trace-panel"><div class="trace-steps">';
+    for (const step of STEPS) {
+        let icon, cls;
+        if (step.id === currentStep) {
+            icon = '⏳';
+            cls = 'style="background:#1e40af; color:white;"';
+        } else if (getStepNum(currentStep) > step.num) {
+            icon = '✅';
+            cls = '';
+        } else {
+            icon = '⬜';
+            cls = 'style="opacity:0.4;"';
+        }
+        html += `<div class="trace-step" ${cls}>
+            <span>${icon} Step ${step.num} of 5: ${step.label}</span>
+            ${step.id === currentStep ? '<span class="trace-time">' + elapsed + 's</span>' : ''}
+        </div>`;
+    }
+    html += '</div></div>';
+    return html;
+}
+
+function getStepNum(stepId) {
+    const s = STEPS.find(s => s.id === stepId);
+    return s ? s.num : 0;
+}
+
+async function runQuery() {
+    const question = document.getElementById('play_question').value;
+    if (!question.trim()) return;
+
+    const user = document.getElementById('play_user').value;
+    const btn = document.getElementById('ask-btn');
+    const progress = document.getElementById('play-progress');
+    const results = document.getElementById('play-results');
+
+    btn.disabled = true;
+    btn.textContent = 'Working...';
+    results.innerHTML = '';
+    progress.style.display = 'block';
+    progress.innerHTML = buildProgressHTML('classify', '0');
+
+    // Start the query and poll for status
+    const startTime = Date.now();
+    let queryId;
+
+    try {
+        // Start async query
+        const startResp = await fetch('/admin/api/playground/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: `question=${encodeURIComponent(question)}&play_user=${encodeURIComponent(user)}`,
+        });
+        const startData = await startResp.json();
+        queryId = startData.query_id;
+
+        // Poll for progress
+        let done = false;
+        while (!done) {
+            await new Promise(r => setTimeout(r, 500));
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+            const statusResp = await fetch(`/admin/api/playground/status/${queryId}`);
+            const status = await statusResp.json();
+
+            if (status.step === 'complete') {
+                done = true;
+                progress.style.display = 'none';
+                results.innerHTML = status.result_html;
+            } else if (status.step === 'error') {
+                done = true;
+                progress.style.display = 'none';
+                results.innerHTML = `<div class="status-err">${status.error}</div>`;
+            } else {
+                progress.innerHTML = buildProgressHTML(status.step, elapsed);
+            }
+        }
+    } catch (e) {
+        progress.style.display = 'none';
+        results.innerHTML = `<div class="status-err">Error: ${e.message}</div>`;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Ask';
+}
+</script>
 {% endblock %}
