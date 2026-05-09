@@ -6,7 +6,19 @@ from qdrant_client.models import Distance, FieldCondition, Filter, MatchAny, Poi
 from src.config import settings
 from src.retrieval.models import ChunkMetadata, RetrievedChunk
 
-VECTOR_SIZE = 1024
+
+def _detect_vector_size() -> int:
+    """Detect embedding dimension from config or by calling the embedding endpoint."""
+    if settings.embedding_dimension > 0:
+        return settings.embedding_dimension
+    try:
+        from src.ingestion.embedder import embed_texts
+        vectors = embed_texts(["dimension probe"])
+        dim = len(vectors[0])
+        settings.embedding_dimension = dim
+        return dim
+    except Exception:
+        return 4096  # safe default for large models
 
 
 class VectorStore:
@@ -17,9 +29,10 @@ class VectorStore:
 
     def _ensure_collection(self):
         if not self.client.collection_exists(self.collection):
+            vector_size = _detect_vector_size()
             self.client.create_collection(
                 collection_name=self.collection,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
             )
 
     def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:

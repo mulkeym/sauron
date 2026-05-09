@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint
     embedding_model_name: str = "intfloat/e5-large-v2"
     embedding_device: str = "cpu"  # only used when embedding_mode=local
+    embedding_dimension: int = 0  # auto-detect from first embedding call if 0
 
     # Qdrant
     qdrant_host: str = "localhost"
