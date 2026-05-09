@@ -2,9 +2,38 @@
 {% block title %}Documents - RAG Admin{% endblock %}
 {% block content %}
 <h1>Documents</h1>
+
+<div class="settings-section">
+    <h2>Upload Documents</h2>
+    <p class="section-desc">Select one or more files (PDF, Word, Excel, TXT). They will be parsed, chunked, embedded, and stored.</p>
+    <form id="upload-form" hx-post="/admin/api/documents/upload" hx-target="#upload-status" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+        <div class="form-group">
+            <label for="files">Files</label>
+            <input type="file" id="files" name="files" multiple accept=".pdf,.docx,.xlsx,.csv,.txt">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="acl_groups">ACL Groups (comma-separated)</label>
+                <input type="text" id="acl_groups" name="acl_groups" value="finance" placeholder="finance, executives">
+            </div>
+            <div class="form-group">
+                <label for="category">Category (optional, or auto-detect)</label>
+                <input type="text" id="upload_category" name="category" placeholder="Leave blank to auto-categorize">
+            </div>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" name="auto_categorize" value="true"> Auto-categorize (use LLM to assign category)</label>
+        </div>
+        <button type="submit">Upload</button>
+        <span id="upload-spinner" class="htmx-indicator">Uploading...</span>
+    </form>
+    <div id="upload-status" style="margin-top: 1rem;"></div>
+</div>
+
+<h2 style="margin-top: 2rem; margin-bottom: 1rem;">Indexed Documents</h2>
 <table>
     <thead><tr><th>Filename</th><th>Type</th><th>Category</th><th>ACL Groups</th><th>Chunks</th><th>Uploaded By</th><th>Actions</th></tr></thead>
-    <tbody>
+    <tbody id="doc-table-body">
         {% for doc in documents %}
         <tr>
             <td>{{ doc.filename }}</td><td>{{ doc.doc_type }}</td>

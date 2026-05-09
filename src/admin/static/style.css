@@ -31,5 +31,19 @@ button.secondary { background: #6b7280; }
 button.secondary:hover { background: #4b5563; }
 .input-with-button { display: flex; gap: 0.5rem; align-items: center; }
 .input-with-button input { flex: 1; max-width: 500px; }
+.form-row { display: flex; gap: 1rem; }
+.form-row .form-group { flex: 1; }
+.htmx-indicator { display: none; color: #6b7280; font-style: italic; margin-left: 0.5rem; }
+.htmx-request .htmx-indicator { display: inline; }
 .status-ok { color: #16a34a; font-weight: 600; }
 .status-err { color: #dc2626; font-weight: 600; }
+.result-card { background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.result-answer { font-size: 1rem; line-height: 1.6; margin-bottom: 1rem; }
+.result-meta { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; }
+.citation-card { background: #f9fafb; border-left: 3px solid #2563eb; padding: 0.75rem 1rem; margin-bottom: 0.5rem; border-radius: 0 4px 4px 0; }
+.citation-card .filename { font-weight: 600; color: #1f2937; }
+.citation-card .snippet { font-size: 0.85rem; color: #4b5563; margin-top: 0.25rem; }
+.citation-card .score { font-size: 0.8rem; color: #9ca3af; }
+.upload-result { padding: 0.5rem; margin-bottom: 0.25rem; border-radius: 4px; }
+.upload-ok { background: #dcfce7; color: #166534; }
+.upload-err { background: #fef2f2; color: #991b1b; }

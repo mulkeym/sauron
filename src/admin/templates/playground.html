@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Playground - RAG Admin{% endblock %}
+{% block content %}
+<h1>Query Playground</h1>
+
+<div class="settings-section">
+    <div class="form-group">
+        <label for="play_user">Act as user</label>
+        <select id="play_user" name="play_user">
+            <option value="finance,executives">Mike (Finance, Executives)</option>
+            <option value="it_support,devops">Bob (IT Support, DevOps)</option>
+            <option value="engineering">Sarah (Engineering)</option>
+            <option value="finance,it_support,engineering,executives,compliance">Alice (All Groups)</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="play_question">Question</label>
+        <textarea id="play_question" name="question" rows="3" placeholder="What is the expense policy?" style="width:100%; max-width:700px; padding:0.5rem 0.75rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.9rem; font-family:inherit;"></textarea>
+    </div>
+    <button type="button" hx-post="/admin/api/playground/query" hx-include="#play_question, #play_user" hx-target="#play-results" hx-swap="innerHTML" hx-indicator="#play-spinner">Ask</button>
+    <span id="play-spinner" class="htmx-indicator">Thinking...</span>
+</div>
+
+<div id="play-results" style="margin-top: 1.5rem;"></div>
+{% endblock %}

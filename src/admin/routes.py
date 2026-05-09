@@ -1,9 +1,11 @@
 import json
+import tempfile
 from pathlib import Path
-from fastapi import APIRouter, Request, Form
+from typing import List
+from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from src.api.routes_ingest import get_metadata_store
+from src.api.routes_ingest import get_metadata_store, get_vector_store, get_schema_registry
 from src.config import settings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -67,6 +69,91 @@ async def delete_document(doc_id: str):
     store = get_metadata_store()
     await store.delete_document(doc_id)
     return HTMLResponse("")
+
+
+@router.get("/playground", response_class=HTMLResponse)
+async def playground_page(request: Request):
+    return templates.TemplateResponse(request, "playground.html", {})
+
+
+@router.post("/api/playground/query")
+async def playground_query(question: str = Form(""), play_user: str = Form("finance")):
+    if not question.strip():
+        return HTMLResponse('<div class="status-err">Please enter a question.</div>')
+
+    user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
+
+    try:
+        from src.generation.rag_chain import agent_query
+        result = await agent_query(
+            question=question,
+            user_groups=user_groups,
+            vector_store=get_vector_store(),
+            schema_registry=get_schema_registry(),
+        )
+
+        citations_html = ""
+        for i, c in enumerate(result.citations, 1):
+            citations_html += f"""
+            <div class="citation-card">
+                <span class="filename">[{i}] {c.filename}</span>
+                {f'<span class="score"> &mdash; page {c.page}</span>' if c.page else ''}
+                <span class="score"> &mdash; relevance: {c.relevance:.2f}</span>
+                <div class="snippet">{c.snippet[:300]}</div>
+            </div>"""
+
+        return HTMLResponse(f"""
+        <div class="result-card">
+            <div class="result-meta">Groups: {', '.join(user_groups)}</div>
+            <div class="result-answer">{result.answer}</div>
+            <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(result.citations)})</h3>
+            {citations_html or '<p>No citations.</p>'}
+        </div>""")
+    except Exception as e:
+        return HTMLResponse(f'<div class="status-err">Error: {e}</div>')
+
+
+@router.post("/api/documents/upload")
+async def bulk_upload(
+    files: List[UploadFile] = File(...),
+    acl_groups: str = Form(""),
+    category: str = Form(""),
+    auto_categorize: str = Form(""),
+):
+    groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    do_auto_cat = auto_categorize == "true"
+    results_html = []
+
+    from src.ingestion.pipeline import ingest_document
+
+    for file in files:
+        suffix = Path(file.filename).suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+
+        try:
+            result = await ingest_document(
+                file_path=tmp_path,
+                acl_groups=groups,
+                uploaded_by="admin",
+                vector_store=get_vector_store(),
+                metadata_store=get_metadata_store(),
+                category=category,
+                auto_categorize=do_auto_cat,
+            )
+            results_html.append(
+                f'<div class="upload-result upload-ok">{file.filename} — {result.chunk_count} chunks, category: {category or "auto"}</div>'
+            )
+        except Exception as e:
+            results_html.append(
+                f'<div class="upload-result upload-err">{file.filename} — Error: {e}</div>'
+            )
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    return HTMLResponse("\n".join(results_html))
 
 
 @router.get("/settings", response_class=HTMLResponse)
