@@ -22,8 +22,10 @@ def search_documents(
 ) -> list[dict]:
     vector = embed_query(query)
     chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k)
-    if doc_type is not None:
-        chunks = [c for c in chunks if c.metadata.doc_type == doc_type]
+    # Only filter by doc_type if it's a known type (pdf, docx, xlsx, transcript)
+    valid_types = {"pdf", "docx", "xlsx", "transcript", "txt"}
+    if doc_type and doc_type.lower() in valid_types:
+        chunks = [c for c in chunks if c.metadata.doc_type == doc_type.lower()]
     results = []
     for chunk in chunks:
         results.append(
@@ -125,15 +127,15 @@ def list_sources(
     user_groups: list[str],
     metadata_store,
 ) -> list[dict]:
+    # Pass None to list_documents when ALL access (skip ACL filtering)
+    filter_groups = None if "ALL" in user_groups else user_groups
     try:
-        docs = asyncio.run(metadata_store.list_documents(user_groups))
+        docs = asyncio.run(metadata_store.list_documents(filter_groups))
     except RuntimeError:
-        # Event loop already running — use a new thread to avoid nesting
         import concurrent.futures
-
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                asyncio.run, metadata_store.list_documents(user_groups)
+                asyncio.run, metadata_store.list_documents(filter_groups)
             )
             docs = future.result()
 
