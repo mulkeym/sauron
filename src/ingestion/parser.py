@@ -29,10 +29,17 @@ def parse_document(path: Path) -> ParsedDocument:
         return _parse_docx(path)
     elif suffix in (".xlsx", ".csv"):
         return _parse_spreadsheet(path)
+    elif suffix == ".md":
+        return _parse_markdown(path)
     elif suffix == ".txt":
         return _parse_transcript(path)
     else:
         raise ValueError(f"Unsupported file format: {suffix}")
+
+
+def _parse_markdown(path: Path) -> ParsedDocument:
+    text = path.read_text(encoding="utf-8")
+    return ParsedDocument(filename=path.name, doc_type="markdown", text=text)
 
 
 def _parse_pdf(path: Path) -> ParsedDocument:
