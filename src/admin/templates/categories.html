@@ -26,6 +26,10 @@
                 <input type="text" id="cat-keywords" name="routing_keywords" placeholder="contract, compliance, legal">
             </div>
         </div>
+        <div class="form-group">
+            <label for="cat-grs">NARA GRS Number (optional)</label>
+            <input type="text" id="cat-grs" name="grs_number" placeholder="e.g., 3.1, 5.8" style="max-width:150px;">
+        </div>
         <button type="submit">Add Category</button>
     </form>
     <div id="cat-status" style="margin-top: 0.5rem;"></div>
@@ -33,12 +37,13 @@
 
 <h2 style="margin-top: 2rem; margin-bottom: 1rem;">Existing Categories</h2>
 <table>
-    <thead><tr><th>Name</th><th>Description</th><th>ACL Groups</th><th>Routing Keywords</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name</th><th>Description</th><th>GRS</th><th>ACL Groups</th><th>Routing Keywords</th><th>Actions</th></tr></thead>
     <tbody>
         {% for cat in categories %}
         <tr>
             <td>{{ cat.name }}</td>
             <td>{{ cat.description }}</td>
+            <td>{{ cat.grs_number or '-' }}</td>
             <td>{{ cat.acl_groups | join(", ") }}</td>
             <td>{{ cat.routing_keywords | join(", ") }}</td>
             <td><button class="danger" hx-delete="/admin/api/categories/{{ cat.name }}" hx-confirm="Delete category '{{ cat.name }}'?" hx-target="closest tr" hx-swap="outerHTML">Delete</button></td>

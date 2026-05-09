@@ -31,6 +31,7 @@ class Category(Base):
     description: Mapped[str] = mapped_column(String, default="")
     acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     routing_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    grs_number: Mapped[str] = mapped_column(String, default="")  # NARA GRS mapping (e.g., "3.1", "5.8")
     doc_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

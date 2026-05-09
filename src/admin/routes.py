@@ -71,6 +71,7 @@ async def add_category(
     description: str = Form(""),
     acl_groups: str = Form(""),
     routing_keywords: str = Form(""),
+    grs_number: str = Form(""),
 ):
     if not name.strip():
         return HTMLResponse('<span class="status-err">Category name is required.</span>')
@@ -80,7 +81,7 @@ async def add_category(
         return HTMLResponse(f'<span class="status-err">Category "{name}" already exists.</span>')
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
     keywords = [k.strip() for k in routing_keywords.split(",") if k.strip()]
-    await store.add_category(name=name.strip(), description=description.strip(), acl_groups=groups, routing_keywords=keywords)
+    await store.add_category(name=name.strip(), description=description.strip(), acl_groups=groups, routing_keywords=keywords, grs_number=grs_number.strip())
     return HTMLResponse(f'<span class="status-ok">Category "{name}" created. Reload to see it in the table.</span>')
 
 

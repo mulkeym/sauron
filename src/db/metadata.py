@@ -58,8 +58,8 @@ class MetadataStore:
             await session.execute(delete(DocumentRecord).where(DocumentRecord.doc_id == doc_id))
             await session.commit()
 
-    async def add_category(self, name, description, acl_groups, routing_keywords):
-        record = Category(name=name, description=description, acl_groups=acl_groups, routing_keywords=routing_keywords)
+    async def add_category(self, name, description, acl_groups, routing_keywords, grs_number=""):
+        record = Category(name=name, description=description, acl_groups=acl_groups, routing_keywords=routing_keywords, grs_number=grs_number)
         async with self.session_factory() as session:
             session.add(record)
             await session.commit()
