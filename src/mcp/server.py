@@ -20,7 +20,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_ask(question: str, depth: str = "thorough", context: str = "") -> dict:
-        """Ask a question about the organization's documents and get a complete answer with citations. Use this as the primary way to get answers. It searches all documents, reasons about the query, and generates a cited response. The 'context' parameter lets you provide background about why you're asking to improve results."""
+        """Ask a question about document CONTENT and get a cited answer. Use this for questions like 'what does the policy say?' or 'what are the budget numbers?'. Do NOT use this for listing files, reading specific files, or finding what documents exist — use tool_list_documents and tool_lookup_document for those tasks instead."""
         return await ask(
             question=question,
             user_groups=["ALL"],
@@ -99,7 +99,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_list_documents(category: str = "") -> list[dict]:
-        """List all documents with their filenames, doc_ids, types, and categories. Optionally filter by category name (e.g., 'meeting_notes', 'finance_policies'). Use this to see what files exist. Use the returned doc_id with tool_lookup_document to read a file's full content."""
+        """List all documents with filenames, doc_ids, types, and categories. Use this FIRST when the user asks about what files exist, what's in a category, or wants to see uncategorized documents. Filter by category name (e.g., 'meeting_notes', 'finance_policies', 'uncategorized'). To read a file's content after listing, pass its doc_id or filename to tool_lookup_document."""
         if category:
             return list_documents_in_category(category=category, user_groups=["ALL"], metadata_store=metadata_store)
         # Return all documents
