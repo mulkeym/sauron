@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Settings - RAG Admin{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<div id="save-status"></div>
+
+<form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+
+    <div class="settings-section">
+        <h2>LLM Inference</h2>
+        <p class="section-desc">OpenAI-compatible endpoint for text generation (e.g., vLLM, Ollama, TGI)</p>
+        <div class="form-group">
+            <label for="vllm_base_url">API Base URL</label>
+            <input type="text" id="vllm_base_url" name="vllm_base_url" value="{{ settings.vllm_base_url }}" placeholder="http://gpu-server:8000/v1">
+        </div>
+        <div class="form-group">
+            <label for="vllm_model_name">Model Name</label>
+            <input type="text" id="vllm_model_name" name="vllm_model_name" value="{{ settings.vllm_model_name }}" placeholder="google/gemma-4-31b-it">
+        </div>
+        <div class="form-group">
+            <button type="button" class="secondary" hx-post="/admin/api/settings/test-llm" hx-target="#llm-status" hx-swap="innerHTML">Test Connection</button>
+            <span id="llm-status"></span>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h2>Embedding Model</h2>
+        <p class="section-desc">OpenAI-compatible /v1/embeddings endpoint, or load locally via sentence-transformers</p>
+        <div class="form-group">
+            <label for="embedding_mode">Mode</label>
+            <select id="embedding_mode" name="embedding_mode">
+                <option value="api" {% if settings.embedding_mode == "api" %}selected{% endif %}>API (external endpoint)</option>
+                <option value="local" {% if settings.embedding_mode == "local" %}selected{% endif %}>Local (sentence-transformers)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="embedding_api_url">API Base URL</label>
+            <input type="text" id="embedding_api_url" name="embedding_api_url" value="{{ settings.embedding_api_url }}" placeholder="http://gpu-server:8000/v1">
+        </div>
+        <div class="form-group">
+            <label for="embedding_model_name">Model Name</label>
+            <input type="text" id="embedding_model_name" name="embedding_model_name" value="{{ settings.embedding_model_name }}" placeholder="nvidia/llama-embed-nemotron-8b">
+        </div>
+        <div class="form-group">
+            <button type="button" class="secondary" hx-post="/admin/api/settings/test-embedding" hx-target="#embed-status" hx-swap="innerHTML">Test Connection</button>
+            <span id="embed-status"></span>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h2>Vector Database (Qdrant)</h2>
+        <div class="form-group">
+            <label for="qdrant_host">Host</label>
+            <input type="text" id="qdrant_host" name="qdrant_host" value="{{ settings.qdrant_host }}" placeholder="localhost">
+        </div>
+        <div class="form-group">
+            <label for="qdrant_port">Port</label>
+            <input type="number" id="qdrant_port" name="qdrant_port" value="{{ settings.qdrant_port }}" placeholder="6333">
+        </div>
+        <div class="form-group">
+            <label for="qdrant_collection_name">Collection Name</label>
+            <input type="text" id="qdrant_collection_name" name="qdrant_collection_name" value="{{ settings.qdrant_collection_name }}" placeholder="documents">
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h2>MCP Server</h2>
+        <div class="form-group">
+            <label for="mcp_port">MCP Port</label>
+            <input type="number" id="mcp_port" name="mcp_port" value="{{ settings.mcp_port }}" placeholder="8090">
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit">Save Settings</button>
+    </div>
+</form>
+{% endblock %}

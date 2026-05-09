@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from src.api.routes_ingest import get_metadata_store
+from src.config import settings
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -66,3 +67,92 @@ async def delete_document(doc_id: str):
     store = get_metadata_store()
     await store.delete_document(doc_id)
     return HTMLResponse("")
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return templates.TemplateResponse(request, "settings.html", {"settings": settings})
+
+
+@router.post("/api/settings")
+async def save_settings(
+    vllm_base_url: str = Form(""),
+    vllm_model_name: str = Form(""),
+    embedding_mode: str = Form(""),
+    embedding_api_url: str = Form(""),
+    embedding_model_name: str = Form(""),
+    qdrant_host: str = Form(""),
+    qdrant_port: int = Form(6333),
+    qdrant_collection_name: str = Form(""),
+    mcp_port: int = Form(8090),
+):
+    # Update in-memory settings
+    if vllm_base_url:
+        settings.vllm_base_url = vllm_base_url
+    if vllm_model_name:
+        settings.vllm_model_name = vllm_model_name
+    if embedding_mode:
+        settings.embedding_mode = embedding_mode
+    if embedding_api_url:
+        settings.embedding_api_url = embedding_api_url
+    if embedding_model_name:
+        settings.embedding_model_name = embedding_model_name
+    if qdrant_host:
+        settings.qdrant_host = qdrant_host
+    settings.qdrant_port = qdrant_port
+    if qdrant_collection_name:
+        settings.qdrant_collection_name = qdrant_collection_name
+    settings.mcp_port = mcp_port
+
+    # Persist to .env file
+    env_path = Path(".env")
+    env_lines = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                key, _, val = line.partition("=")
+                env_lines[key.strip()] = val.strip()
+
+    env_lines["VLLM_BASE_URL"] = settings.vllm_base_url
+    env_lines["VLLM_MODEL_NAME"] = settings.vllm_model_name
+    env_lines["EMBEDDING_MODE"] = settings.embedding_mode
+    env_lines["EMBEDDING_API_URL"] = settings.embedding_api_url
+    env_lines["EMBEDDING_MODEL_NAME"] = settings.embedding_model_name
+    env_lines["QDRANT_HOST"] = settings.qdrant_host
+    env_lines["QDRANT_PORT"] = str(settings.qdrant_port)
+    env_lines["QDRANT_COLLECTION_NAME"] = settings.qdrant_collection_name
+    env_lines["MCP_PORT"] = str(settings.mcp_port)
+
+    env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
+
+    return HTMLResponse('<div class="status-ok">Settings saved successfully.</div>')
+
+
+@router.post("/api/settings/test-llm")
+async def test_llm_connection():
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=settings.vllm_base_url, api_key="not-needed")
+        models = client.models.list()
+        model_ids = [m.id for m in models.data]
+        return HTMLResponse(f'<span class="status-ok">Connected. Models: {", ".join(model_ids[:3])}</span>')
+    except Exception as e:
+        return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')
+
+
+@router.post("/api/settings/test-embedding")
+async def test_embedding_connection():
+    try:
+        if settings.embedding_mode == "api":
+            from openai import OpenAI
+            client = OpenAI(base_url=settings.embedding_api_url, api_key="not-needed")
+            result = client.embeddings.create(model=settings.embedding_model_name, input=["test"])
+            dim = len(result.data[0].embedding)
+            return HTMLResponse(f'<span class="status-ok">Connected. Dimension: {dim}</span>')
+        else:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(settings.embedding_model_name, device=settings.embedding_device)
+            dim = model.get_sentence_embedding_dimension()
+            return HTMLResponse(f'<span class="status-ok">Loaded locally. Dimension: {dim}</span>')
+    except Exception as e:
+        return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')
