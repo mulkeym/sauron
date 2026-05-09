@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch, call
 
 from src.ingestion.pipeline import IngestResult, ingest_document
 from src.knowledge.categorizer import CategorizationResult
@@ -66,3 +66,28 @@ async def test_ingest_auto_categorizes(mock_deps):
             )
     assert result.doc_type == "pdf"
     metadata_store.add_document.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ingest_extracts_entities(mock_deps):
+    vector_store, metadata_store, mock_embed = mock_deps
+    metadata_store.add_entity = AsyncMock(return_value=1)
+    metadata_store.add_mention = AsyncMock()
+    metadata_store.add_relationship = AsyncMock()
+
+    from src.knowledge.extractor import ExtractionResult
+    mock_extraction = ExtractionResult(
+        entities=[{"name": "Mike", "type": "person"}, {"name": "Policy 4.2", "type": "policy"}],
+        relationships=[{"source": "Policy 4.2", "target": "expense reporting", "type": "governs"}],
+        sections=[],
+    )
+
+    with patch("src.ingestion.pipeline.embed_texts", mock_embed):
+        with patch("src.ingestion.pipeline.extract_entities", return_value=mock_extraction):
+            result = await ingest_document(
+                file_path=FIXTURES / "sample.pdf", acl_groups=["finance"],
+                uploaded_by="mike", vector_store=vector_store, metadata_store=metadata_store,
+            )
+    assert result.chunk_count > 0
+    metadata_store.add_entity.assert_called()
+    metadata_store.add_mention.assert_called()
