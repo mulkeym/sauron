@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from src.api.routes_ingest import get_metadata_store, get_vector_store, get_schema_registry
 from src.config import settings
+from src.ingestion.queue import ingest_queue
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -152,38 +153,78 @@ async def bulk_upload(
 ):
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
     do_auto_cat = auto_categorize == "true"
-    results_html = []
 
-    from src.ingestion.pipeline import ingest_document
+    # Start the queue worker if not running
+    await ingest_queue.start_worker(get_vector_store(), get_metadata_store())
 
+    job_ids = []
     for file in files:
         suffix = Path(file.filename).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await file.read()
             tmp.write(content)
-            tmp_path = Path(tmp.name)
+            tmp_path = tmp.name
 
-        try:
-            result = await ingest_document(
-                file_path=tmp_path,
-                acl_groups=groups,
-                uploaded_by="admin",
-                vector_store=get_vector_store(),
-                metadata_store=get_metadata_store(),
-                category=category,
-                auto_categorize=do_auto_cat,
-            )
-            results_html.append(
-                f'<div class="upload-result upload-ok">{file.filename} — {result.chunk_count} chunks, category: {category or "auto"}</div>'
-            )
-        except Exception as e:
-            results_html.append(
-                f'<div class="upload-result upload-err">{file.filename} — Error: {e}</div>'
-            )
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        job_id = ingest_queue.enqueue(
+            filename=file.filename, file_path=tmp_path,
+            acl_groups=groups, uploaded_by="admin",
+            category=category, auto_categorize=do_auto_cat,
+        )
+        job_ids.append((file.filename, job_id))
 
-    return HTMLResponse("\n".join(results_html))
+    results = "".join(
+        f'<div class="upload-result upload-ok">{fname} — queued (job {jid})</div>'
+        for fname, jid in job_ids
+    )
+    results += '<div style="margin-top:0.5rem;"><a href="/admin/queue">View Queue Status</a></div>'
+    return HTMLResponse(results)
+
+
+@router.get("/queue", response_class=HTMLResponse)
+async def queue_page(request: Request):
+    jobs = ingest_queue.list_jobs()
+    return templates.TemplateResponse(request, "queue.html", {"jobs": jobs})
+
+
+@router.get("/api/queue/status")
+async def queue_status():
+    jobs = ingest_queue.list_jobs()
+    if not jobs:
+        return HTMLResponse('<p>No ingestion jobs.</p>')
+
+    rows = ""
+    for job in jobs:
+        if job.step == "complete":
+            status = '<span class="status-ok">Complete</span>'
+        elif job.step == "failed":
+            status = '<span class="status-err">Failed</span>'
+        elif job.step == "queued":
+            status = "Queued"
+        else:
+            status = f'<span style="color: #2563eb; font-weight: 600;">{job.step}</span>'
+
+        elapsed = ""
+        if job.completed_at > 0:
+            elapsed = f"{job.completed_at - job.created_at:.1f}s"
+        elif job.step != "queued":
+            import time
+            elapsed = f"{time.time() - job.created_at:.0f}s..."
+
+        error_row = ""
+        if job.step == "failed":
+            error_row = f'<tr><td colspan="7" class="status-err" style="font-size:0.85rem;">{job.error}</td></tr>'
+
+        rows += f"""<tr>
+            <td>{job.filename}</td><td>{status}</td><td>{job.progress}</td>
+            <td>{job.uploaded_by}</td><td>{job.category or '-'}</td>
+            <td>{job.chunk_count if job.step == 'complete' else '-'}</td>
+            <td>{elapsed}</td>
+        </tr>{error_row}"""
+
+    return HTMLResponse(f"""<table>
+        <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Time</th></tr></thead>
+        <tbody>{rows}</tbody>
+    </table>""")
 
 
 @router.get("/knowledge-graph", response_class=HTMLResponse)

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Ingestion Queue - RAG Admin{% endblock %}
+{% block content %}
+<h1>Ingestion Queue</h1>
+
+<div hx-get="/admin/api/queue/status" hx-trigger="every 2s" hx-target="#queue-table" hx-swap="innerHTML">
+</div>
+
+<div id="queue-table">
+{% if jobs %}
+<table>
+    <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Time</th></tr></thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr class="{% if job.step == 'complete' %}upload-ok{% elif job.step == 'failed' %}upload-err{% endif %}">
+            <td>{{ job.filename }}</td>
+            <td>
+                {% if job.step == 'complete' %}
+                    <span class="status-ok">Complete</span>
+                {% elif job.step == 'failed' %}
+                    <span class="status-err">Failed</span>
+                {% elif job.step == 'queued' %}
+                    Queued
+                {% else %}
+                    <span style="color: #2563eb; font-weight: 600;">{{ job.step }}</span>
+                {% endif %}
+            </td>
+            <td>{{ job.progress }}</td>
+            <td>{{ job.uploaded_by }}</td>
+            <td>{{ job.category or '-' }}</td>
+            <td>{{ job.chunk_count if job.step == 'complete' else '-' }}</td>
+            <td>
+                {% if job.completed_at > 0 %}
+                    {{ "%.1f"|format(job.completed_at - job.created_at) }}s
+                {% else %}
+                    ...
+                {% endif %}
+            </td>
+        </tr>
+        {% if job.step == 'failed' %}
+        <tr><td colspan="7" class="status-err" style="font-size:0.85rem;">{{ job.error }}</td></tr>
+        {% endif %}
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No ingestion jobs. Upload documents from the <a href="/admin/documents">Documents</a> page.</p>
+{% endif %}
+</div>
+{% endblock %}
