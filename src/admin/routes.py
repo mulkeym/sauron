@@ -64,6 +64,36 @@ async def reject_proposal(proposal_id: int):
     await store.reject_proposal(proposal_id, rejected_by="admin")
     return HTMLResponse("<tr><td colspan='6'>Rejected</td></tr>")
 
+@router.post("/api/categories/add")
+async def add_category(
+    name: str = Form(""),
+    description: str = Form(""),
+    acl_groups: str = Form(""),
+    routing_keywords: str = Form(""),
+):
+    if not name.strip():
+        return HTMLResponse('<span class="status-err">Category name is required.</span>')
+    store = get_metadata_store()
+    existing = await store.get_category(name.strip())
+    if existing:
+        return HTMLResponse(f'<span class="status-err">Category "{name}" already exists.</span>')
+    groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    keywords = [k.strip() for k in routing_keywords.split(",") if k.strip()]
+    await store.add_category(name=name.strip(), description=description.strip(), acl_groups=groups, routing_keywords=keywords)
+    return HTMLResponse(f'<span class="status-ok">Category "{name}" created. Reload to see it in the table.</span>')
+
+
+@router.delete("/api/categories/{name}")
+async def delete_category(name: str):
+    store = get_metadata_store()
+    from sqlalchemy import delete as sql_delete
+    from src.db.models import Category
+    async with store.session_factory() as session:
+        await session.execute(sql_delete(Category).where(Category.name == name))
+        await session.commit()
+    return HTMLResponse("")
+
+
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
     store = get_metadata_store()

@@ -2,11 +2,47 @@
 {% block title %}Categories - RAG Admin{% endblock %}
 {% block content %}
 <h1>Categories</h1>
+
+<div class="settings-section">
+    <h2>Add Category</h2>
+    <form hx-post="/admin/api/categories/add" hx-target="#cat-status" hx-swap="innerHTML">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="cat-name">Name</label>
+                <input type="text" id="cat-name" name="name" placeholder="e.g., legal_compliance" required>
+            </div>
+            <div class="form-group">
+                <label for="cat-desc">Description</label>
+                <input type="text" id="cat-desc" name="description" placeholder="Legal and compliance documents">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="cat-acl">ACL Groups (comma-separated)</label>
+                <input type="text" id="cat-acl" name="acl_groups" placeholder="legal, executives">
+            </div>
+            <div class="form-group">
+                <label for="cat-keywords">Routing Keywords (comma-separated)</label>
+                <input type="text" id="cat-keywords" name="routing_keywords" placeholder="contract, compliance, legal">
+            </div>
+        </div>
+        <button type="submit">Add Category</button>
+    </form>
+    <div id="cat-status" style="margin-top: 0.5rem;"></div>
+</div>
+
+<h2 style="margin-top: 2rem; margin-bottom: 1rem;">Existing Categories</h2>
 <table>
-    <thead><tr><th>Name</th><th>Description</th><th>ACL Groups</th><th>Routing Keywords</th></tr></thead>
+    <thead><tr><th>Name</th><th>Description</th><th>ACL Groups</th><th>Routing Keywords</th><th>Actions</th></tr></thead>
     <tbody>
         {% for cat in categories %}
-        <tr><td>{{ cat.name }}</td><td>{{ cat.description }}</td><td>{{ cat.acl_groups | join(", ") }}</td><td>{{ cat.routing_keywords | join(", ") }}</td></tr>
+        <tr>
+            <td>{{ cat.name }}</td>
+            <td>{{ cat.description }}</td>
+            <td>{{ cat.acl_groups | join(", ") }}</td>
+            <td>{{ cat.routing_keywords | join(", ") }}</td>
+            <td><button class="danger" hx-delete="/admin/api/categories/{{ cat.name }}" hx-confirm="Delete category '{{ cat.name }}'?" hx-target="closest tr" hx-swap="outerHTML">Delete</button></td>
+        </tr>
         {% endfor %}
     </tbody>
 </table>
