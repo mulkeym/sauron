@@ -85,6 +85,68 @@ async def add_category(
     return HTMLResponse(f'<span class="status-ok">Category "{name}" created. Reload to see it in the table.</span>')
 
 
+@router.get("/api/categories/{name}/edit")
+async def edit_category_form(name: str):
+    store = get_metadata_store()
+    cat = await store.get_category(name)
+    if not cat:
+        return HTMLResponse("<tr><td colspan='6'>Category not found</td></tr>")
+    acl = ", ".join(cat.acl_groups) if cat.acl_groups else ""
+    keywords = ", ".join(cat.routing_keywords) if cat.routing_keywords else ""
+    grs = getattr(cat, "grs_number", "") or ""
+    return HTMLResponse(f"""<tr id="cat-row-{name}">
+        <form hx-post="/admin/api/categories/{name}/update" hx-target="#cat-row-{name}" hx-swap="outerHTML">
+        <td><strong>{name}</strong></td>
+        <td><input type="text" name="description" value="{cat.description}" style="width:100%;"></td>
+        <td><input type="text" name="grs_number" value="{grs}" style="width:60px;"></td>
+        <td><input type="text" name="acl_groups" value="{acl}" style="width:100%;"></td>
+        <td><input type="text" name="routing_keywords" value="{keywords}" style="width:100%;"></td>
+        <td>
+            <button type="submit">Save</button>
+            <button type="button" class="secondary" onclick="location.reload()">Cancel</button>
+        </td>
+        </form>
+    </tr>""")
+
+
+@router.post("/api/categories/{name}/update")
+async def update_category(
+    name: str,
+    description: str = Form(""),
+    grs_number: str = Form(""),
+    acl_groups: str = Form(""),
+    routing_keywords: str = Form(""),
+):
+    store = get_metadata_store()
+    from sqlalchemy import select
+    from src.db.models import Category
+    async with store.session_factory() as session:
+        result = await session.execute(select(Category).where(Category.name == name))
+        cat = result.scalar_one_or_none()
+        if not cat:
+            return HTMLResponse(f"<tr><td colspan='6'>Category '{name}' not found</td></tr>")
+        cat.description = description.strip()
+        cat.grs_number = grs_number.strip()
+        cat.acl_groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+        cat.routing_keywords = [k.strip() for k in routing_keywords.split(",") if k.strip()]
+        await session.commit()
+
+    # Return the updated read-only row
+    acl_display = ", ".join(cat.acl_groups)
+    kw_display = ", ".join(cat.routing_keywords)
+    return HTMLResponse(f"""<tr id="cat-row-{name}">
+        <td>{name}</td>
+        <td>{cat.description}</td>
+        <td>{cat.grs_number or '-'}</td>
+        <td>{acl_display}</td>
+        <td>{kw_display}</td>
+        <td>
+            <button hx-get="/admin/api/categories/{name}/edit" hx-target="#cat-row-{name}" hx-swap="outerHTML">Edit</button>
+            <button class="danger" hx-delete="/admin/api/categories/{name}" hx-confirm="Delete '{name}'?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+        </td>
+    </tr>""")
+
+
 @router.delete("/api/categories/{name}")
 async def delete_category(name: str):
     store = get_metadata_store()

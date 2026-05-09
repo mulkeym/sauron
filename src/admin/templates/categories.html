@@ -40,13 +40,16 @@
     <thead><tr><th>Name</th><th>Description</th><th>GRS</th><th>Default ACL</th><th>Routing Keywords</th><th>Actions</th></tr></thead>
     <tbody>
         {% for cat in categories %}
-        <tr>
+        <tr id="cat-row-{{ cat.name }}">
             <td>{{ cat.name }}</td>
             <td>{{ cat.description }}</td>
             <td>{{ cat.grs_number or '-' }}</td>
             <td>{{ cat.acl_groups | join(", ") }}</td>
             <td>{{ cat.routing_keywords | join(", ") }}</td>
-            <td><button class="danger" hx-delete="/admin/api/categories/{{ cat.name }}" hx-confirm="Delete category '{{ cat.name }}'?" hx-target="closest tr" hx-swap="outerHTML">Delete</button></td>
+            <td>
+                <button hx-get="/admin/api/categories/{{ cat.name }}/edit" hx-target="#cat-row-{{ cat.name }}" hx-swap="outerHTML">Edit</button>
+                <button class="danger" hx-delete="/admin/api/categories/{{ cat.name }}" hx-confirm="Delete '{{ cat.name }}'?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+            </td>
         </tr>
         {% endfor %}
     </tbody>
