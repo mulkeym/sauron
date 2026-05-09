@@ -1,3 +1,5 @@
+import json
+import re
 from functools import lru_cache
 
 from openai import OpenAI
@@ -21,4 +23,16 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content or ""
+    # Strip <think>...</think> blocks from thinking models
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    return content
+
+
+def parse_json_response(text: str) -> dict:
+    """Parse JSON from LLM output, stripping markdown fences and thinking blocks."""
+    # Strip thinking blocks
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # Strip markdown code fences
+    text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+    return json.loads(text)

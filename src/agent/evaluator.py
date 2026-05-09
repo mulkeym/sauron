@@ -1,6 +1,6 @@
 import json
 from src.agent.state import AgentState
-from src.generation.llm_client import generate
+from src.generation.llm_client import generate, parse_json_response
 
 MAX_RETRIEVAL_ATTEMPTS = 3
 
@@ -38,8 +38,8 @@ def evaluate_context(state: AgentState) -> dict:
     )
 
     try:
-        parsed = json.loads(response)
+        parsed = parse_json_response(response)
         sufficient = parsed.get("sufficient", True)
-    except (json.JSONDecodeError, KeyError):
+    except Exception:
         sufficient = True
     return {"needs_reretrieval": not sufficient}

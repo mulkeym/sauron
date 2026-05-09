@@ -1,6 +1,5 @@
-import json
 from src.agent.state import AgentState, QueryType
-from src.generation.llm_client import generate
+from src.generation.llm_client import generate, parse_json_response
 
 CLASSIFICATION_PROMPT = """You are a query classifier for a document knowledge base. Classify the user's question into exactly one type and identify sub-tasks.
 
@@ -23,10 +22,10 @@ def classify_query(state: AgentState) -> dict:
         max_tokens=256,
     )
     try:
-        parsed = json.loads(response)
+        parsed = parse_json_response(response)
         query_type = QueryType(parsed["query_type"])
         sub_tasks = parsed.get("sub_tasks", [question])
-    except (json.JSONDecodeError, ValueError, KeyError):
+    except (Exception,):
         query_type = QueryType.LOOKUP
         sub_tasks = [question]
     return {"query_type": query_type, "sub_tasks": sub_tasks}
