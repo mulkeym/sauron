@@ -45,11 +45,14 @@ class VectorStore:
         self.client.upsert(collection_name=self.collection, points=points)
 
     def search(self, vector: list[float], user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
-        acl_filter = Filter(must=[FieldCondition(key="acl_groups", match=MatchAny(any=user_groups))])
+        # Skip ACL filtering if user has ALL access
+        query_filter = None
+        if "ALL" not in user_groups:
+            query_filter = Filter(must=[FieldCondition(key="acl_groups", match=MatchAny(any=user_groups))])
         results = self.client.query_points(
             collection_name=self.collection,
             query=vector,
-            query_filter=acl_filter,
+            query_filter=query_filter,
             limit=top_k,
             with_payload=True,
         )
