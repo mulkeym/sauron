@@ -30,9 +30,12 @@ async def ingest_document(
     chunk_size=512,
     chunk_overlap=50,
     auto_categorize=False,
+    original_filename="",
 ):
     doc_id = str(uuid.uuid4())
     parsed = parse_document(file_path)
+    if original_filename:
+        parsed.filename = original_filename
 
     if not category and auto_categorize:
         cat_result = categorize_document(

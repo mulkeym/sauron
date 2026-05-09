@@ -125,6 +125,8 @@ class IngestQueue:
         # Step 1: Parse
         self.update_step(job.job_id, IngestStep.PARSING, f"Parsing {job.filename}")
         parsed = parse_document(file_path)
+        # Use the original filename, not the temp file name
+        parsed.filename = job.filename
 
         # Step 2: Categorize
         category = job.category

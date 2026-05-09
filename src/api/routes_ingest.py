@@ -44,7 +44,7 @@ async def ingest_file(file: UploadFile = File(...), acl_groups: str = Form(defau
         tmp.write(content)
         tmp_path = Path(tmp.name)
     try:
-        result = await ingest_document(file_path=tmp_path, acl_groups=groups, uploaded_by=user.username, vector_store=get_vector_store(), metadata_store=get_metadata_store(), category=category)
+        result = await ingest_document(file_path=tmp_path, acl_groups=groups, uploaded_by=user.username, vector_store=get_vector_store(), metadata_store=get_metadata_store(), category=category, original_filename=file.filename)
     finally:
         tmp_path.unlink(missing_ok=True)
     return IngestResponse(doc_id=result.doc_id, filename=result.filename, doc_type=result.doc_type, chunk_count=result.chunk_count)
