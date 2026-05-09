@@ -123,6 +123,34 @@ def search_meetings(
     return results
 
 
+def list_documents_in_category(
+    category: str,
+    user_groups: list[str],
+    metadata_store,
+) -> list[dict]:
+    filter_groups = None if "ALL" in user_groups else user_groups
+    try:
+        docs = asyncio.run(metadata_store.list_documents(filter_groups))
+    except RuntimeError:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, metadata_store.list_documents(filter_groups))
+            docs = future.result()
+
+    matching = [d for d in docs if (d.category or "uncategorized") == category]
+    return [
+        {
+            "doc_id": d.doc_id,
+            "filename": d.filename,
+            "doc_type": d.doc_type,
+            "category": d.category or "uncategorized",
+            "chunk_count": d.chunk_count,
+            "uploaded_by": d.uploaded_by,
+        }
+        for d in matching
+    ]
+
+
 def list_sources(
     user_groups: list[str],
     metadata_store,
