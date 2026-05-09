@@ -6,6 +6,7 @@ from src.api.routes_auth import router as auth_router
 from src.api.routes_ingest import router as ingest_router, get_metadata_store
 from src.api.routes_query import router as query_router
 from src.admin.routes import router as admin_router
+from src.api.routes_openai_compat import router as openai_compat_router
 
 ADMIN_STATIC = Path(__file__).parent / "admin" / "static"
 
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(ingest_router)
     app.include_router(query_router)
+    app.include_router(openai_compat_router)
     app.include_router(admin_router)
     if ADMIN_STATIC.exists():
         app.mount("/admin/static", StaticFiles(directory=str(ADMIN_STATIC)), name="admin-static")
