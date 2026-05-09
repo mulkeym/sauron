@@ -78,6 +78,13 @@ async def ingest_document(
         uploaded_by=uploaded_by,
         category=category,
     )
+    # Ensure category exists in categories table
+    if category and category != "uncategorized":
+        existing = await metadata_store.get_category(category)
+        if not existing:
+            await metadata_store.add_category(
+                name=category, description="", acl_groups=acl_groups, routing_keywords=[],
+            )
     # Extract entities and relationships from each chunk
     for chunk in chunks:
         extraction = extract_entities(chunk.text)
