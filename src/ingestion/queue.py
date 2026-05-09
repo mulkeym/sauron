@@ -112,6 +112,7 @@ class IngestQueue:
             self._queue.task_done()
 
     async def _process_job(self, job: IngestJob, vector_store, metadata_store):
+        import asyncio
         from src.ingestion.parser import parse_document
         from src.ingestion.chunker import chunk_text
         from src.ingestion.embedder import embed_texts
@@ -122,17 +123,17 @@ class IngestQueue:
         doc_id = str(uuid.uuid4())
         file_path = Path(job.file_path)
 
-        # Step 1: Parse
+        # Step 1: Parse (fast, ok on event loop)
         self.update_step(job.job_id, IngestStep.PARSING, f"Parsing {job.filename}")
-        parsed = parse_document(file_path)
-        # Use the original filename, not the temp file name
+        parsed = await asyncio.to_thread(parse_document, file_path)
         parsed.filename = job.filename
 
-        # Step 2: Categorize
+        # Step 2: Categorize (LLM call — run in thread)
         category = job.category
         if not category and job.auto_categorize:
             self.update_step(job.job_id, IngestStep.CATEGORIZING, "Auto-categorizing with LLM")
-            cat_result = categorize_document(
+            cat_result = await asyncio.to_thread(
+                categorize_document,
                 filename=parsed.filename, doc_type=parsed.doc_type,
                 text_preview=parsed.text[:500], metadata_store=metadata_store,
             )
@@ -146,11 +147,11 @@ class IngestQueue:
             else:
                 category = cat_result.category
 
-        # Step 3: Chunk
+        # Step 3: Chunk (fast, ok on event loop)
         self.update_step(job.job_id, IngestStep.CHUNKING, "Splitting into chunks")
         chunks = chunk_text(parsed.text, chunk_size=512, chunk_overlap=50)
 
-        # Step 4: Embed
+        # Step 4: Embed (API call — run in thread)
         self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(chunks)} chunks")
         texts = [c.text for c in chunks]
         metadatas = [
@@ -161,12 +162,12 @@ class IngestQueue:
             )
             for c in chunks
         ]
-        vectors = embed_texts(texts) if texts else []
+        vectors = await asyncio.to_thread(embed_texts, texts) if texts else []
 
-        # Step 5: Store
+        # Step 5: Store (API call — run in thread)
         self.update_step(job.job_id, IngestStep.STORING, "Storing in vector DB")
         if vectors:
-            vector_store.upsert(texts=texts, vectors=vectors, metadatas=metadatas)
+            await asyncio.to_thread(vector_store.upsert, texts=texts, vectors=vectors, metadatas=metadatas)
         await metadata_store.add_document(
             doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
             acl_groups=job.acl_groups, chunk_count=len(chunks),
@@ -179,10 +180,10 @@ class IngestQueue:
                     name=category, description="", acl_groups=job.acl_groups, routing_keywords=[],
                 )
 
-        # Step 6: Extract entities
+        # Step 6: Extract entities (LLM call per chunk — run in thread)
         for i, chunk in enumerate(chunks):
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, f"Extracting entities from chunk {i+1}/{len(chunks)}")
-            extraction = extract_entities(chunk.text)
+            extraction = await asyncio.to_thread(extract_entities, chunk.text)
             entity_id_map = {}
             for ent in extraction.entities:
                 eid = await metadata_store.add_entity(name=ent["name"], entity_type=ent["type"], first_seen_doc_id=doc_id)
