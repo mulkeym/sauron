@@ -18,7 +18,7 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="cat-acl">ACL Groups (comma-separated)</label>
+                <label for="cat-acl">Default ACL (comma-separated)</label>
                 <input type="text" id="cat-acl" name="acl_groups" placeholder="legal, executives">
             </div>
             <div class="form-group">
@@ -37,7 +37,7 @@
 
 <h2 style="margin-top: 2rem; margin-bottom: 1rem;">Existing Categories</h2>
 <table>
-    <thead><tr><th>Name</th><th>Description</th><th>GRS</th><th>ACL Groups</th><th>Routing Keywords</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name</th><th>Description</th><th>GRS</th><th>Default ACL</th><th>Routing Keywords</th><th>Actions</th></tr></thead>
     <tbody>
         {% for cat in categories %}
         <tr>
