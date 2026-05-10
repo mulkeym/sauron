@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 def _call_llm_with_curl(messages: list, model: str, temperature: float, max_tokens: int) -> str:
     """Call LLM using curl with IPv4 forcing to avoid VPN timeout issues."""
 
+    logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}")
+
     payload = {
         "model": model,
         "messages": messages,
@@ -35,6 +37,7 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
 
     try:
         response = json.loads(result.stdout)
+        logger.debug(f"LLM response keys: {list(response.keys())}")
     except json.JSONDecodeError as e:
         error_msg = f"Invalid JSON from LLM: {e}\nResponse: {result.stdout[:500]}"
         logger.error(error_msg)
@@ -51,28 +54,50 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
         raise RuntimeError(error_msg)
 
     message = response['choices'][0]['message']
+    logger.debug(f"Message keys: {list(message.keys())}")
+    logger.debug(f"Message content field length: {len(message.get('content', ''))}")
+
     content = message.get('content', '').strip() if message.get('content') else ''
+    logger.debug(f"Content after strip: '{content[:100] if content else 'EMPTY'}'")
 
     # Fallback 1: some models put output in 'reasoning' field
     if not content and 'reasoning' in message:
-        content = message.get('reasoning', '').strip() if message.get('reasoning') else ''
+        reasoning = message.get('reasoning', '')
+        logger.debug(f"Has reasoning field, length: {len(reasoning)}")
+        content = reasoning.strip() if reasoning else ''
         if content:
             logger.info("Using reasoning field as content fallback")
 
     # Fallback 2: try to extract text from thinking tags if content is empty
     if not content and 'content' in message:
         raw = message.get('content', '')
+        logger.debug(f"Attempting to extract from thinking block in content, raw length: {len(raw)}")
         # Extract text from <think>...</think> blocks if that's all there is
         think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
         if think_match:
             content = think_match.group(1).strip()
             if content:
-                logger.info("Extracted content from thinking block")
+                logger.info(f"Extracted content from thinking block, length: {len(content)}")
+
+    # Fallback 3: try other common field names
+    if not content:
+        for field_name in ['text', 'output', 'result', 'message']:
+            if field_name in message:
+                field_value = message.get(field_name, '')
+                if isinstance(field_value, str) and field_value.strip():
+                    content = field_value.strip()
+                    logger.info(f"Using '{field_name}' field as content fallback, length: {len(content)}")
+                    break
 
     if not content:
+        # Log comprehensive debugging information
+        logger.error(f"CRITICAL: LLM returned empty content")
+        logger.error(f"Model: {model}")
+        logger.error(f"Message keys: {list(message.keys())}")
+        logger.error(f"Message content: {json.dumps(message, indent=2)}")
+        logger.error(f"Full response: {result.stdout[:2000]}")
+
         error_msg = f"LLM returned empty content.\nMessage keys: {list(message.keys())}\nMessage: {json.dumps(message, indent=2)[:1000]}\nFull response: {result.stdout[:1000]}"
-        logger.error(error_msg)
-        logger.error(f"Model: {model}, Payload keys: {list(payload.keys())}")
         raise RuntimeError(error_msg)
 
     return content
