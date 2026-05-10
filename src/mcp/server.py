@@ -20,7 +20,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_ask(question: str, depth: str = "thorough", context: str = "") -> dict:
-        """Ask a question about document CONTENT and get a cited answer. Use this for questions like 'what does the policy say?' or 'what are the budget numbers?'. Do NOT use this for listing files, reading specific files, or finding what documents exist — use tool_list_documents and tool_lookup_document for those tasks instead."""
+        """THIS IS THE PRIMARY TOOL — use it for ANY question about document content, contracts, policies, people, companies, awards, or facts. It searches all documents, enriches with knowledge graph data, and generates a comprehensive cited answer. Use this FIRST before trying other tools. Only use tool_list_documents or tool_lookup_document for browsing/reading specific files."""
         return await ask(
             question=question,
             user_groups=["ALL"],
@@ -57,7 +57,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def tool_search_documents(query: str, doc_type: str = "", top_k: int = 10) -> list[dict]:
-        """Search for relevant document snippets matching a query. Returns matching text chunks with filenames, doc_ids, and relevance scores. Use this to find which documents mention a topic. Each result includes a doc_id that can be used with tool_lookup_document to read the full document. Optional doc_type filter: pdf, docx, xlsx, transcript."""
+        """Low-level search returning raw text snippets. For ANSWERING questions, use tool_ask instead — it provides better results with knowledge graph enrichment and cited answers. Only use this tool when you need raw document snippets for your own analysis, or to find doc_ids for tool_lookup_document."""
         return search_documents(
             query=query,
             user_groups=["ALL"],
@@ -68,7 +68,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_query_database(question: str) -> dict:
-        """Query a structured database using natural language. Converts your question to SQL, executes it, and returns the results. Use for questions about numbers, financial data, or anything stored in tables. If no database is configured, automatically searches documents instead."""
+        """Query a structured SQL database only. For ANSWERING questions about document content, contracts, policies, or facts, use tool_ask instead. Only use this when you specifically need to run a SQL query against a registered database."""
         return await query_database(
             question=question,
             user_groups=["ALL"],
