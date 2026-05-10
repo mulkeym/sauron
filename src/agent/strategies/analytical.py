@@ -35,7 +35,7 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
         system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
         user_prompt=f"Question: {question}",
         temperature=0.0,
-        max_tokens=512,
+        max_tokens=2048,
     )
     sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
 

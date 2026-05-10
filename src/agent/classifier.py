@@ -19,7 +19,7 @@ def classify_query(state: AgentState) -> dict:
         system_prompt=CLASSIFICATION_PROMPT,
         user_prompt=f"Question: {question}",
         temperature=0.0,
-        max_tokens=256,
+        max_tokens=1024,
     )
     try:
         parsed = parse_json_response(response)

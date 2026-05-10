@@ -77,7 +77,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 llm_generate,
                 system_prompt='Extract the main entity name from this question. Respond with ONLY JSON: {"entity": "name"}',
                 user_prompt=question,
-                temperature=0.0, max_tokens=128,
+                temperature=0.0, max_tokens=1024,
             )
             try:
                 parsed = parse_json(extract_resp)

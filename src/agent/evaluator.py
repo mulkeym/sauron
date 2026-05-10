@@ -46,7 +46,7 @@ def evaluate_context(state: AgentState) -> dict:
         system_prompt="You evaluate retrieved context sufficiency.",
         user_prompt=EVALUATION_PROMPT.format(question=state["question"], context=context),
         temperature=0.0,
-        max_tokens=512,
+        max_tokens=2048,
     )
 
     try:
