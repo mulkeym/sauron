@@ -25,11 +25,11 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
          '-d', json.dumps(payload)],
         capture_output=True,
         text=True,
-        timeout=60
+        timeout=settings.vllm_request_timeout
     )
 
     if result.returncode != 0:
-        error_msg = f"LLM request failed (curl exit {result.returncode}): {result.stderr}"
+        error_msg = f"LLM request failed (curl exit {result.returncode}): {result.stderr[:500]}"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
@@ -51,16 +51,28 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
         raise RuntimeError(error_msg)
 
     message = response['choices'][0]['message']
-    content = message.get('content')
+    content = message.get('content', '').strip() if message.get('content') else ''
 
-    # Fallback: some models (like Gemma with reasoning) put output in 'reasoning' field
-    if content is None and 'reasoning' in message:
-        content = message.get('reasoning')
-        logger.info("Using reasoning field as content fallback")
+    # Fallback 1: some models put output in 'reasoning' field
+    if not content and 'reasoning' in message:
+        content = message.get('reasoning', '').strip() if message.get('reasoning') else ''
+        if content:
+            logger.info("Using reasoning field as content fallback")
 
-    if content is None:
-        error_msg = f"LLM returned None content and no reasoning: {result.stdout[:500]}"
+    # Fallback 2: try to extract text from thinking tags if content is empty
+    if not content and 'content' in message:
+        raw = message.get('content', '')
+        # Extract text from <think>...</think> blocks if that's all there is
+        think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
+        if think_match:
+            content = think_match.group(1).strip()
+            if content:
+                logger.info("Extracted content from thinking block")
+
+    if not content:
+        error_msg = f"LLM returned empty content.\nMessage keys: {list(message.keys())}\nMessage: {json.dumps(message, indent=2)[:1000]}\nFull response: {result.stdout[:1000]}"
         logger.error(error_msg)
+        logger.error(f"Model: {model}, Payload keys: {list(payload.keys())}")
         raise RuntimeError(error_msg)
 
     return content
@@ -78,20 +90,41 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
         max_tokens=max_tokens,
     )
 
+    # Strip <think>...</think> blocks from thinking models (in case there's content outside blocks)
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
     if not content:
-        error_msg = f"LLM returned empty content"
+        # This shouldn't happen if _call_llm_with_curl is working correctly,
+        # but if it does, give a better error message
+        error_msg = f"LLM returned empty content after processing"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
-    # Strip <think>...</think> blocks from thinking models
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
     return content
 
 
 def parse_json_response(text: str) -> dict:
     """Parse JSON from LLM output, stripping markdown fences and thinking blocks."""
-    # Strip thinking blocks
+    if not text:
+        raise ValueError("Empty response text")
+
+    # Strip thinking blocks - but if that's all we have, extract from within them
+    original_text = text
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    if not text:
+        # If stripping thinking blocks left nothing, try extracting from the block
+        think_match = re.search(r'<think>(.*?)</think>', original_text, re.DOTALL)
+        if think_match:
+            text = think_match.group(1).strip()
+            logger.info("Extracted JSON from thinking block")
+        else:
+            raise ValueError("No valid content found after stripping thinking blocks")
+
     # Strip markdown code fences
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+
+    if not text:
+        raise ValueError("No content remaining after stripping formatting")
+
     return json.loads(text)

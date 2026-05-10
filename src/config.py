@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     # LLM
     vllm_base_url: str = "http://localhost:8000/v1"
     vllm_model_name: str = "google/gemma-4-31b-it"
+    vllm_request_timeout: int = 300  # seconds - increase for thinking models
 
     # Embeddings
     embedding_mode: str = "api"  # "api" (external OpenAI-compat endpoint) or "local" (sentence-transformers)
