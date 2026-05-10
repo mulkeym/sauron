@@ -3,7 +3,7 @@ from src.ingestion.embedder import embed_query
 from src.retrieval.models import RetrievedChunk
 from src.retrieval.vector_store import VectorStore
 
-def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 4) -> dict:
+def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 6) -> dict:
     question = state["question"]
     user_groups = state["user_groups"]
     all_chunks: list[RetrievedChunk] = []

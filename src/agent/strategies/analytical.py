@@ -24,7 +24,7 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     if schema_prompt == "No database schemas available.":
         # Fall back to vector search when no database schemas are available
         query_vector = embed_query(question)
-        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=3)
+        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=8)
         return {
             "retrieved_chunks": chunks,
             "sql_results": [],
@@ -47,7 +47,7 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     except (ValueError, Exception) as e:
         # Fall back to vector search if SQL fails
         query_vector = embed_query(question)
-        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=3)
+        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=8)
         return {
             "retrieved_chunks": chunks,
             "sql_results": [],
