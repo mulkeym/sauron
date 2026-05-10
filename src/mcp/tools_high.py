@@ -9,6 +9,7 @@ async def ask(
     user_groups: list[str],
     vector_store,
     schema_registry,
+    metadata_store=None,
     depth: str = "thorough",
     context: str | None = None,
 ) -> dict:
@@ -22,6 +23,7 @@ async def ask(
         user_groups=user_groups,
         vector_store=vector_store,
         schema_registry=schema_registry,
+        metadata_store=metadata_store,
     )
 
     citations = [
@@ -50,6 +52,7 @@ async def summarize_topic(
     user_groups: list[str],
     vector_store,
     schema_registry,
+    metadata_store=None,
     format: str = "brief",
 ) -> dict:
     detail = "brief" if format == "brief" else "detailed"
@@ -60,6 +63,7 @@ async def summarize_topic(
         user_groups=user_groups,
         vector_store=vector_store,
         schema_registry=schema_registry,
+        metadata_store=metadata_store,
     )
 
     sources = [
@@ -76,6 +80,7 @@ async def compare(
     user_groups: list[str],
     vector_store,
     schema_registry,
+    metadata_store=None,
 ) -> dict:
     question = f"Compare and contrast: '{item_a}' vs '{item_b}'. List key differences."
 
@@ -84,6 +89,7 @@ async def compare(
         user_groups=user_groups,
         vector_store=vector_store,
         schema_registry=schema_registry,
+        metadata_store=metadata_store,
     )
 
     sources = [

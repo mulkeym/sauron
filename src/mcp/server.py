@@ -26,6 +26,7 @@ def create_mcp_server(
             user_groups=["ALL"],
             vector_store=vector_store,
             schema_registry=schema_registry,
+            metadata_store=metadata_store,
             depth=depth,
             context=context or None,
         )
@@ -38,6 +39,7 @@ def create_mcp_server(
             user_groups=["ALL"],
             vector_store=vector_store,
             schema_registry=schema_registry,
+            metadata_store=metadata_store,
             format=format,
         )
 
@@ -50,6 +52,7 @@ def create_mcp_server(
             user_groups=["ALL"],
             vector_store=vector_store,
             schema_registry=schema_registry,
+            metadata_store=metadata_store,
         )
 
     @mcp.tool()
