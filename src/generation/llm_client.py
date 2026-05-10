@@ -75,13 +75,19 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
         # Extract text from <think>...</think> blocks if that's all there is
         think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
         if think_match:
-            content = think_match.group(1).strip()
-            if content:
-                logger.info(f"Extracted content from thinking block, length: {len(content)}")
+            thinking_content = think_match.group(1).strip()
+            if thinking_content:
+                logger.info(f"Extracted content from thinking block, length: {len(thinking_content)}")
+                content = thinking_content
+            # Also check if there's content after the thinking block
+            after_think = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+            if after_think and len(after_think) > len(thinking_content):
+                content = after_think
+                logger.info(f"Using content after thinking block, length: {len(after_think)}")
 
     # Fallback 3: try other common field names
     if not content:
-        for field_name in ['text', 'output', 'result', 'message']:
+        for field_name in ['text', 'output', 'result', 'message', 'data']:
             if field_name in message:
                 field_value = message.get(field_name, '')
                 if isinstance(field_value, str) and field_value.strip():
@@ -105,7 +111,7 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
 
 def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
     """Generate text using the LLM with IPv4 forcing to avoid VPN timeouts."""
-    content = _call_llm_with_curl(
+    original_content = _call_llm_with_curl(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -115,13 +121,23 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
         max_tokens=max_tokens,
     )
 
+    logger.debug(f"Original content length: {len(original_content)}, preview: {original_content[:100]}")
+
     # Strip <think>...</think> blocks from thinking models (in case there's content outside blocks)
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    content = re.sub(r"<think>.*?</think>", "", original_content, flags=re.DOTALL).strip()
+    logger.debug(f"Content after stripping think blocks: length={len(content)}, preview: {content[:100] if content else 'EMPTY'}")
+
+    # If stripping thinking blocks left nothing, it means the entire response was in thinking
+    # In that case, extract from the thinking block
+    if not content:
+        logger.warning("All content was in thinking blocks, attempting to extract")
+        think_match = re.search(r'<think>(.*?)</think>', original_content, re.DOTALL)
+        if think_match:
+            content = think_match.group(1).strip()
+            logger.info(f"Extracted from thinking block: {len(content)} chars")
 
     if not content:
-        # This shouldn't happen if _call_llm_with_curl is working correctly,
-        # but if it does, give a better error message
-        error_msg = f"LLM returned empty content after processing"
+        error_msg = f"LLM returned empty content after processing. Original: {original_content[:500]}"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
