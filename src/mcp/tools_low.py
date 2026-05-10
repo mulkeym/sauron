@@ -46,9 +46,22 @@ async def query_database(
     question: str,
     user_groups: list[str],
     schema_registry,
+    vector_store=None,
+    metadata_store=None,
 ) -> dict:
     schema_prompt = schema_registry.schemas_to_prompt(user_groups)
     if schema_prompt == "No database schemas available." or not schema_registry.list_for_user(user_groups):
+        # No database schemas — fall back to document search via the RAG agent
+        if vector_store:
+            from src.mcp.tools_high import ask
+            result = await ask(
+                question=question,
+                user_groups=user_groups,
+                vector_store=vector_store,
+                schema_registry=schema_registry,
+                metadata_store=metadata_store,
+            )
+            return {"sql": "", "results": [], "answer": result.get("answer", ""), "citations": result.get("citations", [])}
         return {"sql": "", "results": [], "error": "No database schemas available for your groups."}
 
     user_prompt = f"Schema:\n{schema_prompt}\n\nQuestion: {question}"

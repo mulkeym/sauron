@@ -68,11 +68,13 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_query_database(question: str) -> dict:
-        """Query a structured database using natural language. Converts your question to SQL, executes it, and returns the results. Use for questions about numbers, financial data, or anything stored in tables."""
+        """Query a structured database using natural language. Converts your question to SQL, executes it, and returns the results. Use for questions about numbers, financial data, or anything stored in tables. If no database is configured, automatically searches documents instead."""
         return await query_database(
             question=question,
             user_groups=["ALL"],
             schema_registry=schema_registry,
+            vector_store=vector_store,
+            metadata_store=metadata_store,
         )
 
     @mcp.tool()
