@@ -18,7 +18,7 @@ async def retrieve_cross_reference(
 
     for task in sub_tasks:
         query_vector = embed_query(task)
-        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=8)
+        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=30)
         all_chunks.extend(chunks)
 
     seen = set()

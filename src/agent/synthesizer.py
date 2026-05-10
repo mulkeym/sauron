@@ -46,6 +46,7 @@ def synthesize_answer(state: AgentState) -> dict:
     answer = generate(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=USER_PROMPT_TEMPLATE.format(context=context, question=question),
+        max_tokens=4096,
     )
 
     citations = [

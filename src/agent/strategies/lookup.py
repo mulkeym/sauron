@@ -2,7 +2,7 @@ from src.agent.state import AgentState
 from src.ingestion.embedder import embed_query
 from src.retrieval.vector_store import VectorStore
 
-def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 8) -> dict:
+def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 30) -> dict:
     question = state["question"]
     user_groups = state["user_groups"]
     query_vector = embed_query(question)
