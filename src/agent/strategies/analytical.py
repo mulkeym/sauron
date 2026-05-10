@@ -16,13 +16,20 @@ Schema:
 
 
 async def retrieve_analytical(state: AgentState, schema_registry: SchemaRegistry) -> dict:
+    from src.ingestion.embedder import embed_query
+    from src.retrieval.vector_store import VectorStore
+
     question = state["question"]
     user_groups = state["user_groups"]
     schema_prompt = schema_registry.schemas_to_prompt(user_groups)
     if schema_prompt == "No database schemas available.":
+        # Fall back to vector search when no database schemas are available
+        vector_store = VectorStore()
+        query_vector = embed_query(question)
+        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=3)
         return {
+            "retrieved_chunks": chunks,
             "sql_results": [],
-            "warnings": ["No database schemas available for your access groups."],
             "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
         }
 
@@ -40,9 +47,18 @@ async def retrieve_analytical(state: AgentState, schema_registry: SchemaRegistry
     try:
         rows = await execute_sql(database_url=database_url, sql=sql)
     except (ValueError, Exception) as e:
+        # Fall back to vector search if SQL fails
+        vector_store = VectorStore()
+        query_vector = embed_query(question)
+        chunks = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=3)
         return {
+            "retrieved_chunks": chunks,
             "sql_results": [],
             "warnings": [f"SQL execution error: {e}"],
             "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
         }
-    return {"sql_results": rows, "retrieval_attempts": state.get("retrieval_attempts", 0) + 1}
+    return {
+        "retrieved_chunks": [],
+        "sql_results": rows,
+        "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
+    }
