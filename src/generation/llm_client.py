@@ -95,6 +95,18 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
                     logger.info(f"Using '{field_name}' field as content fallback, length: {len(content)}")
                     break
 
+    # Fallback 4: Last resort - if we have a content field but it's only thinking blocks,
+    # return the thinking content (it's better than an error)
+    if not content and 'content' in message:
+        raw = message.get('content', '')
+        if raw:
+            think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
+            if think_match:
+                thinking_text = think_match.group(1).strip()
+                if thinking_text:
+                    logger.warning(f"FALLBACK: Returning thinking block content ({len(thinking_text)} chars) - no other content found")
+                    content = thinking_text
+
     if not content:
         # Log comprehensive debugging information
         logger.error(f"CRITICAL: LLM returned empty content")
@@ -102,6 +114,21 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
         logger.error(f"Message keys: {list(message.keys())}")
         logger.error(f"Message content: {json.dumps(message, indent=2)}")
         logger.error(f"Full response: {result.stdout[:2000]}")
+
+        # Also write to a file for easy inspection
+        import time
+        debug_file = f"/tmp/llm_debug_{int(time.time())}.json"
+        try:
+            with open(debug_file, 'w') as f:
+                json.dump({
+                    'model': model,
+                    'message_keys': list(message.keys()),
+                    'message': message,
+                    'full_response': result.stdout,
+                }, f, indent=2)
+            logger.error(f"Full debug info written to: {debug_file}")
+        except Exception as e:
+            logger.error(f"Failed to write debug file: {e}")
 
         error_msg = f"LLM returned empty content.\nMessage keys: {list(message.keys())}\nMessage: {json.dumps(message, indent=2)[:1000]}\nFull response: {result.stdout[:1000]}"
         raise RuntimeError(error_msg)
@@ -123,21 +150,30 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
 
     logger.debug(f"Original content length: {len(original_content)}, preview: {original_content[:100]}")
 
-    # Strip <think>...</think> blocks from thinking models (in case there's content outside blocks)
+    # Strategy 1: Strip <think>...</think> blocks but preserve content outside them
     content = re.sub(r"<think>.*?</think>", "", original_content, flags=re.DOTALL).strip()
     logger.debug(f"Content after stripping think blocks: length={len(content)}, preview: {content[:100] if content else 'EMPTY'}")
 
-    # If stripping thinking blocks left nothing, it means the entire response was in thinking
-    # In that case, extract from the thinking block
+    # Strategy 2: If stripping thinking blocks left nothing, the entire response was in thinking
+    # In that case, extract from the thinking block (it's better than an error)
     if not content:
-        logger.warning("All content was in thinking blocks, attempting to extract")
+        logger.warning("All content was in thinking blocks, attempting to extract from thinking")
         think_match = re.search(r'<think>(.*?)</think>', original_content, re.DOTALL)
         if think_match:
-            content = think_match.group(1).strip()
-            logger.info(f"Extracted from thinking block: {len(content)} chars")
+            thinking_text = think_match.group(1).strip()
+            if thinking_text:
+                logger.info(f"Extracted from thinking block: {len(thinking_text)} chars")
+                content = thinking_text
+            else:
+                logger.warning("Thinking block was empty")
+
+    # Strategy 3: If still no content, return the original (it's all we have)
+    if not content:
+        logger.warning(f"Could not extract content, using original response as-is (length: {len(original_content)})")
+        content = original_content.strip()
 
     if not content:
-        error_msg = f"LLM returned empty content after processing. Original: {original_content[:500]}"
+        error_msg = f"LLM returned completely empty response"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
