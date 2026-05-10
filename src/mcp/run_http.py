@@ -1,7 +1,6 @@
-"""Standalone MCP server runner.
+"""MCP server runner for HTTP transport (network accessible).
 
-Phase 3 complete: resources, server wiring, config, Docker service, and runner.
-Start with: python -m src.mcp.run
+Start with: python -m src.mcp.run_stdio
 """
 from src.api.routes_ingest import get_vector_store, get_metadata_store, get_schema_registry
 from src.mcp.agent_registry import AgentRegistry
@@ -16,8 +15,10 @@ def main():
         metadata_store=get_metadata_store(),
         agent_registry=AgentRegistry(),
     )
-    # Run on all interfaces (0.0.0.0) for network accessibility
-    server.run(transport="sse", port=settings.mcp_port, host="0.0.0.0")
+    # Use SSE (Server-Sent Events) transport on port 8091 for network access
+    port = getattr(settings, 'mcp_alt_port', 8091)
+    print(f"Starting MCP server on port {port} (SSE transport)")
+    server.run(transport="sse", port=port)
 
 
 if __name__ == "__main__":

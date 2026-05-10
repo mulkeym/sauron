@@ -1,6 +1,6 @@
+import json
+import subprocess
 from functools import lru_cache
-
-from openai import OpenAI
 
 from src.config import settings
 
@@ -9,13 +9,30 @@ QUERY_PREFIX = "query: "
 
 
 def _embed_via_api(texts: list[str]) -> list[list[float]]:
-    """Call an OpenAI-compatible /v1/embeddings endpoint."""
-    client = OpenAI(base_url=settings.embedding_api_url, api_key="not-needed")
-    response = client.embeddings.create(
-        model=settings.embedding_model_name,
-        input=texts,
+    """Call an OpenAI-compatible /v1/embeddings endpoint with IPv4 forcing."""
+    payload = {
+        "model": settings.embedding_model_name,
+        "input": texts,
+    }
+
+    result = subprocess.run(
+        ['curl', '-4', '-s', '-X', 'POST',
+         f'{settings.embedding_api_url}/embeddings',
+         '-H', 'Content-Type: application/json',
+         '-d', json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=60
     )
-    return [item.embedding for item in response.data]
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Embedding request failed: {result.stderr}")
+
+    response = json.loads(result.stdout)
+    if 'error' in response:
+        raise RuntimeError(f"Embedding error: {response['error']}")
+
+    return [item['embedding'] for item in response['data']]
 
 
 def _embed_via_local(texts: list[str], batch_size: int = 32) -> list[list[float]]:

@@ -1,5 +1,8 @@
+import logging
 from dataclasses import dataclass, field
 from src.generation.llm_client import generate, parse_json_response
+
+logger = logging.getLogger(__name__)
 
 CATEGORIZATION_PROMPT = """You are a document categorizer. Given a document's filename, type, and text preview, classify it into one of the existing categories OR propose a new category.
 
@@ -7,12 +10,12 @@ Existing categories:
 {categories}
 
 Rules:
-- If the document fits an existing category, use it
+- If the document fits an existing category, use it EXACTLY AS LISTED
 - If no existing category fits, propose a new one
-- Respond with ONLY valid JSON
+- Respond with ONLY valid JSON, no explanation
 
 For existing category match:
-{{"category": "<name>", "confidence": 0.0-1.0, "is_new": false}}
+{{"category": "<exact_name_from_list>", "confidence": 0.0-1.0, "is_new": false}}
 
 For new category proposal:
 {{"category": "<proposed_name>", "confidence": 0.0-1.0, "is_new": true, "description": "<what this category covers>", "suggested_acl_groups": ["<group1>"], "suggested_keywords": ["<keyword1>"]}}"""
@@ -41,6 +44,7 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
     else:
         categories = asyncio.run(metadata_store.list_categories())
 
+    cat_names = [cat.name for cat in categories]
     cat_descriptions = []
     for cat in categories:
         keywords = ", ".join(cat.routing_keywords[:5]) if cat.routing_keywords else ""
@@ -54,11 +58,25 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
     )
     try:
         parsed = parse_json_response(response)
+        category = parsed.get("category", "").strip()
+        is_new = parsed.get("is_new", False)
+
+        # If LLM returned a close match to existing category, use the exact name
+        if not is_new and category not in cat_names and cat_names:
+            # Try fuzzy matching in case of capitalization or spacing issues
+            lower_cat = category.lower()
+            for exact_name in cat_names:
+                if exact_name.lower() == lower_cat:
+                    logger.info(f"Fixed category name from '{category}' to '{exact_name}'")
+                    category = exact_name
+                    break
+
         return CategorizationResult(
-            category=parsed["category"], confidence=parsed.get("confidence", 0.5),
-            is_new=parsed.get("is_new", False), description=parsed.get("description", ""),
+            category=category, confidence=parsed.get("confidence", 0.5),
+            is_new=is_new, description=parsed.get("description", ""),
             suggested_acl_groups=parsed.get("suggested_acl_groups", []),
             suggested_keywords=parsed.get("suggested_keywords", []),
         )
-    except Exception:
+    except Exception as e:
+        logger.error(f"Categorization parse error for {filename}: {e}")
         return CategorizationResult(category="uncategorized", confidence=0.0, is_new=False)

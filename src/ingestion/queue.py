@@ -100,6 +100,7 @@ class IngestQueue:
         asyncio.create_task(self._worker_loop(vector_store, metadata_store))
 
     async def _worker_loop(self, vector_store, metadata_store):
+        import traceback
         while True:
             job_id = await self._queue.get()
             job = self._jobs.get(job_id)
@@ -108,7 +109,15 @@ class IngestQueue:
             try:
                 await self._process_job(job, vector_store, metadata_store)
             except Exception as e:
-                self.fail_job(job_id, str(e))
+                error_msg = f"{str(e)}\n{traceback.format_exc()}"
+                self.fail_job(job_id, error_msg)
+                # Write to file for debugging
+                with open('/tmp/ingest_errors.log', 'a') as f:
+                    f.write(f"\n{'='*60}\n")
+                    f.write(f"Job: {job.filename}\n")
+                    f.write(f"Step: {job.step}\n")
+                    f.write(f"Progress: {job.progress}\n")
+                    f.write(f"Error:\n{error_msg}\n")
             self._queue.task_done()
 
     async def _process_job(self, job: IngestJob, vector_store, metadata_store):
@@ -192,10 +201,14 @@ class IngestQueue:
             extraction = await asyncio.to_thread(extract_entities, chunk.text)
             entity_id_map = {}
             for ent in extraction.entities:
+                if not isinstance(ent, dict) or "name" not in ent or "type" not in ent:
+                    continue
                 eid = await metadata_store.add_entity(name=ent["name"], entity_type=ent["type"], first_seen_doc_id=doc_id)
                 entity_id_map[ent["name"]] = eid
                 await metadata_store.add_mention(entity_id=eid, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
             for rel in extraction.relationships:
+                if not isinstance(rel, dict) or "source" not in rel or "target" not in rel:
+                    continue
                 source_id = entity_id_map.get(rel["source"])
                 if source_id is None:
                     continue
@@ -208,7 +221,8 @@ class IngestQueue:
                     context_snippet=chunk.text[:100],
                 )
             for section in extraction.sections:
-                await metadata_store.add_entity(name=section["name"], entity_type="document_section", first_seen_doc_id=doc_id)
+                if isinstance(section, dict) and "name" in section:
+                    await metadata_store.add_entity(name=section["name"], entity_type="document_section", first_seen_doc_id=doc_id)
 
         # Done
         self.complete_job(job.job_id, doc_id=doc_id, chunk_count=len(chunks))

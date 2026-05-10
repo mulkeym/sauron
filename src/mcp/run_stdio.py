@@ -1,12 +1,11 @@
-"""Standalone MCP server runner.
+"""MCP server runner for stdio transport (standard MCP protocol).
 
-Phase 3 complete: resources, server wiring, config, Docker service, and runner.
-Start with: python -m src.mcp.run
+Start with: python -m src.mcp.run_stdio
+Or with mcpo: mcpo -- python -m src.mcp.run_stdio
 """
 from src.api.routes_ingest import get_vector_store, get_metadata_store, get_schema_registry
 from src.mcp.agent_registry import AgentRegistry
 from src.mcp.server import create_mcp_server
-from src.config import settings
 
 
 def main():
@@ -16,8 +15,8 @@ def main():
         metadata_store=get_metadata_store(),
         agent_registry=AgentRegistry(),
     )
-    # Run on all interfaces (0.0.0.0) for network accessibility
-    server.run(transport="sse", port=settings.mcp_port, host="0.0.0.0")
+    # Use stdio transport for standard MCP protocol (works with mcpo)
+    server.run(transport="stdio")
 
 
 if __name__ == "__main__":

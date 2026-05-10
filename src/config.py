@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     # MCP Server
     mcp_server_name: str = "rag-knowledge-service"
     mcp_port: int = 8090
+    mcp_alt_port: int = 8091  # Alternative HTTP port for network access
 
     # Chunking
     chunk_size: int = 1024
