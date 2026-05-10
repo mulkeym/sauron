@@ -38,7 +38,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         elif query_type == QueryType.SWEEP:
             result = retrieve_sweep(retry_state, vector_store=vector_store)
         elif query_type == QueryType.ANALYTICAL:
-            result = await retrieve_analytical(retry_state, schema_registry=schema_registry)
+            result = await retrieve_analytical(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.CROSS_REFERENCE:
             result = await retrieve_cross_reference(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.TEMPORAL:

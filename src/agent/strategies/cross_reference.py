@@ -32,7 +32,7 @@ async def retrieve_cross_reference(
     sql_results = []
     has_schemas = len(schema_registry.list_for_user(user_groups)) > 0
     if has_schemas:
-        analytical_result = await retrieve_analytical(state, schema_registry=schema_registry)
+        analytical_result = await retrieve_analytical(state, vector_store=vector_store, schema_registry=schema_registry)
         sql_results = analytical_result.get("sql_results", [])
 
     return {
