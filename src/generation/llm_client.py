@@ -50,7 +50,20 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
-    return response['choices'][0]['message']['content']
+    message = response['choices'][0]['message']
+    content = message.get('content')
+
+    # Fallback: some models (like Gemma with reasoning) put output in 'reasoning' field
+    if content is None and 'reasoning' in message:
+        content = message.get('reasoning')
+        logger.info("Using reasoning field as content fallback")
+
+    if content is None:
+        error_msg = f"LLM returned None content and no reasoning: {result.stdout[:500]}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+
+    return content
 
 
 def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
@@ -64,6 +77,12 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
         temperature=temperature,
         max_tokens=max_tokens,
     )
+
+    if not content:
+        error_msg = f"LLM returned empty content"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+
     # Strip <think>...</think> blocks from thinking models
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
     return content

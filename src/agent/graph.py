@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from langgraph.graph import StateGraph, END
 from src.agent.state import AgentState, QueryType

@@ -1,4 +1,5 @@
 # src/mcp/jobs.py
+from __future__ import annotations
 import time
 import uuid
 from enum import StrEnum

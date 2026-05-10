@@ -1,4 +1,5 @@
 # src/ingestion/queue.py
+from __future__ import annotations
 """Ingestion job queue with step-level status tracking."""
 import asyncio
 import time

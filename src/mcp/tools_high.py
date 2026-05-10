@@ -1,3 +1,4 @@
+from __future__ import annotations
 from src.generation.llm_client import generate
 from src.generation.rag_chain import agent_query
 from src.mcp.tools_low import list_documents_in_category, lookup_document

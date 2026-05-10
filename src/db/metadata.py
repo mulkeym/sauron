@@ -1,3 +1,4 @@
+from __future__ import annotations
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
