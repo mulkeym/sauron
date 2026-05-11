@@ -112,6 +112,9 @@
     <h2>Run Entity Reconciliation</h2>
     <p class="section-desc">Scan all entities for duplicates. High-confidence matches merge automatically, others go to the Knowledge Graph page for review.</p>
     <button type="button" hx-post="/admin/api/settings/reconcile" hx-target="#reconcile-status" hx-swap="innerHTML">Run Now</button>
-    <span id="reconcile-status" style="margin-left:0.5rem;"></span>
+    <button type="button" hx-post="/admin/api/settings/reconcile-stop" hx-target="#reconcile-status" hx-swap="innerHTML" style="margin-left:0.5rem;">Stop</button>
+    <div id="reconcile-status" style="margin-top:0.5rem;"
+         hx-get="/admin/api/settings/reconcile-status" hx-trigger="load, every 2s" hx-swap="innerHTML">
+    </div>
 </div>
 {% endblock %}

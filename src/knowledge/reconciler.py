@@ -30,6 +30,7 @@ class ReconciliationStatus:
         self.current_pair = ""
         self.error = ""
         self.done = False
+        self.stop_requested = False
 
     @property
     def progress_pct(self):
@@ -44,6 +45,10 @@ _status = ReconciliationStatus()
 
 def get_reconciliation_status() -> ReconciliationStatus:
     return _status
+
+
+def stop_reconciliation():
+    _status.stop_requested = True
 
 
 async def reconcile_entities(metadata_store: MetadataStore) -> dict:
@@ -74,7 +79,12 @@ async def reconcile_entities(metadata_store: MetadataStore) -> dict:
 
     for entity_type, group in by_type.items():
         for i, a in enumerate(group):
+            if _status.stop_requested:
+                break
             for b in group[i + 1:]:
+                if _status.stop_requested:
+                    break
+
                 pair_key = (min(a.id, b.id), max(a.id, b.id))
                 if pair_key in already_checked:
                     continue

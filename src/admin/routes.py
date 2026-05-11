@@ -788,15 +788,30 @@ async def run_reconciliation():
         return HTMLResponse('<span style="color:#2563eb;">Reconciliation already running...</span>')
     # Run in background so UI can poll for progress
     asyncio.create_task(reconcile_entities(get_metadata_store()))
-    return HTMLResponse("""<div hx-get="/admin/api/settings/reconcile-status" hx-trigger="every 1s" hx-swap="innerHTML">
-        <span style="color:#2563eb;">Starting reconciliation...</span>
-    </div>""")
+    return HTMLResponse('<span style="color:#2563eb;">Starting reconciliation...</span>')
+
+
+@router.post("/api/settings/reconcile-stop")
+async def stop_reconciliation_endpoint():
+    from src.knowledge.reconciler import stop_reconciliation, get_reconciliation_status
+    status = get_reconciliation_status()
+    if status.running:
+        stop_reconciliation()
+        return HTMLResponse('<span style="color:#b45309;">Stopping after current pair...</span>')
+    return HTMLResponse('<span>Not running.</span>')
 
 
 @router.get("/api/settings/reconcile-status")
 async def reconcile_status():
     from src.knowledge.reconciler import get_reconciliation_status
     status = get_reconciliation_status()
+
+    if status.done and status.stop_requested:
+        return HTMLResponse(
+            f'<span style="color:#b45309;">Stopped. Auto-merged: {status.auto_merged}, '
+            f'Proposed: {status.proposed}, '
+            f'LLM-checked: {status.scanned}, Skipped: {status.skipped}</span>'
+        )
 
     if status.done:
         return HTMLResponse(
@@ -806,19 +821,19 @@ async def reconcile_status():
         )
 
     if not status.running:
-        return HTMLResponse('<span>Idle</span>')
+        return HTMLResponse('<span style="color:#666;">Idle — click Run Now to start.</span>')
 
     pair_display = status.current_pair
     if len(pair_display) > 60:
         pair_display = pair_display[:57] + "..."
 
+    stopping = ' <span style="color:#b45309;">(stopping...)</span>' if status.stop_requested else ''
+
     return HTMLResponse(
-        f'<div hx-get="/admin/api/settings/reconcile-status" hx-trigger="every 1s" hx-swap="innerHTML">'
         f'<span style="color:#2563eb; font-weight:600;">{status.progress_pct}%</span> '
         f'({status.scanned + status.skipped + status.auto_merged}/{status.total_pairs} pairs) '
-        f'&mdash; merged: {status.auto_merged}, proposed: {status.proposed}, checked: {status.scanned}<br>'
+        f'&mdash; merged: {status.auto_merged}, proposed: {status.proposed}, checked: {status.scanned}{stopping}<br>'
         f'<span style="font-size:0.85rem; color:#666;">Comparing: {pair_display}</span>'
-        f'</div>'
     )
 
 
