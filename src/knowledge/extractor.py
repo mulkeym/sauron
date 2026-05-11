@@ -23,9 +23,14 @@ def extract_entities(text: str) -> ExtractionResult:
     if not text.strip():
         return ExtractionResult()
     try:
-        response = generate(system_prompt=EXTRACTION_PROMPT, user_prompt=text[:2000], temperature=0.0, max_tokens=2048)
+        response = generate(system_prompt=EXTRACTION_PROMPT, user_prompt=text[:4000], temperature=0.0, max_tokens=4096)
         parsed = parse_json_response(response)
-        return ExtractionResult(entities=parsed.get("entities", []), relationships=parsed.get("relationships", []), sections=parsed.get("sections", []))
+        entities = parsed.get("entities", [])
+        relationships = parsed.get("relationships", [])
+        sections = parsed.get("sections", [])
+        logger.info(f"Extracted {len(entities)} entities, {len(relationships)} relationships, {len(sections)} sections")
+        return ExtractionResult(entities=entities, relationships=relationships, sections=sections)
     except Exception as e:
         logger.error(f"Entity extraction failed: {e}", exc_info=True)
+        logger.error(f"Response was: {response[:500] if 'response' in dir() else 'N/A'}")
         return ExtractionResult()

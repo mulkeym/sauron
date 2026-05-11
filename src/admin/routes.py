@@ -501,7 +501,7 @@ async def queue_status():
 @router.get("/knowledge-graph", response_class=HTMLResponse)
 async def knowledge_graph_page(request: Request):
     store = get_metadata_store()
-    entities = await store.list_entities(limit=50)
+    entities = await store.list_entities(limit=500)
     merge_proposals = await store.list_merge_proposals(status="pending")
     return templates.TemplateResponse(request, "knowledge_graph.html", {"entities": entities, "merge_proposals": merge_proposals})
 

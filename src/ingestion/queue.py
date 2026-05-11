@@ -216,6 +216,7 @@ class IngestQueue:
                 target_id = entity_id_map.get(rel["target"])
                 if target_id is None:
                     target_id = await metadata_store.add_entity(name=rel["target"], entity_type="unknown", first_seen_doc_id=doc_id)
+                    await metadata_store.add_mention(entity_id=target_id, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
                 await metadata_store.add_relationship(
                     source_entity_id=source_id, target_entity_id=target_id,
                     relationship_type=rel.get("type", "related_to"), doc_id=doc_id,
@@ -223,7 +224,8 @@ class IngestQueue:
                 )
             for section in extraction.sections:
                 if isinstance(section, dict) and "name" in section:
-                    await metadata_store.add_entity(name=section["name"], entity_type="document_section", first_seen_doc_id=doc_id)
+                    section_id = await metadata_store.add_entity(name=section["name"], entity_type="document_section", first_seen_doc_id=doc_id)
+                    await metadata_store.add_mention(entity_id=section_id, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
 
         # Done
         self.complete_job(job.job_id, doc_id=doc_id, chunk_count=len(chunks))
