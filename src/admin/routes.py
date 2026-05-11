@@ -485,15 +485,23 @@ async def queue_status():
         if job.step == "failed":
             error_row = f'<tr><td colspan="7" class="status-err" style="font-size:0.85rem;">{job.error}</td></tr>'
 
+        if job.step == 'complete':
+            kg_info = f"{job.entity_count} / {job.relationship_count}"
+        elif job.step == 'extracting_entities':
+            kg_info = f'<span style="color: #2563eb;">{job.entity_count} / {job.relationship_count}...</span>'
+        else:
+            kg_info = '-'
+
         rows += f"""<tr>
             <td>{job.filename}</td><td>{status}</td><td>{job.progress}</td>
             <td>{job.uploaded_by}</td><td>{job.category or '-'}</td>
             <td>{job.chunk_count if job.step == 'complete' else '-'}</td>
+            <td>{kg_info}</td>
             <td>{elapsed}</td>
         </tr>{error_row}"""
 
     return HTMLResponse(f"""<table>
-        <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Time</th></tr></thead>
+        <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Entities / Rels</th><th>Time</th></tr></thead>
         <tbody>{rows}</tbody>
     </table>""")
 

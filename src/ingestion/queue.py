@@ -35,6 +35,8 @@ class IngestJob:
     progress: str = ""
     doc_id: str = ""
     chunk_count: int = 0
+    entity_count: int = 0
+    relationship_count: int = 0
     error: str = ""
     created_at: float = field(default_factory=time.time)
     completed_at: float = 0.0
@@ -71,12 +73,14 @@ class IngestQueue:
             job.step = step
             job.progress = progress
 
-    def complete_job(self, job_id: str, doc_id: str, chunk_count: int):
+    def complete_job(self, job_id: str, doc_id: str, chunk_count: int, entity_count: int = 0, relationship_count: int = 0):
         job = self._jobs.get(job_id)
         if job:
             job.step = IngestStep.COMPLETE
             job.doc_id = doc_id
             job.chunk_count = chunk_count
+            job.entity_count = entity_count
+            job.relationship_count = relationship_count
             job.completed_at = time.time()
 
     def fail_job(self, job_id: str, error: str):
@@ -197,8 +201,11 @@ class IngestQueue:
                 )
 
         # Step 6: Extract entities (LLM call per chunk — run in thread)
+        total_entities = 0
+        total_relationships = 0
         for i, chunk in enumerate(chunks):
-            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, f"Extracting entities from chunk {i+1}/{len(chunks)}")
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                             f"Chunk {i+1}/{len(chunks)} — {total_entities} entities, {total_relationships} relationships so far")
             extraction = await asyncio.to_thread(extract_entities, chunk.text)
             entity_id_map = {}
             for ent in extraction.entities:
@@ -207,6 +214,7 @@ class IngestQueue:
                 eid = await metadata_store.add_entity(name=ent["name"], entity_type=ent["type"], first_seen_doc_id=doc_id)
                 entity_id_map[ent["name"]] = eid
                 await metadata_store.add_mention(entity_id=eid, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
+                total_entities += 1
             for rel in extraction.relationships:
                 if not isinstance(rel, dict) or "source" not in rel or "target" not in rel:
                     continue
@@ -217,18 +225,22 @@ class IngestQueue:
                 if target_id is None:
                     target_id = await metadata_store.add_entity(name=rel["target"], entity_type="unknown", first_seen_doc_id=doc_id)
                     await metadata_store.add_mention(entity_id=target_id, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
+                    total_entities += 1
                 await metadata_store.add_relationship(
                     source_entity_id=source_id, target_entity_id=target_id,
                     relationship_type=rel.get("type", "related_to"), doc_id=doc_id,
                     context_snippet=chunk.text[:100],
                 )
+                total_relationships += 1
             for section in extraction.sections:
                 if isinstance(section, dict) and "name" in section:
                     section_id = await metadata_store.add_entity(name=section["name"], entity_type="document_section", first_seen_doc_id=doc_id)
                     await metadata_store.add_mention(entity_id=section_id, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
+                    total_entities += 1
 
         # Done
-        self.complete_job(job.job_id, doc_id=doc_id, chunk_count=len(chunks))
+        self.complete_job(job.job_id, doc_id=doc_id, chunk_count=len(chunks),
+                          entity_count=total_entities, relationship_count=total_relationships)
 
         # Cleanup temp file
         try:

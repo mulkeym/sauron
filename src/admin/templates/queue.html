@@ -9,7 +9,7 @@
 <div id="queue-table">
 {% if jobs %}
 <table>
-    <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Time</th></tr></thead>
+    <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Entities / Rels</th><th>Time</th></tr></thead>
     <tbody>
         {% for job in jobs %}
         <tr class="{% if job.step == 'complete' %}upload-ok{% elif job.step == 'failed' %}upload-err{% endif %}">
@@ -30,6 +30,15 @@
             <td>{{ job.category or '-' }}</td>
             <td>{{ job.chunk_count if job.step == 'complete' else '-' }}</td>
             <td>
+                {% if job.step == 'complete' %}
+                    {{ job.entity_count }} / {{ job.relationship_count }}
+                {% elif job.step == 'extracting_entities' %}
+                    <span style="color: #2563eb;">{{ job.entity_count }} / {{ job.relationship_count }}...</span>
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>
                 {% if job.completed_at > 0 %}
                     {{ "%.1f"|format(job.completed_at - job.created_at) }}s
                 {% else %}
@@ -38,7 +47,7 @@
             </td>
         </tr>
         {% if job.step == 'failed' %}
-        <tr><td colspan="7" class="status-err" style="font-size:0.85rem;">{{ job.error }}</td></tr>
+        <tr><td colspan="8" class="status-err" style="font-size:0.85rem;">{{ job.error }}</td></tr>
         {% endif %}
         {% endfor %}
     </tbody>
