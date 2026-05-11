@@ -114,7 +114,7 @@
     <button type="button" hx-post="/admin/api/settings/reconcile" hx-target="#reconcile-status" hx-swap="innerHTML">Run Now</button>
     <button type="button" hx-post="/admin/api/settings/reconcile-stop" hx-target="#reconcile-status" hx-swap="innerHTML" style="margin-left:0.5rem;">Stop</button>
     <div id="reconcile-status" style="margin-top:0.5rem;"
-         hx-get="/admin/api/settings/reconcile-status" hx-trigger="load, every 2s" hx-swap="innerHTML">
+         hx-get="/admin/api/settings/reconcile-status" hx-trigger="load" hx-swap="innerHTML">
     </div>
 </div>
 {% endblock %}

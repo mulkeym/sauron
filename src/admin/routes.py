@@ -806,6 +806,7 @@ async def reconcile_status():
     from src.knowledge.reconciler import get_reconciliation_status
     status = get_reconciliation_status()
 
+    # Terminal states — no further polling needed
     if status.done and status.stop_requested:
         return HTMLResponse(
             f'<span style="color:#b45309;">Stopped. Auto-merged: {status.auto_merged}, '
@@ -821,8 +822,9 @@ async def reconcile_status():
         )
 
     if not status.running:
-        return HTMLResponse('<span style="color:#666;">Idle — click Run Now to start.</span>')
+        return HTMLResponse('<span style="color:#666;">Idle</span>')
 
+    # Active — keep polling
     pair_display = status.current_pair
     if len(pair_display) > 60:
         pair_display = pair_display[:57] + "..."
@@ -830,10 +832,12 @@ async def reconcile_status():
     stopping = ' <span style="color:#b45309;">(stopping...)</span>' if status.stop_requested else ''
 
     return HTMLResponse(
+        f'<div hx-get="/admin/api/settings/reconcile-status" hx-trigger="every 2s" hx-swap="outerHTML">'
         f'<span style="color:#2563eb; font-weight:600;">{status.progress_pct}%</span> '
         f'({status.scanned + status.skipped + status.auto_merged}/{status.total_pairs} pairs) '
         f'&mdash; merged: {status.auto_merged}, proposed: {status.proposed}, checked: {status.scanned}{stopping}<br>'
         f'<span style="font-size:0.85rem; color:#666;">Comparing: {pair_display}</span>'
+        f'</div>'
     )
 
 
