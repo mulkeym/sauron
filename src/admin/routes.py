@@ -70,11 +70,44 @@ async def audit_page(request: Request):
                 continue
     return templates.TemplateResponse(request, "audit.html", {"entries": entries})
 
+async def _recategorize_uncategorized(store):
+    """Sweep uncategorized documents and try to assign them to existing categories."""
+    import asyncio
+    from src.knowledge.categorizer import categorize_document
+    docs = await store.list_documents(None)
+    uncategorized = [d for d in docs if d.category == "uncategorized"]
+    recategorized = 0
+    for doc in uncategorized:
+        try:
+            # Get text preview from first chunk
+            from src.retrieval.vector_store import VectorStore
+            from src.ingestion.embedder import embed_query
+            vs = VectorStore()
+            vector = embed_query(f"document {doc.doc_id}")
+            chunks = vs.search(vector=vector, user_groups=["ALL"], top_k=1)
+            preview = chunks[0].text[:500] if chunks else doc.filename
+
+            cat_result = await asyncio.to_thread(
+                categorize_document,
+                filename=doc.filename, doc_type=doc.doc_type,
+                text_preview=preview, metadata_store=store,
+            )
+            if not cat_result.is_new and cat_result.category != "uncategorized" and cat_result.confidence >= 0.5:
+                await store.update_document_category(doc.doc_id, cat_result.category)
+                recategorized += 1
+                logger.info(f"Re-categorized '{doc.filename}' → '{cat_result.category}' (confidence: {cat_result.confidence})")
+        except Exception as e:
+            logger.error(f"Re-categorization failed for {doc.filename}: {e}")
+    return recategorized
+
+
 @router.post("/api/proposals/{proposal_id}/approve")
 async def approve_proposal(proposal_id: int):
     store = get_metadata_store()
     await store.approve_proposal(proposal_id, approved_by="admin")
-    return HTMLResponse("<tr><td colspan='6'>Approved</td></tr>")
+    recategorized = await _recategorize_uncategorized(store)
+    extra = f" Re-categorized {recategorized} document(s)." if recategorized else ""
+    return HTMLResponse(f"<tr><td colspan='6'>Approved.{extra}</td></tr>")
 
 @router.post("/api/proposals/{proposal_id}/reject")
 async def reject_proposal(proposal_id: int):
@@ -99,7 +132,9 @@ async def add_category(
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
     keywords = [k.strip() for k in routing_keywords.split(",") if k.strip()]
     await store.add_category(name=name.strip(), description=description.strip(), acl_groups=groups, routing_keywords=keywords, grs_number=grs_number.strip())
-    return HTMLResponse(f'<span class="status-ok">Category "{name}" created. Reload to see it in the table.</span>')
+    recategorized = await _recategorize_uncategorized(store)
+    extra = f" Re-categorized {recategorized} uncategorized document(s)." if recategorized else ""
+    return HTMLResponse(f'<span class="status-ok">Category "{name}" created.{extra} Reload to see it in the table.</span>')
 
 
 @router.get("/api/categories/{name}/edit")

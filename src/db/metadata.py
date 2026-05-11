@@ -55,6 +55,13 @@ class MetadataStore:
             docs = [d for d in docs if any(g in d.acl_groups for g in user_groups)]
         return docs
 
+    async def update_document_category(self, doc_id: str, category: str):
+        async with self.session_factory() as session:
+            await session.execute(
+                update(DocumentRecord).where(DocumentRecord.doc_id == doc_id).values(category=category)
+            )
+            await session.commit()
+
     async def delete_document(self, doc_id):
         async with self.session_factory() as session:
             await session.execute(delete(DocumentRecord).where(DocumentRecord.doc_id == doc_id))
