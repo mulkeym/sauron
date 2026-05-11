@@ -41,7 +41,10 @@
             <td>{{ doc.category or "uncategorized" }}</td>
             <td>{{ doc.acl_groups | join(", ") }}</td>
             <td>{{ doc.chunk_count }}</td><td>{{ doc.uploaded_by }}</td>
-            <td><button class="danger" hx-delete="/admin/api/documents/{{ doc.doc_id }}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button></td>
+            <td>
+                <button class="small" hx-get="/admin/api/documents/{{ doc.doc_id }}/edit" hx-target="closest tr" hx-swap="outerHTML">Edit</button>
+                <button class="danger small" hx-delete="/admin/api/documents/{{ doc.doc_id }}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+            </td>
         </tr>
         {% endfor %}
     </tbody>

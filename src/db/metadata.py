@@ -62,6 +62,13 @@ class MetadataStore:
             )
             await session.commit()
 
+    async def update_document(self, doc_id: str, **fields):
+        async with self.session_factory() as session:
+            await session.execute(
+                update(DocumentRecord).where(DocumentRecord.doc_id == doc_id).values(**fields)
+            )
+            await session.commit()
+
     async def delete_document(self, doc_id):
         async with self.session_factory() as session:
             await session.execute(delete(DocumentRecord).where(DocumentRecord.doc_id == doc_id))

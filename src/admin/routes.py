@@ -210,6 +210,71 @@ async def delete_category(name: str):
     return HTMLResponse("")
 
 
+@router.get("/api/documents/{doc_id}/edit")
+async def edit_document_form(doc_id: str):
+    store = get_metadata_store()
+    doc = await store.get_document(doc_id)
+    if not doc:
+        return HTMLResponse('<span class="status-err">Document not found</span>')
+    cats = await store.list_categories()
+    cat_options = "".join(
+        f'<option value="{c.name}" {"selected" if c.name == doc.category else ""}>{c.name}</option>'
+        for c in cats
+    )
+    cat_options = f'<option value="uncategorized" {"selected" if doc.category == "uncategorized" else ""}>uncategorized</option>' + cat_options
+    acl_str = ", ".join(doc.acl_groups) if doc.acl_groups else ""
+    return HTMLResponse(f"""<tr>
+        <td>{doc.filename}</td><td>{doc.doc_type}</td>
+        <td><select name="category" form="edit-{doc_id}">{cat_options}</select></td>
+        <td><input type="text" name="acl_groups" form="edit-{doc_id}" value="{acl_str}" placeholder="group1, group2" style="width:100%;"></td>
+        <td>{doc.chunk_count}</td><td>{doc.uploaded_by}</td>
+        <td>
+            <form id="edit-{doc_id}" hx-put="/admin/api/documents/{doc_id}" hx-target="closest tr" hx-swap="outerHTML" style="display:inline;">
+                <button type="submit" class="small">Save</button>
+            </form>
+            <button class="small" hx-get="/admin/api/documents/{doc_id}/row" hx-target="closest tr" hx-swap="outerHTML">Cancel</button>
+        </td>
+    </tr>""")
+
+
+@router.get("/api/documents/{doc_id}/row")
+async def document_row(doc_id: str):
+    store = get_metadata_store()
+    doc = await store.get_document(doc_id)
+    if not doc:
+        return HTMLResponse("")
+    acl = ", ".join(doc.acl_groups) if doc.acl_groups else ""
+    return HTMLResponse(f"""<tr>
+        <td>{doc.filename}</td><td>{doc.doc_type}</td>
+        <td>{doc.category or "uncategorized"}</td>
+        <td>{acl}</td>
+        <td>{doc.chunk_count}</td><td>{doc.uploaded_by}</td>
+        <td>
+            <button class="small" hx-get="/admin/api/documents/{doc_id}/edit" hx-target="closest tr" hx-swap="outerHTML">Edit</button>
+            <button class="danger small" hx-delete="/admin/api/documents/{doc_id}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+        </td>
+    </tr>""")
+
+
+@router.put("/api/documents/{doc_id}")
+async def update_document(doc_id: str, category: str = Form(""), acl_groups: str = Form("")):
+    store = get_metadata_store()
+    groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    await store.update_document(doc_id, category=category or "uncategorized", acl_groups=groups)
+    doc = await store.get_document(doc_id)
+    acl = ", ".join(doc.acl_groups) if doc.acl_groups else ""
+    return HTMLResponse(f"""<tr class="upload-ok">
+        <td>{doc.filename}</td><td>{doc.doc_type}</td>
+        <td>{doc.category or "uncategorized"}</td>
+        <td>{acl}</td>
+        <td>{doc.chunk_count}</td><td>{doc.uploaded_by}</td>
+        <td>
+            <button class="small" hx-get="/admin/api/documents/{doc_id}/edit" hx-target="closest tr" hx-swap="outerHTML">Edit</button>
+            <button class="danger small" hx-delete="/admin/api/documents/{doc_id}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+        </td>
+    </tr>""")
+
+
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
     store = get_metadata_store()
