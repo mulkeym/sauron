@@ -781,9 +781,45 @@ async def list_embedding_models(embedding_api_url: str = Form("")):
 
 @router.post("/api/settings/reconcile")
 async def run_reconciliation():
-    from src.knowledge.reconciler import reconcile_entities
-    result = await reconcile_entities(get_metadata_store())
-    return HTMLResponse(f'<span class="status-ok">Done. Auto-merged: {result["auto_merged"]}, Proposed for review: {result["proposed"]}, Pairs scanned: {result["scanned"]}</span>')
+    import asyncio
+    from src.knowledge.reconciler import reconcile_entities, get_reconciliation_status
+    status = get_reconciliation_status()
+    if status.running:
+        return HTMLResponse('<span style="color:#2563eb;">Reconciliation already running...</span>')
+    # Run in background so UI can poll for progress
+    asyncio.create_task(reconcile_entities(get_metadata_store()))
+    return HTMLResponse("""<div hx-get="/admin/api/settings/reconcile-status" hx-trigger="every 1s" hx-swap="innerHTML">
+        <span style="color:#2563eb;">Starting reconciliation...</span>
+    </div>""")
+
+
+@router.get("/api/settings/reconcile-status")
+async def reconcile_status():
+    from src.knowledge.reconciler import get_reconciliation_status
+    status = get_reconciliation_status()
+
+    if status.done:
+        return HTMLResponse(
+            f'<span class="status-ok">Done. Auto-merged: {status.auto_merged}, '
+            f'Proposed for review: {status.proposed}, '
+            f'LLM-checked: {status.scanned}, Skipped: {status.skipped}</span>'
+        )
+
+    if not status.running:
+        return HTMLResponse('<span>Idle</span>')
+
+    pair_display = status.current_pair
+    if len(pair_display) > 60:
+        pair_display = pair_display[:57] + "..."
+
+    return HTMLResponse(
+        f'<div hx-get="/admin/api/settings/reconcile-status" hx-trigger="every 1s" hx-swap="innerHTML">'
+        f'<span style="color:#2563eb; font-weight:600;">{status.progress_pct}%</span> '
+        f'({status.scanned + status.skipped + status.auto_merged}/{status.total_pairs} pairs) '
+        f'&mdash; merged: {status.auto_merged}, proposed: {status.proposed}, checked: {status.scanned}<br>'
+        f'<span style="font-size:0.85rem; color:#666;">Comparing: {pair_display}</span>'
+        f'</div>'
+    )
 
 
 @router.post("/api/settings/test-llm")
