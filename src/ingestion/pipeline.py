@@ -61,33 +61,59 @@ async def ingest_document(
         if cat_record and cat_record.acl_groups:
             acl_groups = cat_record.acl_groups
 
-    chunks = chunk_text(parsed.text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-
-    # Contextual enrichment: prepend document context to each chunk for better embeddings
-    doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
-    texts = [f"{doc_context}\n\n{c.text}" for c in chunks]
-
-    metadatas = [
-        ChunkMetadata(
-            doc_id=doc_id,
-            filename=parsed.filename,
-            doc_type=parsed.doc_type,
-            chunk_index=c.index,
-            start_char=c.start_char,
-            acl_groups=acl_groups,
-            category=category,
+    # Generate LLM document summary for contextual enrichment
+    from src.generation.llm_client import generate as llm_generate
+    import logging
+    doc_summary = ""
+    try:
+        doc_summary = llm_generate(
+            system_prompt="Summarize this document in 2-3 sentences. Focus on what it contains, who it involves, and key facts. Be specific — include names, amounts, and dates if present.",
+            user_prompt=parsed.text[:3000],
+            temperature=0.0, max_tokens=1024,
         )
-        for c in chunks
+        logging.getLogger(__name__).info(f"Document summary: {doc_summary[:100]}")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Summary generation failed: {e}")
+
+    # Multi-pass indexing: store chunks at multiple granularities
+    CHUNK_TIERS = [
+        ("small", 512, 50),
+        ("medium", 1024, 100),
+        ("large", 2048, 200),
     ]
-    vectors = embed_texts(texts) if texts else []
-    if vectors:
-        vector_store.upsert(texts=texts, vectors=vectors, metadatas=metadatas)
+    doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
+    if doc_summary:
+        doc_context += f"\nSummary: {doc_summary}"
+    total_chunks = 0
+
+    for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
+        tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
+        texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
+        metadatas = [
+            ChunkMetadata(
+                doc_id=doc_id,
+                filename=parsed.filename,
+                doc_type=parsed.doc_type,
+                chunk_index=c.index,
+                start_char=c.start_char,
+                acl_groups=acl_groups,
+                category=category,
+                chunk_size_tier=tier_name,
+            )
+            for c in tier_chunks
+        ]
+        vectors = embed_texts(texts) if texts else []
+        if vectors:
+            vector_store.upsert(texts=texts, vectors=vectors, metadatas=metadatas)
+        if tier_name == "medium":
+            total_chunks = len(tier_chunks)  # report medium tier count
+            chunks = tier_chunks  # use medium tier for entity extraction
     await metadata_store.add_document(
         doc_id=doc_id,
         filename=parsed.filename,
         doc_type=parsed.doc_type,
         acl_groups=acl_groups,
-        chunk_count=len(chunks),
+        chunk_count=total_chunks,
         uploaded_by=uploaded_by,
         category=category,
     )
@@ -122,5 +148,5 @@ async def ingest_document(
         doc_id=doc_id,
         filename=parsed.filename,
         doc_type=parsed.doc_type,
-        chunk_count=len(chunks),
+        chunk_count=total_chunks,
     )

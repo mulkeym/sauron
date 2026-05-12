@@ -10,6 +10,7 @@ class ChunkMetadata(BaseModel):
     start_char: int
     acl_groups: list[str]
     category: str = ""
+    chunk_size_tier: str = "medium"  # "small" (512), "medium" (1024), "large" (2048)
     page: int | None = None
     speaker: str | None = None
     utterance_type: str | None = None

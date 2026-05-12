@@ -49,6 +49,7 @@ class VectorStore:
             pa.field("start_char", pa.int32()),
             pa.field("acl_groups", pa.list_(pa.string())),
             pa.field("category", pa.string()),
+            pa.field("chunk_size_tier", pa.string()),
             pa.field("page", pa.int32()),
             pa.field("speaker", pa.string()),
             pa.field("utterance_type", pa.string()),

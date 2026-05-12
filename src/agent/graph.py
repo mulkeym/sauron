@@ -22,12 +22,13 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     graph.add_node("classify", classify_query)
 
     async def retrieve(state: AgentState) -> dict:
+        import logging
+        retrieve_logger = logging.getLogger("retrieval")
         query_type = state.get("query_type", QueryType.LOOKUP)
         attempts = state.get("retrieval_attempts", 0)
 
         # On retry, use reformulated query if available
         if attempts > 0 and state.get("reformulated_query"):
-            # Create a modified state with the new question for retrieval
             retry_state = dict(state)
             retry_state["question"] = state["reformulated_query"]
         else:
@@ -45,6 +46,31 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             result = retrieve_lookup(retry_state, vector_store=vector_store)
         else:
             result = retrieve_lookup(retry_state, vector_store=vector_store)
+
+        # Sub-task decomposition: run additional searches for each sub-task
+        sub_tasks = state.get("sub_tasks", [])
+        if sub_tasks and len(sub_tasks) > 1:
+            from src.ingestion.embedder import embed_query
+            existing_keys = {(c.metadata.doc_id, c.metadata.chunk_index)
+                            for c in result.get("retrieved_chunks", [])}
+            added = 0
+            for task in sub_tasks:
+                if task == state["question"]:
+                    continue  # skip if same as main question
+                task_vector = embed_query(task)
+                task_chunks = vector_store.hybrid_search(
+                    vector=task_vector, text_query=task,
+                    user_groups=state.get("user_groups", ["ALL"]),
+                    top_k=10,
+                )
+                for c in task_chunks:
+                    key = (c.metadata.doc_id, c.metadata.chunk_index)
+                    if key not in existing_keys:
+                        result.setdefault("retrieved_chunks", []).append(c)
+                        existing_keys.add(key)
+                        added += 1
+            if added:
+                retrieve_logger.info(f"Sub-task decomposition added {added} chunks from {len(sub_tasks)} sub-tasks")
 
         # On retry, merge new chunks with existing (don't lose previous results)
         if attempts > 0:

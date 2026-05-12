@@ -170,32 +170,59 @@ class IngestQueue:
             if cat_record and cat_record.acl_groups:
                 job.acl_groups = cat_record.acl_groups
 
-        # Step 3: Chunk (fast, ok on event loop)
-        self.update_step(job.job_id, IngestStep.CHUNKING, "Splitting into chunks")
-        chunks = chunk_text(parsed.text, chunk_size=1024, chunk_overlap=100)
-
-        # Step 4: Embed (API call — run in thread)
-        self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(chunks)} chunks")
-        # Contextual enrichment: prepend document context for better embeddings
-        doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
-        texts = [f"{doc_context}\n\n{c.text}" for c in chunks]
-        metadatas = [
-            ChunkMetadata(
-                doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
-                chunk_index=c.index, start_char=c.start_char,
-                acl_groups=job.acl_groups, category=category,
+        # Generate LLM document summary for contextual enrichment
+        self.update_step(job.job_id, IngestStep.CHUNKING, "Generating document summary")
+        doc_summary = ""
+        try:
+            from src.generation.llm_client import generate as llm_generate
+            doc_summary = await asyncio.to_thread(
+                llm_generate,
+                system_prompt="Summarize this document in 2-3 sentences. Focus on what it contains, who it involves, and key facts. Be specific — include names, amounts, and dates if present.",
+                user_prompt=parsed.text[:3000],
+                temperature=0.0, max_tokens=1024,
             )
-            for c in chunks
-        ]
-        vectors = await asyncio.to_thread(embed_texts, texts) if texts else []
+        except Exception:
+            pass
 
-        # Step 5: Store (API call — run in thread)
-        self.update_step(job.job_id, IngestStep.STORING, "Storing in vector DB")
-        if vectors:
-            await asyncio.to_thread(vector_store.upsert, texts=texts, vectors=vectors, metadatas=metadatas)
+        # Step 3-5: Multi-pass chunking, embedding, and storage
+        CHUNK_TIERS = [
+            ("small", 512, 50),
+            ("medium", 1024, 100),
+            ("large", 2048, 200),
+        ]
+        doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
+        if doc_summary:
+            doc_context += f"\nSummary: {doc_summary}"
+        total_chunks = 0
+
+        for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
+            self.update_step(job.job_id, IngestStep.CHUNKING, f"Chunking at {tier_name} ({tier_size} chars)")
+            tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
+
+            self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(tier_chunks)} {tier_name} chunks")
+            texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
+            metadatas = [
+                ChunkMetadata(
+                    doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
+                    chunk_index=c.index, start_char=c.start_char,
+                    acl_groups=job.acl_groups, category=category,
+                    chunk_size_tier=tier_name,
+                )
+                for c in tier_chunks
+            ]
+            vectors = await asyncio.to_thread(embed_texts, texts) if texts else []
+
+            self.update_step(job.job_id, IngestStep.STORING, f"Storing {tier_name} chunks")
+            if vectors:
+                await asyncio.to_thread(vector_store.upsert, texts=texts, vectors=vectors, metadatas=metadatas)
+
+            if tier_name == "medium":
+                total_chunks = len(tier_chunks)
+                chunks = tier_chunks  # use medium tier for entity extraction
+
         await metadata_store.add_document(
             doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
-            acl_groups=job.acl_groups, chunk_count=len(chunks),
+            acl_groups=job.acl_groups, chunk_count=total_chunks,
             uploaded_by=job.uploaded_by, category=category,
         )
         if category and category != "uncategorized":
