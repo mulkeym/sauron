@@ -61,13 +61,20 @@ class VectorStore:
                     ),
                 )
                 logger.info("Created full-text index on 'text' field")
-            for field in ["doc_id", "chunk_index"]:
-                if field not in existing_indexes:
-                    self.client.create_payload_index(
-                        collection_name=self.collection,
-                        field_name=field,
-                    )
-                    logger.info(f"Created index on '{field}' field")
+            if "doc_id" not in existing_indexes:
+                self.client.create_payload_index(
+                    collection_name=self.collection,
+                    field_name="doc_id",
+                    field_schema="keyword",
+                )
+                logger.info("Created index on 'doc_id' field")
+            if "chunk_index" not in existing_indexes:
+                self.client.create_payload_index(
+                    collection_name=self.collection,
+                    field_name="chunk_index",
+                    field_schema="integer",
+                )
+                logger.info("Created index on 'chunk_index' field")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
 
@@ -106,6 +113,8 @@ class VectorStore:
 
     def hybrid_search(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
         """Hybrid search: combines semantic vector similarity with keyword matching using Reciprocal Rank Fusion."""
+        from qdrant_client.models import FusionQuery
+
         acl_filter = self._build_acl_filter(user_groups)
 
         # Build keyword filter
@@ -123,14 +132,14 @@ class VectorStore:
                         limit=top_k * 3,
                         filter=acl_filter,
                     ),
-                    # Keyword search branch
+                    # Keyword search branch — finds chunks containing query terms
                     Prefetch(
-                        query=vector,  # still need a query for scoring
+                        query=vector,
                         limit=top_k * 3,
                         filter=Filter(must=keyword_conditions),
                     ),
                 ],
-                query=Fusion(fusion="rrf"),
+                query=FusionQuery(fusion=Fusion.RRF),
                 limit=top_k,
                 with_payload=True,
             )
