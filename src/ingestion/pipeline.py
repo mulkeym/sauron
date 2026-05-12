@@ -77,9 +77,10 @@ async def ingest_document(
 
     # Multi-pass indexing: store chunks at multiple granularities
     CHUNK_TIERS = [
-        ("small", 512, 50),
-        ("medium", 1024, 100),
-        ("large", 2048, 200),
+        ("small", 1024, 100),
+        ("medium", 2048, 200),
+        ("large", 4096, 400),
+        ("xlarge", 8192, 800),
     ]
     doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
     if doc_summary:
