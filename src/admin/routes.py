@@ -521,9 +521,11 @@ async def bulk_upload(
     acl_groups: str = Form(""),
     category: str = Form(""),
     auto_categorize: str = Form(""),
+    build_graph: str = Form(""),
 ):
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
     do_auto_cat = auto_categorize == "true"
+    do_build_graph = build_graph == "true"
 
     # Start the queue worker if not running
     await ingest_queue.start_worker(get_vector_store(), get_metadata_store())
@@ -540,6 +542,7 @@ async def bulk_upload(
             filename=file.filename, file_path=tmp_path,
             acl_groups=groups, uploaded_by="admin",
             category=category, auto_categorize=do_auto_cat,
+            build_graph=do_build_graph,
         )
         job_ids.append((file.filename, job_id))
 

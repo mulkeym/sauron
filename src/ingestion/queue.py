@@ -31,6 +31,7 @@ class IngestJob:
     uploaded_by: str
     category: str = ""
     auto_categorize: bool = True
+    build_graph: bool = True
     step: IngestStep = IngestStep.QUEUED
     progress: str = ""
     doc_id: str = ""
@@ -49,12 +50,14 @@ class IngestQueue:
         self._worker_running = False
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
-                uploaded_by: str, category: str = "", auto_categorize: bool = True) -> str:
+                uploaded_by: str, category: str = "", auto_categorize: bool = True,
+                build_graph: bool = True) -> str:
         job_id = str(uuid.uuid4())[:8]
         job = IngestJob(
             job_id=job_id, filename=filename, file_path=file_path,
             acl_groups=acl_groups, uploaded_by=uploaded_by,
             category=category, auto_categorize=auto_categorize,
+            build_graph=build_graph,
         )
         self._jobs[job_id] = job
         if self._queue:
@@ -205,7 +208,11 @@ class IngestQueue:
         # Step 6: Extract entities (LLM call per chunk — run in thread)
         total_entities = 0
         total_relationships = 0
+        if not job.build_graph:
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Skipped (knowledge graph disabled)")
         for i, chunk in enumerate(chunks):
+            if not job.build_graph:
+                break
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                              f"Chunk {i+1}/{len(chunks)} — {total_entities} entities, {total_relationships} relationships so far")
             extraction = await asyncio.to_thread(extract_entities, chunk.text, category)

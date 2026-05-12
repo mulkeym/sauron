@@ -25,6 +25,9 @@
         <div class="form-group">
             <label><input type="checkbox" name="auto_categorize" value="true" checked> Auto-categorize (use LLM to assign category)</label>
         </div>
+        <div class="form-group">
+            <label><input type="checkbox" name="build_graph" value="true" checked> Build knowledge graph (extract entities and relationships)</label>
+        </div>
         <button type="submit">Upload</button>
         <span id="upload-spinner" class="htmx-indicator">Uploading...</span>
     </form>
