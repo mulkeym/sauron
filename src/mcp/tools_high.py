@@ -134,7 +134,7 @@ def summarize_documents(
         summary = generate(
             system_prompt="Summarize the following document in 2-3 sentences.",
             user_prompt=content[:3000],
-            max_tokens=256,
+            max_tokens=2048,
         )
         summaries.append({"filename": doc["filename"], "doc_id": doc["doc_id"], "doc_type": doc.get("doc_type", ""), "summary": summary})
 

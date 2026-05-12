@@ -54,7 +54,7 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
     response = generate(
         system_prompt=CATEGORIZATION_PROMPT.format(categories=categories_text),
         user_prompt=f"Filename: {filename}\nType: {doc_type}\nPreview: {text_preview[:300]}",
-        temperature=0.0, max_tokens=512,
+        temperature=0.0, max_tokens=2048,
     )
     try:
         parsed = parse_json_response(response)
