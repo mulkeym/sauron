@@ -61,7 +61,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 task_chunks = vector_store.hybrid_search(
                     vector=task_vector, text_query=task,
                     user_groups=state.get("user_groups", ["ALL"]),
-                    top_k=10,
+                    top_k=10, tier="small",
                 )
                 for c in task_chunks:
                     key = (c.metadata.doc_id, c.metadata.chunk_index)

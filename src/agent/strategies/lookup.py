@@ -3,10 +3,11 @@ from src.ingestion.embedder import embed_query
 from src.retrieval.vector_store import VectorStore
 
 def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 30) -> dict:
+    """Lookup uses medium chunks — balanced precision and context."""
     question = state["question"]
     user_groups = state["user_groups"]
     query_vector = embed_query(question)
-    chunks = vector_store.hybrid_search_reranked(vector=query_vector, text_query=question, user_groups=user_groups, top_k=top_k)
+    chunks = vector_store.hybrid_search_reranked(vector=query_vector, text_query=question, user_groups=user_groups, top_k=top_k, tier="medium")
     chunks = vector_store.expand_window(chunks, window=2)
     return {
         "retrieved_chunks": chunks,

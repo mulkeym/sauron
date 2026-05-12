@@ -95,6 +95,16 @@ class VectorStore:
         quoted = ", ".join(f"'{g}'" for g in user_groups)
         return f"array_has_any(acl_groups, make_array({quoted}))"
 
+    def _build_filter(self, user_groups: list[str], tier: str | None = None) -> str | None:
+        """Build combined ACL + tier filter."""
+        parts = []
+        acl = self._build_acl_filter(user_groups)
+        if acl:
+            parts.append(acl)
+        if tier:
+            parts.append(f"chunk_size_tier = '{tier}'")
+        return " AND ".join(parts) if parts else None
+
     def _results_to_chunks(self, results: list[dict]) -> list[RetrievedChunk]:
         chunks = []
         for row in results:
@@ -131,19 +141,19 @@ class VectorStore:
             records.append(record)
         self.table.add(records)
 
-    def search(self, vector: list[float], user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
+    def search(self, vector: list[float], user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
         """Semantic-only vector search."""
         query = self.table.search(vector).limit(top_k)
-        acl_filter = self._build_acl_filter(user_groups)
-        if acl_filter:
-            query = query.where(acl_filter)
+        combined = self._build_filter(user_groups, tier)
+        if combined:
+            query = query.where(combined)
         return self._results_to_chunks(query.to_list())
 
-    def hybrid_search(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
+    def hybrid_search(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
         """Hybrid search: vector + BM25 FTS with RRF fusion."""
         from lancedb.rerankers import RRFReranker
 
-        acl_filter = self._build_acl_filter(user_groups)
+        combined = self._build_filter(user_groups, tier)
         try:
             query = (
                 self.table.search(query_type="hybrid")
@@ -152,18 +162,18 @@ class VectorStore:
                 .rerank(reranker=RRFReranker())
                 .limit(top_k)
             )
-            if acl_filter:
-                query = query.where(acl_filter, prefilter=True)
+            if combined:
+                query = query.where(combined, prefilter=True)
             return self._results_to_chunks(query.to_list())
         except Exception as e:
             logger.warning(f"Hybrid search failed, falling back to semantic: {e}")
-            return self.search(vector, user_groups, top_k)
+            return self.search(vector, user_groups, top_k, tier)
 
-    def hybrid_search_reranked(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
+    def hybrid_search_reranked(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
         """Hybrid search with CrossEncoder reranking for highest quality."""
         from lancedb.rerankers import CrossEncoderReranker
 
-        acl_filter = self._build_acl_filter(user_groups)
+        combined = self._build_filter(user_groups, tier)
         try:
             reranker = CrossEncoderReranker(column="text")
             query = (
@@ -173,12 +183,12 @@ class VectorStore:
                 .rerank(reranker=reranker)
                 .limit(top_k)
             )
-            if acl_filter:
-                query = query.where(acl_filter, prefilter=True)
+            if combined:
+                query = query.where(combined, prefilter=True)
             return self._results_to_chunks(query.to_list())
         except Exception as e:
             logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
-            return self.hybrid_search(vector, text_query, user_groups, top_k)
+            return self.hybrid_search(vector, text_query, user_groups, top_k, tier)
 
     def get_chunks_by_doc(self, doc_id: str, limit: int = 200) -> list[RetrievedChunk]:
         """Retrieve all chunks for a given document."""
