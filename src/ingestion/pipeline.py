@@ -100,7 +100,7 @@ async def ingest_document(
             )
     # Extract entities and relationships from each chunk
     for chunk in chunks:
-        extraction = extract_entities(chunk.text)
+        extraction = extract_entities(chunk.text, category=category)
         entity_id_map = {}
         for ent in extraction.entities:
             eid = await metadata_store.add_entity(name=ent["name"], entity_type=ent["type"], first_seen_doc_id=doc_id)

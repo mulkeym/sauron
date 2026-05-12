@@ -208,7 +208,7 @@ class IngestQueue:
         for i, chunk in enumerate(chunks):
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                              f"Chunk {i+1}/{len(chunks)} — {total_entities} entities, {total_relationships} relationships so far")
-            extraction = await asyncio.to_thread(extract_entities, chunk.text)
+            extraction = await asyncio.to_thread(extract_entities, chunk.text, category)
             entity_id_map = {}
             for ent in extraction.entities:
                 if not isinstance(ent, dict) or "name" not in ent or "type" not in ent:
