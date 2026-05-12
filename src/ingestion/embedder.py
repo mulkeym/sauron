@@ -8,13 +8,12 @@ PASSAGE_PREFIX = "passage: "
 QUERY_PREFIX = "query: "
 
 
-def _embed_via_api(texts: list[str]) -> list[list[float]]:
-    """Call an OpenAI-compatible /v1/embeddings endpoint with IPv4 forcing."""
+def _embed_single(text: str) -> list[float]:
+    """Embed a single text via API."""
     payload = {
         "model": settings.embedding_model_name,
-        "input": texts,
+        "input": text,
     }
-
     result = subprocess.run(
         ['curl', '-4', '-s', '-X', 'POST',
          f'{settings.embedding_api_url}/embeddings',
@@ -24,15 +23,21 @@ def _embed_via_api(texts: list[str]) -> list[list[float]]:
         text=True,
         timeout=60
     )
-
     if result.returncode != 0:
         raise RuntimeError(f"Embedding request failed: {result.stderr}")
-
     response = json.loads(result.stdout)
     if 'error' in response:
         raise RuntimeError(f"Embedding error: {response['error']}")
+    return response['data'][0]['embedding']
 
-    return [item['embedding'] for item in response['data']]
+
+def _embed_via_api(texts: list[str]) -> list[list[float]]:
+    """Call an OpenAI-compatible /v1/embeddings endpoint with IPv4 forcing.
+    Sends texts individually to avoid exceeding server batch token limits."""
+    all_embeddings = []
+    for text in texts:
+        all_embeddings.append(_embed_single(text))
+    return all_embeddings
 
 
 def _embed_via_local(texts: list[str], batch_size: int = 32) -> list[list[float]]:
