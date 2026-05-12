@@ -128,10 +128,45 @@ class MetadataStore:
 
     async def add_entity(self, name, entity_type, first_seen_doc_id):
         async with self.session_factory() as session:
+            # 1. Exact match
             result = await session.execute(select(Entity).where(Entity.name == name, Entity.entity_type == entity_type))
             existing = result.scalar_one_or_none()
             if existing:
                 return existing.id
+
+            # 2. Case-insensitive match (e.g., "USA" matches "usa" or "Usa")
+            result = await session.execute(
+                select(Entity).where(
+                    Entity.name.ilike(name),
+                    Entity.entity_type == entity_type,
+                )
+            )
+            ci_match = result.scalars().first()
+            if ci_match:
+                # Keep the longer or more capitalized name as canonical
+                if len(name) > len(ci_match.name) or (name[0].isupper() and not ci_match.name[0].isupper()):
+                    ci_match.name = name
+                    await session.commit()
+                return ci_match.id
+
+            # 3. Normalized match — strip punctuation and compare
+            #    Catches "U.S. Army" vs "US Army", "U.S.A." vs "USA"
+            import re
+            normalized = re.sub(r'[.\-\s]+', ' ', name).strip().lower()
+            if len(normalized) >= 3:
+                all_same_type = await session.execute(
+                    select(Entity).where(Entity.entity_type == entity_type)
+                )
+                for candidate in all_same_type.scalars().all():
+                    candidate_norm = re.sub(r'[.\-\s]+', ' ', candidate.name).strip().lower()
+                    if candidate_norm == normalized:
+                        # Keep the more descriptive name
+                        if len(name) > len(candidate.name):
+                            candidate.name = name
+                            await session.commit()
+                        return candidate.id
+
+            # 4. No match found — create new entity
             entity = Entity(name=name, entity_type=entity_type, first_seen_doc_id=first_seen_doc_id)
             session.add(entity)
             await session.commit()
