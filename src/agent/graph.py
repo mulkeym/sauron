@@ -70,50 +70,65 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             return {}
         question = state.get("question", "")
         try:
-            # Use LLM to extract the key entity from the question
             import asyncio
             from src.generation.llm_client import generate as llm_generate, parse_json_response as parse_json
+
+            # Extract multiple key entities from the question
             extract_resp = await asyncio.to_thread(
                 llm_generate,
-                system_prompt='Extract the main entity name from this question. Respond with ONLY JSON: {"entity": "name"}',
+                system_prompt='Extract the key entity names from this question. Respond with ONLY JSON: {"entities": ["name1", "name2"]}',
                 user_prompt=question,
                 temperature=0.0, max_tokens=1024,
             )
+            search_terms = []
             try:
                 parsed = parse_json(extract_resp)
-                search_term = parsed.get("entity", "")
+                search_terms = parsed.get("entities", [])
+                if isinstance(search_terms, str):
+                    search_terms = [search_terms]
             except Exception:
-                search_term = ""
+                pass
 
-            # Search knowledge graph with extracted entity
-            entities = []
-            if search_term:
-                entities = await metadata_store.search_entities(search_term)
-            # Fallback: try individual capitalized words
-            if not entities:
-                for word in question.split():
-                    if len(word) > 3 and word[0].isupper():
-                        entities = await metadata_store.search_entities(word)
-                        if entities:
-                            break
-            if entities:
-                details = await metadata_store.get_entity_details(entities[0].id)
-                if details["relationships"]:
-                    # Add knowledge graph context as a synthetic chunk
-                    kg_text = f"Knowledge Graph for '{entities[0].name}' ({entities[0].entity_type}):\n"
-                    for r in details["relationships"]:
-                        kg_text += f"  - {r['relationship_type']} → {r['related_entity']} ({r['entity_type']})\n"
-                    for m in details["mentions"][:3]:
-                        if m["context_snippet"]:
-                            kg_text += f"  Mentioned in: {m['context_snippet'][:150]}\n"
-                    kg_chunk = RetrievedChunk(
-                        text=kg_text, score=0.5,
-                        metadata=ChunkMetadata(
-                            doc_id="knowledge-graph", filename="knowledge_graph",
-                            doc_type="graph", chunk_index=0, start_char=0, acl_groups=["ALL"],
-                        ),
-                    )
-                    return {"retrieved_chunks": chunks + [kg_chunk]}
+            # Also extract entity names mentioned in the retrieved chunks
+            chunk_entities = set()
+            for chunk in chunks[:5]:
+                for word in chunk.text.split():
+                    if len(word) > 3 and word[0].isupper() and word.isalpha():
+                        chunk_entities.add(word)
+            # Add top capitalized terms from chunks as search candidates
+            search_terms.extend(list(chunk_entities)[:5])
+
+            # Search knowledge graph for each entity, collect unique relationships
+            kg_parts = []
+            seen_entity_ids = set()
+            for term in search_terms[:8]:
+                if not term:
+                    continue
+                found = await metadata_store.search_entities(term)
+                for entity in found[:2]:
+                    if entity.id in seen_entity_ids:
+                        continue
+                    seen_entity_ids.add(entity.id)
+                    details = await metadata_store.get_entity_details(entity.id)
+                    if details["relationships"]:
+                        lines = [f"Knowledge Graph — '{entity.name}' ({entity.entity_type}):"]
+                        for r in details["relationships"][:10]:
+                            lines.append(f"  - {r['relationship_type']} → {r['related_entity']} ({r['entity_type']})")
+                        for m in details["mentions"][:2]:
+                            if m.get("context_snippet"):
+                                lines.append(f"  Mentioned in: {m['context_snippet'][:150]}")
+                        kg_parts.append("\n".join(lines))
+
+            if kg_parts:
+                kg_text = "\n\n".join(kg_parts)
+                kg_chunk = RetrievedChunk(
+                    text=kg_text, score=0.5,
+                    metadata=ChunkMetadata(
+                        doc_id="knowledge-graph", filename="knowledge_graph",
+                        doc_type="graph", chunk_index=0, start_char=0, acl_groups=["ALL"],
+                    ),
+                )
+                return {"retrieved_chunks": chunks + [kg_chunk]}
         except Exception:
             pass
         return {}
