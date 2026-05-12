@@ -71,9 +71,13 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         question = state.get("question", "")
         try:
             import asyncio
+            import logging
             from src.generation.llm_client import generate as llm_generate, parse_json_response as parse_json
+            from src.ingestion.embedder import embed_query
 
-            # Extract multiple key entities from the question
+            kg_logger = logging.getLogger("knowledge_graph")
+
+            # Step 1: Extract key entities from the question via LLM
             extract_resp = await asyncio.to_thread(
                 llm_generate,
                 system_prompt='Extract the key entity names from this question. Respond with ONLY JSON: {"entities": ["name1", "name2"]}',
@@ -89,49 +93,76 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             except Exception:
                 pass
 
-            # Also extract entity names mentioned in the retrieved chunks
-            chunk_entities = set()
-            for chunk in chunks[:5]:
-                for word in chunk.text.split():
-                    if len(word) > 3 and word[0].isupper() and word.isalpha():
-                        chunk_entities.add(word)
-            # Add top capitalized terms from chunks as search candidates
-            search_terms.extend(list(chunk_entities)[:5])
+            if not search_terms:
+                return {}
 
-            # Search knowledge graph for each entity, collect unique relationships
-            kg_parts = []
-            seen_entity_ids = set()
-            for term in search_terms[:8]:
-                if not term:
+            # Step 2: Query the knowledge graph — find connected entities and their doc/chunk locations
+            graph_result = await metadata_store.graph_query(
+                entity_names=search_terms,
+                depth=2,
+            )
+
+            kg_entities = graph_result["entities"]
+            kg_rels = graph_result["relationships"]
+            kg_doc_chunks = graph_result["doc_chunks"]
+
+            kg_logger.info(f"Graph query for {search_terms}: {len(kg_entities)} entities, {len(kg_rels)} relationships, {len(kg_doc_chunks)} doc/chunk pairs")
+
+            if not kg_entities:
+                return {}
+
+            # Step 3: Build a knowledge graph summary as a synthetic chunk
+            kg_lines = ["Knowledge Graph Context:"]
+            seen_rels = set()
+            for r in kg_rels:
+                rel_key = (r["source"], r["relationship"], r["target"])
+                if rel_key in seen_rels:
                     continue
-                found = await metadata_store.search_entities(term)
-                for entity in found[:2]:
-                    if entity.id in seen_entity_ids:
-                        continue
-                    seen_entity_ids.add(entity.id)
-                    details = await metadata_store.get_entity_details(entity.id)
-                    if details["relationships"]:
-                        lines = [f"Knowledge Graph — '{entity.name}' ({entity.entity_type}):"]
-                        for r in details["relationships"][:10]:
-                            lines.append(f"  - {r['relationship_type']} → {r['related_entity']} ({r['entity_type']})")
-                        for m in details["mentions"][:2]:
-                            if m.get("context_snippet"):
-                                lines.append(f"  Mentioned in: {m['context_snippet'][:150]}")
-                        kg_parts.append("\n".join(lines))
-
-            if kg_parts:
-                kg_text = "\n\n".join(kg_parts)
+                seen_rels.add(rel_key)
+                kg_lines.append(f"  {r['source']} ({r['source_type']}) —[{r['relationship']}]→ {r['target']} ({r['target_type']})")
+            if len(kg_lines) > 1:
                 kg_chunk = RetrievedChunk(
-                    text=kg_text, score=0.5,
+                    text="\n".join(kg_lines), score=0.5,
                     metadata=ChunkMetadata(
                         doc_id="knowledge-graph", filename="knowledge_graph",
                         doc_type="graph", chunk_index=0, start_char=0, acl_groups=["ALL"],
                     ),
                 )
-                return {"retrieved_chunks": chunks + [kg_chunk]}
-        except Exception:
-            pass
-        return {}
+                chunks = chunks + [kg_chunk]
+
+            # Step 4: Pull additional document chunks where graph entities were mentioned
+            # This is the key improvement — use entity mention locations to find chunks
+            # that the initial vector search might have missed
+            existing_keys = {(c.metadata.doc_id, c.metadata.chunk_index) for c in chunks}
+            new_chunk_locations = [(doc_id, chunk_idx) for doc_id, chunk_idx in kg_doc_chunks
+                                  if (doc_id, chunk_idx) not in existing_keys]
+
+            if new_chunk_locations:
+                # Retrieve these specific chunks from the vector store by searching
+                # with the entity names as keywords
+                entity_names_str = " ".join(e["name"] for e in kg_entities[:5])
+                query_vector = await asyncio.to_thread(embed_query, entity_names_str)
+                extra_chunks = vector_store.search(
+                    vector=query_vector, user_groups=state.get("user_groups", ["ALL"]),
+                    top_k=min(len(new_chunk_locations), 20),
+                )
+                # Only add chunks that are from the graph-discovered doc/chunk pairs
+                graph_doc_ids = {doc_id for doc_id, _ in new_chunk_locations}
+                added = 0
+                for ec in extra_chunks:
+                    key = (ec.metadata.doc_id, ec.metadata.chunk_index)
+                    if ec.metadata.doc_id in graph_doc_ids and key not in existing_keys:
+                        chunks.append(ec)
+                        existing_keys.add(key)
+                        added += 1
+                if added:
+                    kg_logger.info(f"Added {added} additional chunks from graph entity mentions")
+
+            return {"retrieved_chunks": chunks}
+        except Exception as e:
+            import logging
+            logging.getLogger("knowledge_graph").warning(f"Graph enrichment failed: {e}")
+            return {}
 
     graph.add_node("enrich", enrich_with_graph)
     graph.add_node("evaluate", evaluate_context)

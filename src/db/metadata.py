@@ -158,6 +158,100 @@ class MetadataStore:
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
+    async def graph_query(self, entity_names: list[str], relationship_types: list[str] | None = None, depth: int = 1) -> dict:
+        """Query the knowledge graph by entity names and traverse relationships.
+
+        Returns connected entities, their relationships, and the doc_ids/chunk_indexes
+        where they were mentioned — so we can pull the right chunks from the vector store.
+        """
+        from sqlalchemy import or_, text
+
+        async with self.session_factory() as session:
+            # Step 1: Find matching seed entities
+            conditions = [Entity.name.ilike(f"%{name}%") for name in entity_names if name]
+            if not conditions:
+                return {"entities": [], "relationships": [], "doc_chunks": []}
+
+            result = await session.execute(select(Entity).where(or_(*conditions)))
+            seed_entities = list(result.scalars().all())
+            if not seed_entities:
+                return {"entities": [], "relationships": [], "doc_chunks": []}
+
+            # Step 2: Traverse relationships up to `depth` hops
+            visited_ids = {e.id for e in seed_entities}
+            all_entities = list(seed_entities)
+            all_relationships = []
+            frontier_ids = visited_ids.copy()
+
+            for _ in range(depth):
+                if not frontier_ids:
+                    break
+
+                # Find relationships connected to the frontier
+                rel_result = await session.execute(
+                    select(Relationship).where(
+                        or_(
+                            Relationship.source_entity_id.in_(frontier_ids),
+                            Relationship.target_entity_id.in_(frontier_ids),
+                        )
+                    )
+                )
+                rels = list(rel_result.scalars().all())
+
+                # Filter by relationship type if specified
+                if relationship_types:
+                    rels = [r for r in rels if r.relationship_type in relationship_types]
+
+                next_frontier = set()
+                for r in rels:
+                    all_relationships.append(r)
+                    for eid in (r.source_entity_id, r.target_entity_id):
+                        if eid not in visited_ids:
+                            next_frontier.add(eid)
+                            visited_ids.add(eid)
+
+                # Fetch newly discovered entities
+                if next_frontier:
+                    new_result = await session.execute(
+                        select(Entity).where(Entity.id.in_(next_frontier))
+                    )
+                    all_entities.extend(new_result.scalars().all())
+
+                frontier_ids = next_frontier
+
+            # Step 3: Get all doc_id + chunk_index mentions for discovered entities
+            mention_result = await session.execute(
+                select(EntityMention).where(EntityMention.entity_id.in_(visited_ids))
+            )
+            mentions = list(mention_result.scalars().all())
+
+            # Build unique doc_chunk pairs for retrieval
+            doc_chunks = list({(m.doc_id, m.chunk_index) for m in mentions})
+
+            # Build entity lookup for relationship formatting
+            entity_map = {e.id: e for e in all_entities}
+
+            formatted_rels = []
+            for r in all_relationships:
+                src = entity_map.get(r.source_entity_id)
+                tgt = entity_map.get(r.target_entity_id)
+                if src and tgt:
+                    formatted_rels.append({
+                        "source": src.name,
+                        "source_type": src.entity_type,
+                        "target": tgt.name,
+                        "target_type": tgt.entity_type,
+                        "relationship": r.relationship_type,
+                        "doc_id": r.doc_id,
+                        "context": r.context_snippet,
+                    })
+
+            return {
+                "entities": [{"id": e.id, "name": e.name, "type": e.entity_type} for e in all_entities],
+                "relationships": formatted_rels,
+                "doc_chunks": doc_chunks,
+            }
+
     async def get_entity_details(self, entity_id):
         async with self.session_factory() as session:
             entity = await session.get(Entity, entity_id)
