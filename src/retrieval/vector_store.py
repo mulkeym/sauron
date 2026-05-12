@@ -1,12 +1,8 @@
 import logging
 import uuid
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance, FieldCondition, Filter, Fusion, MatchAny, MatchTextAny,
-    MatchValue, PointStruct, Prefetch, TextIndexParams, TextIndexType,
-    TokenizerType, VectorParams,
-)
+import lancedb
+import pyarrow as pa
 
 from src.config import settings
 from src.retrieval.models import ChunkMetadata, RetrievedChunk
@@ -30,181 +26,231 @@ def _detect_vector_size() -> int:
 
 class VectorStore:
     def __init__(self):
-        self.client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        self.collection = settings.qdrant_collection_name
-        self._ensure_collection()
+        self.db = lancedb.connect(settings.lancedb_path)
+        self.table_name = settings.lancedb_table_name
+        self._table = None
 
-    def _ensure_collection(self):
-        if not self.client.collection_exists(self.collection):
-            vector_size = _detect_vector_size()
-            self.client.create_collection(
-                collection_name=self.collection,
-                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-            )
-        # Ensure text index exists for hybrid search
-        self._ensure_text_index()
+    @property
+    def table(self):
+        if self._table is None:
+            self._table = self._ensure_table()
+        return self._table
 
-    def _ensure_text_index(self):
-        """Create payload indexes for hybrid search and window expansion."""
+    def _build_schema(self) -> pa.Schema:
+        dim = _detect_vector_size()
+        return pa.schema([
+            pa.field("id", pa.string()),
+            pa.field("text", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), dim)),
+            pa.field("doc_id", pa.string()),
+            pa.field("filename", pa.string()),
+            pa.field("doc_type", pa.string()),
+            pa.field("chunk_index", pa.int32()),
+            pa.field("start_char", pa.int32()),
+            pa.field("acl_groups", pa.list_(pa.string())),
+            pa.field("category", pa.string()),
+            pa.field("page", pa.int32()),
+            pa.field("speaker", pa.string()),
+            pa.field("utterance_type", pa.string()),
+        ])
+
+    def _ensure_table(self):
         try:
-            info = self.client.get_collection(self.collection)
-            existing_indexes = info.payload_schema or {}
-            if "text" not in existing_indexes:
-                self.client.create_payload_index(
-                    collection_name=self.collection,
-                    field_name="text",
-                    field_schema=TextIndexParams(
-                        type=TextIndexType.TEXT,
-                        tokenizer=TokenizerType.MULTILINGUAL,
-                        lowercase=True,
-                        min_token_len=2,
-                    ),
-                )
-                logger.info("Created full-text index on 'text' field")
-            if "doc_id" not in existing_indexes:
-                self.client.create_payload_index(
-                    collection_name=self.collection,
-                    field_name="doc_id",
-                    field_schema="keyword",
-                )
-                logger.info("Created index on 'doc_id' field")
-            if "chunk_index" not in existing_indexes:
-                self.client.create_payload_index(
-                    collection_name=self.collection,
-                    field_name="chunk_index",
-                    field_schema="integer",
-                )
-                logger.info("Created index on 'chunk_index' field")
+            table = self.db.open_table(self.table_name)
+        except Exception:
+            table = self.db.create_table(self.table_name, schema=self._build_schema())
+            logger.info(f"Created LanceDB table '{self.table_name}'")
+        self._ensure_indexes(table)
+        return table
+
+    def _ensure_indexes(self, table):
+        """Create FTS and scalar indexes if not present."""
+        try:
+            existing = {idx["name"] if isinstance(idx, dict) else str(idx) for idx in table.list_indices()}
+        except Exception:
+            existing = set()
+
+        try:
+            if not any("fts" in name.lower() or "text" in name.lower() for name in existing):
+                table.create_fts_index("text", replace=True)
+                logger.info("Created FTS index on 'text'")
         except Exception as e:
-            logger.warning(f"Could not create indexes: {e}")
+            logger.warning(f"Could not create FTS index: {e}")
 
-    def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:
-        points = []
-        for text, vector, meta in zip(texts, vectors, metadatas):
-            point_id = str(uuid.uuid4())
-            payload = meta.model_dump()
-            payload["text"] = text
-            points.append(PointStruct(id=point_id, vector=vector, payload=payload))
-        self.client.upsert(collection_name=self.collection, points=points)
+        for field, idx_type in [("doc_id", None), ("acl_groups", "LABEL_LIST")]:
+            try:
+                if not any(field in name for name in existing):
+                    if idx_type:
+                        table.create_scalar_index(field, index_type=idx_type)
+                    else:
+                        table.create_scalar_index(field)
+                    logger.info(f"Created scalar index on '{field}'")
+            except Exception as e:
+                logger.debug(f"Index on '{field}': {e}")
 
-    def _build_acl_filter(self, user_groups: list[str]) -> Filter | None:
-        if "ALL" not in user_groups:
-            return Filter(must=[FieldCondition(key="acl_groups", match=MatchAny(any=user_groups))])
-        return None
+    def _build_acl_filter(self, user_groups: list[str]) -> str | None:
+        if "ALL" in user_groups:
+            return None
+        quoted = ", ".join(f"'{g}'" for g in user_groups)
+        return f"array_has_any(acl_groups, make_array({quoted}))"
 
-    def _points_to_chunks(self, results) -> list[RetrievedChunk]:
+    def _results_to_chunks(self, results: list[dict]) -> list[RetrievedChunk]:
         chunks = []
-        for point in results.points:
-            payload = dict(point.payload)
-            text = payload.pop("text", "")
-            chunks.append(RetrievedChunk(text=text, score=point.score, metadata=ChunkMetadata(**payload)))
+        for row in results:
+            meta = ChunkMetadata(
+                doc_id=row["doc_id"],
+                filename=row["filename"],
+                doc_type=row["doc_type"],
+                chunk_index=row["chunk_index"],
+                start_char=row.get("start_char", 0),
+                acl_groups=row["acl_groups"],
+                category=row.get("category", ""),
+                page=row.get("page"),
+                speaker=row.get("speaker"),
+                utterance_type=row.get("utterance_type"),
+            )
+            # LanceDB returns _distance (lower=better) or _relevance_score
+            score = row.get("_relevance_score", 0.0)
+            if score == 0.0 and "_distance" in row:
+                score = 1.0 / (1.0 + row["_distance"])
+            chunks.append(RetrievedChunk(text=row["text"], score=score, metadata=meta))
         return chunks
 
+    def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:
+        records = []
+        for text, vector, meta in zip(texts, vectors, metadatas):
+            record = meta.model_dump()
+            record["id"] = str(uuid.uuid4())
+            record["text"] = text
+            record["vector"] = vector
+            # Ensure nullable fields have defaults for PyArrow
+            record.setdefault("page", None)
+            record.setdefault("speaker", None)
+            record.setdefault("utterance_type", None)
+            records.append(record)
+        self.table.add(records)
+
     def search(self, vector: list[float], user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
-        """Semantic-only vector search (original behavior)."""
-        results = self.client.query_points(
-            collection_name=self.collection,
-            query=vector,
-            query_filter=self._build_acl_filter(user_groups),
-            limit=top_k,
-            with_payload=True,
-        )
-        return self._points_to_chunks(results)
+        """Semantic-only vector search."""
+        query = self.table.search(vector).limit(top_k)
+        acl_filter = self._build_acl_filter(user_groups)
+        if acl_filter:
+            query = query.where(acl_filter)
+        return self._results_to_chunks(query.to_list())
 
     def hybrid_search(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
-        """Hybrid search: combines semantic vector similarity with keyword matching using Reciprocal Rank Fusion."""
-        from qdrant_client.models import FusionQuery
+        """Hybrid search: vector + BM25 FTS with RRF fusion."""
+        from lancedb.rerankers import RRFReranker
 
         acl_filter = self._build_acl_filter(user_groups)
-
-        # Build keyword filter
-        keyword_conditions = [FieldCondition(key="text", match=MatchTextAny(text_any=text_query))]
-        if acl_filter:
-            keyword_conditions.extend(acl_filter.must)
-
         try:
-            results = self.client.query_points(
-                collection_name=self.collection,
-                prefetch=[
-                    # Semantic search branch
-                    Prefetch(
-                        query=vector,
-                        limit=top_k * 3,
-                        filter=acl_filter,
-                    ),
-                    # Keyword search branch — finds chunks containing query terms
-                    Prefetch(
-                        query=vector,
-                        limit=top_k * 3,
-                        filter=Filter(must=keyword_conditions),
-                    ),
-                ],
-                query=FusionQuery(fusion=Fusion.RRF),
-                limit=top_k,
-                with_payload=True,
+            query = (
+                self.table.search(query_type="hybrid")
+                .vector(vector)
+                .text(text_query)
+                .rerank(reranker=RRFReranker())
+                .limit(top_k)
             )
-            return self._points_to_chunks(results)
+            if acl_filter:
+                query = query.where(acl_filter, prefilter=True)
+            return self._results_to_chunks(query.to_list())
         except Exception as e:
             logger.warning(f"Hybrid search failed, falling back to semantic: {e}")
             return self.search(vector, user_groups, top_k)
 
-    def expand_window(self, chunks: list[RetrievedChunk], window: int = 3) -> list[RetrievedChunk]:
-        """For each retrieved chunk, also pull neighboring chunks from the same document.
+    def hybrid_search_reranked(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10) -> list[RetrievedChunk]:
+        """Hybrid search with CrossEncoder reranking for highest quality."""
+        from lancedb.rerankers import CrossEncoderReranker
 
-        This solves the section-header problem: if we match a chunk with "ARMY",
-        we also pull the next N chunks which contain the contractor details.
-        """
+        acl_filter = self._build_acl_filter(user_groups)
+        try:
+            reranker = CrossEncoderReranker(column="text")
+            query = (
+                self.table.search(query_type="hybrid")
+                .vector(vector)
+                .text(text_query)
+                .rerank(reranker=reranker)
+                .limit(top_k)
+            )
+            if acl_filter:
+                query = query.where(acl_filter, prefilter=True)
+            return self._results_to_chunks(query.to_list())
+        except Exception as e:
+            logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
+            return self.hybrid_search(vector, text_query, user_groups, top_k)
+
+    def get_chunks_by_doc(self, doc_id: str, limit: int = 200) -> list[RetrievedChunk]:
+        """Retrieve all chunks for a given document."""
+        try:
+            results = self.table.search().where(f"doc_id = '{doc_id}'").limit(limit).to_list()
+            chunks = self._results_to_chunks(results)
+            chunks.sort(key=lambda c: c.metadata.chunk_index)
+            return chunks
+        except Exception as e:
+            logger.warning(f"get_chunks_by_doc failed: {e}")
+            return []
+
+    def expand_window(self, chunks: list[RetrievedChunk], window: int = 3) -> list[RetrievedChunk]:
+        """Pull neighboring chunks from the same document."""
         if not chunks:
             return chunks
 
-        # Collect (doc_id, chunk_index) pairs to fetch — neighbors of each match
-        needed = set()
-        existing = {(c.metadata.doc_id, c.metadata.chunk_index) for c in chunks}
+        # Collect doc_ids that need expansion
+        doc_chunk_map: dict[str, set[int]] = {}
+        existing = set()
         for c in chunks:
-            for offset in range(-window, window + 1):
-                neighbor_idx = c.metadata.chunk_index + offset
-                if neighbor_idx >= 0:
-                    key = (c.metadata.doc_id, neighbor_idx)
-                    if key not in existing:
-                        needed.add(key)
+            key = (c.metadata.doc_id, c.metadata.chunk_index)
+            existing.add(key)
+            doc_chunk_map.setdefault(c.metadata.doc_id, set()).add(c.metadata.chunk_index)
 
-        if not needed:
+        # Calculate needed neighbor indexes
+        needed_by_doc: dict[str, set[int]] = {}
+        for doc_id, indexes in doc_chunk_map.items():
+            for idx in indexes:
+                for offset in range(-window, window + 1):
+                    neighbor = idx + offset
+                    if neighbor >= 0 and (doc_id, neighbor) not in existing:
+                        needed_by_doc.setdefault(doc_id, set()).add(neighbor)
+
+        if not needed_by_doc:
             return chunks
 
-        # Fetch neighbor chunks from Qdrant by doc_id + chunk_index
-        from qdrant_client.models import MatchValue
+        # Batch fetch per document
         new_chunks = []
-        for doc_id, chunk_idx in needed:
+        for doc_id, needed_indexes in needed_by_doc.items():
+            idx_list = ", ".join(str(i) for i in needed_indexes)
             try:
-                results = self.client.scroll(
-                    collection_name=self.collection,
-                    scroll_filter=Filter(must=[
-                        FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
-                        FieldCondition(key="chunk_index", match=MatchValue(value=chunk_idx)),
-                    ]),
-                    limit=1,
-                    with_payload=True,
+                results = (
+                    self.table.search()
+                    .where(f"doc_id = '{doc_id}' AND chunk_index IN ({idx_list})")
+                    .limit(len(needed_indexes))
+                    .to_list()
                 )
-                for point in results[0]:
-                    payload = dict(point.payload)
-                    text = payload.pop("text", "")
-                    new_chunks.append(RetrievedChunk(
-                        text=text, score=0.4,  # Lower score since these are window-expanded
-                        metadata=ChunkMetadata(**payload),
-                    ))
-            except Exception:
-                continue
+                for row in results:
+                    meta = ChunkMetadata(
+                        doc_id=row["doc_id"], filename=row["filename"],
+                        doc_type=row["doc_type"], chunk_index=row["chunk_index"],
+                        start_char=row.get("start_char", 0), acl_groups=row["acl_groups"],
+                        category=row.get("category", ""), page=row.get("page"),
+                        speaker=row.get("speaker"), utterance_type=row.get("utterance_type"),
+                    )
+                    new_chunks.append(RetrievedChunk(text=row["text"], score=0.4, metadata=meta))
+            except Exception as e:
+                logger.debug(f"Window expansion for {doc_id}: {e}")
 
         if new_chunks:
             logger.info(f"Window expansion: added {len(new_chunks)} neighbor chunks")
 
-        # Sort all chunks by doc_id then chunk_index for coherent reading order
         all_chunks = chunks + new_chunks
         all_chunks.sort(key=lambda c: (c.metadata.doc_id, c.metadata.chunk_index))
         return all_chunks
 
     def delete_by_doc_id(self, doc_id: str) -> None:
-        self.client.delete(
-            collection_name=self.collection,
-            points_selector=Filter(must=[FieldCondition(key="doc_id", match=MatchAny(any=[doc_id]))]),
-        )
+        """Delete all chunks for a given document."""
+        self.table.delete(f"doc_id = '{doc_id}'")
+
+    def optimize(self) -> None:
+        """Compact files and clean up old versions."""
+        from datetime import timedelta
+        self.table.compact_files()
+        self.table.cleanup_old_versions(older_than=timedelta(days=1))

@@ -16,10 +16,14 @@ class Settings(BaseSettings):
     embedding_device: str = "cpu"  # only used when embedding_mode=local
     embedding_dimension: int = 0  # auto-detect from first embedding call if 0
 
-    # Qdrant
+    # Qdrant (legacy — kept for migration)
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection_name: str = "documents"
+
+    # LanceDB
+    lancedb_path: str = "data/lancedb"
+    lancedb_table_name: str = "chunks"
 
     # Auth
     jwt_secret_key: str = "change-me-in-production"

@@ -21,14 +21,11 @@ async def dashboard(request: Request):
     proposals = await store.list_proposals(status="pending")
     entities = await store.list_entities(limit=10000)
 
-    # Qdrant stats
+    # LanceDB stats
     vector_count = 0
     try:
-        import httpx
-        from src.config import settings
-        resp = httpx.get(f"http://{settings.qdrant_host}:{settings.qdrant_port}/collections/{settings.qdrant_collection_name}")
-        if resp.status_code == 200:
-            vector_count = resp.json().get("result", {}).get("points_count", 0)
+        vs = get_vector_store()
+        vector_count = len(vs.table)
     except Exception:
         pass
 
