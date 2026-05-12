@@ -173,7 +173,9 @@ class IngestQueue:
 
         # Step 4: Embed (API call — run in thread)
         self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(chunks)} chunks")
-        texts = [c.text for c in chunks]
+        # Contextual enrichment: prepend document context for better embeddings
+        doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
+        texts = [f"{doc_context}\n\n{c.text}" for c in chunks]
         metadatas = [
             ChunkMetadata(
                 doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,

@@ -62,7 +62,11 @@ async def ingest_document(
             acl_groups = cat_record.acl_groups
 
     chunks = chunk_text(parsed.text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    texts = [c.text for c in chunks]
+
+    # Contextual enrichment: prepend document context to each chunk for better embeddings
+    doc_context = f"Document: {parsed.filename} (type: {parsed.doc_type}, category: {category})"
+    texts = [f"{doc_context}\n\n{c.text}" for c in chunks]
+
     metadatas = [
         ChunkMetadata(
             doc_id=doc_id,

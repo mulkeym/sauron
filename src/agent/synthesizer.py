@@ -1,7 +1,10 @@
 import json
+import logging
 from src.agent.state import AgentState
-from src.generation.llm_client import generate
+from src.generation.llm_client import generate, parse_json_response
 from src.retrieval.models import Citation
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a knowledgeable assistant that answers questions based on provided context.
 
@@ -21,6 +24,45 @@ Question: {question}
 
 Answer the question thoroughly based on ALL the context above. Include every relevant detail found. Cite sources using [N] notation."""
 
+RELEVANCE_PROMPT = """Rate each chunk's relevance to the question. Return ONLY a JSON array of chunk numbers (1-based) that are relevant.
+
+Question: {question}
+
+Chunks:
+{chunk_list}
+
+Return ONLY JSON, e.g.: [1, 3, 5, 8]"""
+
+
+def _filter_relevant_chunks(chunks, question):
+    """Use LLM to filter out irrelevant chunks before synthesis."""
+    if len(chunks) <= 5:
+        return chunks  # Not worth filtering small sets
+
+    # Build compact chunk summaries for the relevance check
+    chunk_list = []
+    for i, chunk in enumerate(chunks, 1):
+        preview = chunk.text[:150].replace("\n", " ")
+        chunk_list.append(f"[{i}] {chunk.metadata.filename}: {preview}")
+    chunk_text = "\n".join(chunk_list)
+
+    try:
+        response = generate(
+            system_prompt="You filter document chunks by relevance. Return ONLY a JSON array of relevant chunk numbers.",
+            user_prompt=RELEVANCE_PROMPT.format(question=question, chunk_list=chunk_text),
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        relevant_ids = parse_json_response(response)
+        if isinstance(relevant_ids, list) and relevant_ids:
+            filtered = [chunks[i - 1] for i in relevant_ids if 1 <= i <= len(chunks)]
+            logger.info(f"Relevance filter: {len(chunks)} → {len(filtered)} chunks")
+            return filtered if filtered else chunks
+    except Exception as e:
+        logger.warning(f"Relevance filtering failed, using all chunks: {e}")
+
+    return chunks
+
 
 def synthesize_answer(state: AgentState) -> dict:
     chunks = state.get("retrieved_chunks", [])
@@ -32,6 +74,9 @@ def synthesize_answer(state: AgentState) -> dict:
             "answer": "I could not find any relevant information in the documents you have access to.",
             "citations": [],
         }
+
+    # Filter out irrelevant chunks before synthesis
+    chunks = _filter_relevant_chunks(chunks, question)
 
     context_parts = []
     for i, chunk in enumerate(chunks, 1):

@@ -9,11 +9,13 @@ def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 50
     all_chunks: list[RetrievedChunk] = []
 
     query_vector = embed_query(question)
+    # Hybrid search combines semantic + keyword matching
+    hybrid_results = vector_store.hybrid_search(vector=query_vector, text_query=question, user_groups=user_groups, top_k=top_k)
+    all_chunks.extend(hybrid_results)
+
+    # Also do pure semantic for broader coverage
     semantic_results = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=top_k)
     all_chunks.extend(semantic_results)
-
-    metadata_results = vector_store.search(vector=query_vector, user_groups=user_groups, top_k=top_k)
-    all_chunks.extend(metadata_results)
 
     seen = set()
     unique_chunks = []
