@@ -4,8 +4,8 @@ import uuid
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, FieldCondition, Filter, Fusion, MatchAny, MatchTextAny,
-    PointStruct, Prefetch, TextIndexParams, TextIndexType, TokenizerType,
-    VectorParams,
+    MatchValue, PointStruct, Prefetch, TextIndexParams, TextIndexType,
+    TokenizerType, VectorParams,
 )
 
 from src.config import settings
@@ -45,7 +45,7 @@ class VectorStore:
         self._ensure_text_index()
 
     def _ensure_text_index(self):
-        """Create a full-text index on the 'text' payload field if not present."""
+        """Create payload indexes for hybrid search and window expansion."""
         try:
             info = self.client.get_collection(self.collection)
             existing_indexes = info.payload_schema or {}
@@ -60,9 +60,16 @@ class VectorStore:
                         min_token_len=2,
                     ),
                 )
-                logger.info("Created full-text index on 'text' field for hybrid search")
+                logger.info("Created full-text index on 'text' field")
+            for field in ["doc_id", "chunk_index"]:
+                if field not in existing_indexes:
+                    self.client.create_payload_index(
+                        collection_name=self.collection,
+                        field_name=field,
+                    )
+                    logger.info(f"Created index on '{field}' field")
         except Exception as e:
-            logger.warning(f"Could not create text index (hybrid search may be slower): {e}")
+            logger.warning(f"Could not create indexes: {e}")
 
     def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:
         points = []
@@ -131,6 +138,61 @@ class VectorStore:
         except Exception as e:
             logger.warning(f"Hybrid search failed, falling back to semantic: {e}")
             return self.search(vector, user_groups, top_k)
+
+    def expand_window(self, chunks: list[RetrievedChunk], window: int = 3) -> list[RetrievedChunk]:
+        """For each retrieved chunk, also pull neighboring chunks from the same document.
+
+        This solves the section-header problem: if we match a chunk with "ARMY",
+        we also pull the next N chunks which contain the contractor details.
+        """
+        if not chunks:
+            return chunks
+
+        # Collect (doc_id, chunk_index) pairs to fetch — neighbors of each match
+        needed = set()
+        existing = {(c.metadata.doc_id, c.metadata.chunk_index) for c in chunks}
+        for c in chunks:
+            for offset in range(-window, window + 1):
+                neighbor_idx = c.metadata.chunk_index + offset
+                if neighbor_idx >= 0:
+                    key = (c.metadata.doc_id, neighbor_idx)
+                    if key not in existing:
+                        needed.add(key)
+
+        if not needed:
+            return chunks
+
+        # Fetch neighbor chunks from Qdrant by doc_id + chunk_index
+        from qdrant_client.models import MatchValue
+        new_chunks = []
+        for doc_id, chunk_idx in needed:
+            try:
+                results = self.client.scroll(
+                    collection_name=self.collection,
+                    scroll_filter=Filter(must=[
+                        FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                        FieldCondition(key="chunk_index", match=MatchValue(value=chunk_idx)),
+                    ]),
+                    limit=1,
+                    with_payload=True,
+                )
+                for point in results[0]:
+                    payload = dict(point.payload)
+                    text = payload.pop("text", "")
+                    new_chunks.append(RetrievedChunk(
+                        text=text, score=0.4,  # Lower score since these are window-expanded
+                        metadata=ChunkMetadata(**payload),
+                    ))
+            except Exception:
+                continue
+
+        if new_chunks:
+            logger.info(f"Window expansion: added {len(new_chunks)} neighbor chunks")
+
+        # Sort all chunks by doc_id then chunk_index for coherent reading order
+        all_chunks = chunks + new_chunks
+        all_chunks.sort(key=lambda c: (c.metadata.doc_id, c.metadata.chunk_index))
+        return all_chunks
 
     def delete_by_doc_id(self, doc_id: str) -> None:
         self.client.delete(

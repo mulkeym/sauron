@@ -7,6 +7,7 @@ def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 3
     user_groups = state["user_groups"]
     query_vector = embed_query(question)
     chunks = vector_store.hybrid_search(vector=query_vector, text_query=question, user_groups=user_groups, top_k=top_k)
+    chunks = vector_store.expand_window(chunks, window=2)
     return {
         "retrieved_chunks": chunks,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,

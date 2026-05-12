@@ -26,6 +26,7 @@ def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 50
             unique_chunks.append(chunk)
     unique_chunks.sort(key=lambda c: c.score, reverse=True)
 
+    unique_chunks = vector_store.expand_window(unique_chunks, window=3)
     return {
         "retrieved_chunks": unique_chunks,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,

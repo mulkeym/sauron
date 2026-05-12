@@ -35,6 +35,7 @@ async def retrieve_cross_reference(
         analytical_result = await retrieve_analytical(state, vector_store=vector_store, schema_registry=schema_registry)
         sql_results = analytical_result.get("sql_results", [])
 
+    unique_chunks = vector_store.expand_window(unique_chunks, window=2)
     return {
         "retrieved_chunks": unique_chunks,
         "sql_results": sql_results,
