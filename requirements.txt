@@ -17,7 +17,7 @@ openpyxl>=3.1.0
 
 # Embeddings & Vector DB
 sentence-transformers>=3.3.0
-qdrant-client>=1.17.0
+lancedb>=0.30.0
 
 # LLM
 openai>=1.55.0

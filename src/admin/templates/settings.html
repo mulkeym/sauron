@@ -63,18 +63,15 @@
     </div>
 
     <div class="settings-section">
-        <h2>Vector Database (Qdrant)</h2>
+        <h2>Vector Database (LanceDB)</h2>
         <div class="form-group">
-            <label for="qdrant_host">Host</label>
-            <input type="text" id="qdrant_host" name="qdrant_host" value="{{ settings.qdrant_host }}" placeholder="localhost">
+            <label>Path</label>
+            <input type="text" value="{{ settings.lancedb_path }}" disabled>
+            <span style="font-size:0.8rem; color:#6b7280;">Embedded — no server required. Data stored locally.</span>
         </div>
         <div class="form-group">
-            <label for="qdrant_port">Port</label>
-            <input type="number" id="qdrant_port" name="qdrant_port" value="{{ settings.qdrant_port }}" placeholder="6333">
-        </div>
-        <div class="form-group">
-            <label for="qdrant_collection_name">Collection Name</label>
-            <input type="text" id="qdrant_collection_name" name="qdrant_collection_name" value="{{ settings.qdrant_collection_name }}" placeholder="documents">
+            <label>Table</label>
+            <input type="text" value="{{ settings.lancedb_table_name }}" disabled>
         </div>
     </div>
 

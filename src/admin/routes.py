@@ -279,12 +279,9 @@ async def delete_document(doc_id: str):
     await store.delete_document(doc_id)
     # Remove entity mentions and relationships for this doc
     await store.delete_entities_for_doc(doc_id)
-    # Remove vector chunks from Qdrant
-    try:
-        vector_store = get_vector_store()
-        vector_store.delete_by_doc_id(doc_id)
-    except Exception:
-        pass  # Qdrant may not be running in test
+    # Remove vector chunks from LanceDB
+    vector_store = get_vector_store()
+    vector_store.delete_by_doc_id(doc_id)
     return HTMLResponse("")
 
 
@@ -772,9 +769,6 @@ async def save_settings(
     embedding_mode: str = Form(""),
     embedding_api_url: str = Form(""),
     embedding_model_name: str = Form(""),
-    qdrant_host: str = Form(""),
-    qdrant_port: int = Form(6333),
-    qdrant_collection_name: str = Form(""),
     mcp_port: int = Form(8090),
     entity_merge_auto_threshold: float = Form(0.9),
     entity_merge_review_threshold: float = Form(0.7),
@@ -790,11 +784,6 @@ async def save_settings(
         settings.embedding_api_url = embedding_api_url
     if embedding_model_name:
         settings.embedding_model_name = embedding_model_name
-    if qdrant_host:
-        settings.qdrant_host = qdrant_host
-    settings.qdrant_port = qdrant_port
-    if qdrant_collection_name:
-        settings.qdrant_collection_name = qdrant_collection_name
     settings.mcp_port = mcp_port
     settings.entity_merge_auto_threshold = entity_merge_auto_threshold
     settings.entity_merge_review_threshold = entity_merge_review_threshold
@@ -813,9 +802,6 @@ async def save_settings(
     env_lines["EMBEDDING_MODE"] = settings.embedding_mode
     env_lines["EMBEDDING_API_URL"] = settings.embedding_api_url
     env_lines["EMBEDDING_MODEL_NAME"] = settings.embedding_model_name
-    env_lines["QDRANT_HOST"] = settings.qdrant_host
-    env_lines["QDRANT_PORT"] = str(settings.qdrant_port)
-    env_lines["QDRANT_COLLECTION_NAME"] = settings.qdrant_collection_name
     env_lines["MCP_PORT"] = str(settings.mcp_port)
     env_lines["ENTITY_MERGE_AUTO_THRESHOLD"] = str(settings.entity_merge_auto_threshold)
     env_lines["ENTITY_MERGE_REVIEW_THRESHOLD"] = str(settings.entity_merge_review_threshold)
