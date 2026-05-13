@@ -25,51 +25,50 @@ def _get_prefixes() -> dict:
     return MODEL_PREFIXES["default"]
 
 
-def _embed_single(text: str) -> list[float]:
-    """Embed a single text via API."""
-    payload = {
-        "model": settings.embedding_model_name,
-        "input": text,
-    }
-    result = subprocess.run(
-        ['curl', '-4', '-s', '-X', 'POST',
-         f'{settings.embedding_api_url}/embeddings',
-         '-H', 'Content-Type: application/json',
-         '-d', json.dumps(payload)],
-        capture_output=True,
-        text=True,
-        timeout=60
-    )
+def _curl_post(url: str, payload: dict, timeout: int = 60) -> dict:
+    """POST JSON via curl using a temp file to avoid argument length limits."""
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        f.write(json.dumps(payload))
+        payload_file = f.name
+    try:
+        result = subprocess.run(
+            ['curl', '-4', '-s', '-X', 'POST', url,
+             '-H', 'Content-Type: application/json',
+             '-d', f'@{payload_file}'],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    finally:
+        os.unlink(payload_file)
     if result.returncode != 0:
-        raise RuntimeError(f"Embedding request failed: {result.stderr}")
+        raise RuntimeError(f"Request failed: {result.stderr}")
     response = json.loads(result.stdout)
     if 'error' in response:
-        raise RuntimeError(f"Embedding error: {response['error']}")
+        raise RuntimeError(f"API error: {response['error']}")
+    return response
+
+
+def _embed_single(text: str) -> list[float]:
+    """Embed a single text via API."""
+    response = _curl_post(
+        f'{settings.embedding_api_url}/embeddings',
+        {"model": settings.embedding_model_name, "input": text},
+    )
     return response['data'][0]['embedding']
 
 
 def _embed_via_api(texts: list[str]) -> list[list[float]]:
     """Call an OpenAI-compatible /v1/embeddings endpoint with IPv4 forcing."""
-    payload = {
-        "model": settings.embedding_model_name,
-        "input": texts,
-    }
-    result = subprocess.run(
-        ['curl', '-4', '-s', '-X', 'POST',
-         f'{settings.embedding_api_url}/embeddings',
-         '-H', 'Content-Type: application/json',
-         '-d', json.dumps(payload)],
-        capture_output=True,
-        text=True,
-        timeout=120
-    )
-    if result.returncode == 0:
-        response = json.loads(result.stdout)
-        if 'data' in response:
-            return [item['embedding'] for item in response['data']]
-
-    # Fallback: send individually
-    return [_embed_single(text) for text in texts]
+    try:
+        response = _curl_post(
+            f'{settings.embedding_api_url}/embeddings',
+            {"model": settings.embedding_model_name, "input": texts},
+            timeout=120,
+        )
+        return [item['embedding'] for item in response['data']]
+    except Exception:
+        # Fallback: send individually
+        return [_embed_single(text) for text in texts]
 
 
 @lru_cache(maxsize=1)

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 def _call_llm_with_curl(messages: list, model: str, temperature: float, max_tokens: int) -> str:
     """Call LLM using curl with IPv4 forcing to avoid VPN timeout issues."""
+    import tempfile, os
 
     logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}")
 
@@ -20,15 +21,24 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
         "max_tokens": max_tokens,
     }
 
-    result = subprocess.run(
-        ['curl', '-4', '-s', '-X', 'POST',
-         f'{settings.vllm_base_url}/chat/completions',
-         '-H', 'Content-Type: application/json',
-         '-d', json.dumps(payload)],
-        capture_output=True,
-        text=True,
-        timeout=settings.vllm_request_timeout
-    )
+    # Write payload to temp file to avoid OS argument length limits
+    payload_json = json.dumps(payload)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        f.write(payload_json)
+        payload_file = f.name
+
+    try:
+        result = subprocess.run(
+            ['curl', '-4', '-s', '-X', 'POST',
+             f'{settings.vllm_base_url}/chat/completions',
+             '-H', 'Content-Type: application/json',
+             '-d', f'@{payload_file}'],
+            capture_output=True,
+            text=True,
+            timeout=settings.vllm_request_timeout
+        )
+    finally:
+        os.unlink(payload_file)
 
     logger.info(f"Curl exit code: {result.returncode}, stdout length: {len(result.stdout)}, stderr: {result.stderr[:100] if result.stderr else 'none'}")
 
@@ -153,6 +163,8 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
 
 def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
     """Stream tokens from the LLM. Yields content strings as they arrive."""
+    import tempfile, os
+
     payload = {
         "model": settings.vllm_model_name,
         "messages": [
@@ -164,11 +176,15 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
         "stream": True,
     }
 
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        f.write(json.dumps(payload))
+        payload_file = f.name
+
     proc = subprocess.Popen(
         ['curl', '-4', '-s', '-N', '-X', 'POST',
          f'{settings.vllm_base_url}/chat/completions',
          '-H', 'Content-Type: application/json',
-         '-d', json.dumps(payload)],
+         '-d', f'@{payload_file}'],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -204,6 +220,7 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
             continue
 
     proc.wait()
+    os.unlink(payload_file)
     if buffer:
         # Flush any remaining non-thinking content
         buffer = re.sub(r"<think>.*?</think>", "", buffer, flags=re.DOTALL).strip()
