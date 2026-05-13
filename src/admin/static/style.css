@@ -39,6 +39,18 @@ button.secondary:hover { background: #4b5563; }
 .status-err { color: #dc2626; font-weight: 600; }
 .result-card { background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 .result-answer { font-size: 1rem; line-height: 1.6; margin-bottom: 1rem; }
+.result-answer h1, .result-answer h2, .result-answer h3 { margin-top: 1rem; margin-bottom: 0.5rem; color: #1f2937; }
+.result-answer h2 { font-size: 1.15rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; }
+.result-answer h3 { font-size: 1.05rem; }
+.result-answer ul, .result-answer ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+.result-answer li { margin-bottom: 0.25rem; }
+.result-answer p { margin: 0.5rem 0; }
+.result-answer strong { color: #111827; }
+.result-answer table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; font-size: 0.9rem; }
+.result-answer th { background: #f3f4f6; text-align: left; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; font-weight: 600; }
+.result-answer td { padding: 0.5rem 0.75rem; border: 1px solid #e5e7eb; }
+.result-answer tr:nth-child(even) { background: #f9fafb; }
+.result-answer code { background: #f3f4f6; padding: 0.15rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
 .result-meta { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; }
 .citation-card { background: #f9fafb; border-left: 3px solid #2563eb; padding: 0.75rem 1rem; margin-bottom: 0.5rem; border-radius: 0 4px 4px 0; }
 .citation-card .filename { font-weight: 600; color: #1f2937; }
