@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from langgraph.graph import StateGraph, END
 from src.agent.state import AgentState, QueryType
 from src.agent.classifier import classify_query
-from src.agent.evaluator import evaluate_context
 from src.agent.synthesizer import synthesize_answer
 from src.agent.strategies.lookup import retrieve_lookup
 from src.agent.strategies.sweep import retrieve_sweep
@@ -37,7 +36,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         if query_type == QueryType.LOOKUP:
             result = retrieve_lookup(retry_state, vector_store=vector_store)
         elif query_type == QueryType.SWEEP:
-            result = retrieve_sweep(retry_state, vector_store=vector_store)
+            result = await retrieve_sweep(retry_state, vector_store=vector_store)
         elif query_type == QueryType.ANALYTICAL:
             result = await retrieve_analytical(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.CROSS_REFERENCE:
@@ -47,22 +46,27 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         else:
             result = retrieve_lookup(retry_state, vector_store=vector_store)
 
-        # Sub-task decomposition: run additional searches for each sub-task
+        # Sub-task decomposition: run additional searches for each sub-task IN PARALLEL
         sub_tasks = state.get("sub_tasks", [])
-        if sub_tasks and len(sub_tasks) > 1:
+        unique_tasks = [t for t in sub_tasks if t != state["question"]] if sub_tasks else []
+        if unique_tasks:
             from src.ingestion.embedder import embed_query
-            existing_keys = {(c.metadata.doc_id, c.metadata.chunk_index)
-                            for c in result.get("retrieved_chunks", [])}
-            added = 0
-            for task in sub_tasks:
-                if task == state["question"]:
-                    continue  # skip if same as main question
-                task_vector = embed_query(task)
-                task_chunks = vector_store.hybrid_search(
+            import asyncio
+
+            async def search_subtask(task):
+                task_vector = await asyncio.to_thread(embed_query, task)
+                return vector_store.hybrid_search(
                     vector=task_vector, text_query=task,
                     user_groups=state.get("user_groups", ["ALL"]),
                     top_k=10, tier="small",
                 )
+
+            all_subtask_results = await asyncio.gather(*[search_subtask(t) for t in unique_tasks])
+
+            existing_keys = {(c.metadata.doc_id, c.metadata.chunk_index)
+                            for c in result.get("retrieved_chunks", [])}
+            added = 0
+            for task_chunks in all_subtask_results:
                 for c in task_chunks:
                     key = (c.metadata.doc_id, c.metadata.chunk_index)
                     if key not in existing_keys:
@@ -70,7 +74,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                         existing_keys.add(key)
                         added += 1
             if added:
-                retrieve_logger.info(f"Sub-task decomposition added {added} chunks from {len(sub_tasks)} sub-tasks")
+                retrieve_logger.info(f"Sub-task decomposition added {added} chunks from {len(unique_tasks)} sub-tasks (parallel)")
 
         # On retry, merge new chunks with existing (don't lose previous results)
         if attempts > 0:
@@ -197,20 +201,12 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             return {}
 
     graph.add_node("enrich", enrich_with_graph)
-    graph.add_node("evaluate", evaluate_context)
     graph.add_node("synthesize", synthesize_answer)
 
     graph.set_entry_point("classify")
     graph.add_edge("classify", "retrieve")
     graph.add_edge("retrieve", "enrich")
-    graph.add_edge("enrich", "evaluate")
-
-    def should_reretrieval(state: AgentState) -> str:
-        if state.get("needs_reretrieval", False):
-            return "retrieve"
-        return "synthesize"
-
-    graph.add_conditional_edges("evaluate", should_reretrieval, {"retrieve": "retrieve", "synthesize": "synthesize"})
+    graph.add_edge("enrich", "synthesize")
     graph.add_edge("synthesize", END)
     return graph.compile()
 

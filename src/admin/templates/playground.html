@@ -29,8 +29,7 @@ const STEPS = [
     {id: "classify", label: "Classify Query", num: 1},
     {id: "retrieve", label: "Retrieve Documents", num: 2},
     {id: "enrich", label: "Knowledge Graph Enrichment", num: 3},
-    {id: "evaluate", label: "Evaluate Context", num: 4},
-    {id: "synthesize", label: "Generate Answer", num: 5},
+    {id: "synthesize", label: "Generate Answer", num: 4},
 ];
 
 function buildProgressHTML(currentStep, elapsed) {
@@ -48,7 +47,7 @@ function buildProgressHTML(currentStep, elapsed) {
             cls = 'style="opacity:0.4;"';
         }
         html += `<div class="trace-step" ${cls}>
-            <span>${icon} Step ${step.num} of 5: ${step.label}</span>
+            <span>${icon} Step ${step.num} of 4: ${step.label}</span>
             ${step.id === currentStep ? '<span class="trace-time">' + elapsed + 's</span>' : ''}
         </div>`;
     }

@@ -350,7 +350,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             query_type = str(final_state.get("query_type", "lookup"))
 
             # Build trace with expandable step details
-            step_labels = {"classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "evaluate": "Evaluate Context", "synthesize": "Generate Answer"}
+            step_labels = {"classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "synthesize": "Generate Answer"}
 
             def format_step_detail(step_name, output):
                 """Format step output for display."""
@@ -467,7 +467,6 @@ async def playground_query(question: str = Form(""), play_user: str = Form("fina
             "classify": "Classify Query",
             "retrieve": "Retrieve Documents",
             "enrich": "Knowledge Graph Enrichment",
-            "evaluate": "Evaluate Context",
             "synthesize": "Generate Answer",
         }
         steps_html = ""
