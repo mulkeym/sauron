@@ -1,7 +1,9 @@
 """LightRAG adapter — wraps our LLM and embedding functions for LightRAG's API."""
+import asyncio
 import logging
 import numpy as np
-import requests
+
+import aiohttp
 
 from lightrag import LightRAG, QueryParam
 from lightrag.utils import EmbeddingFunc
@@ -23,7 +25,7 @@ async def _llm_func(
     stream: bool = False,
     **kwargs,
 ) -> str:
-    """LLM function for LightRAG — calls our OpenAI-compatible endpoint."""
+    """LLM function for LightRAG — async HTTP to avoid blocking the event loop."""
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -39,13 +41,14 @@ async def _llm_func(
     }
 
     try:
-        resp = requests.post(
-            f'{settings.vllm_base_url}/chat/completions',
-            json=payload,
-            timeout=settings.vllm_request_timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        timeout = aiohttp.ClientTimeout(total=settings.vllm_request_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f'{settings.vllm_base_url}/chat/completions',
+                json=payload,
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
 
         message = data["choices"][0]["message"]
         content = message.get("content", "").strip()
@@ -61,9 +64,9 @@ async def _llm_func(
 
 
 async def _embed_func(texts: list[str], **kwargs) -> np.ndarray:
-    """Embedding function for LightRAG — uses our configured embedder."""
+    """Embedding function for LightRAG — runs in thread to avoid blocking."""
     from src.ingestion.embedder import embed_texts
-    vectors = embed_texts(texts, mode="passage")
+    vectors = await asyncio.to_thread(embed_texts, texts, "passage")
     return np.array(vectors)
 
 
