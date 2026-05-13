@@ -19,6 +19,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY src/ src/
 COPY scripts/ scripts/
+RUN chmod +x scripts/entrypoint.sh
 
 # Create data directory
 RUN mkdir -p /app/data/lancedb
@@ -35,4 +36,5 @@ VOLUME /app/data
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8080/api/health || exit 1
 
+ENTRYPOINT ["scripts/entrypoint.sh"]
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
