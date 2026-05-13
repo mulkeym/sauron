@@ -51,6 +51,8 @@ button.secondary:hover { background: #4b5563; }
 .result-answer td { padding: 0.5rem 0.75rem; border: 1px solid #e5e7eb; }
 .result-answer tr:nth-child(even) { background: #f9fafb; }
 .result-answer code { background: #f3f4f6; padding: 0.15rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
+.streaming-cursor { animation: blink 0.7s step-end infinite; color: #2563eb; }
+@keyframes blink { 50% { opacity: 0; } }
 .result-meta { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.5rem; }
 .citation-card { background: #f9fafb; border-left: 3px solid #2563eb; padding: 0.75rem 1rem; margin-bottom: 0.5rem; border-radius: 0 4px 4px 0; }
 .citation-card .filename { font-weight: 600; color: #1f2937; }

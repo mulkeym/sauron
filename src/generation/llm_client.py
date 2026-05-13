@@ -151,6 +151,66 @@ def _call_llm_with_curl(messages: list, model: str, temperature: float, max_toke
     return content
 
 
+def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
+    """Stream tokens from the LLM. Yields content strings as they arrive."""
+    payload = {
+        "model": settings.vllm_model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+
+    proc = subprocess.Popen(
+        ['curl', '-4', '-s', '-N', '-X', 'POST',
+         f'{settings.vllm_base_url}/chat/completions',
+         '-H', 'Content-Type: application/json',
+         '-d', json.dumps(payload)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    buffer = ""
+    for line in proc.stdout:
+        line = line.strip()
+        if not line or not line.startswith("data: "):
+            continue
+        data = line[6:]  # strip "data: " prefix
+        if data == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data)
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            content = delta.get("content", "")
+            if content:
+                # Strip thinking blocks from streamed content
+                buffer += content
+                # Only yield content outside <think> blocks
+                while "<think>" in buffer and "</think>" in buffer:
+                    start = buffer.index("<think>")
+                    end = buffer.index("</think>") + len("</think>")
+                    buffer = buffer[:start] + buffer[end:]
+                # If we're inside an unclosed <think> block, don't yield yet
+                if "<think>" in buffer and "</think>" not in buffer:
+                    continue
+                if buffer:
+                    yield buffer
+                    buffer = ""
+        except json.JSONDecodeError:
+            continue
+
+    proc.wait()
+    if buffer:
+        # Flush any remaining non-thinking content
+        buffer = re.sub(r"<think>.*?</think>", "", buffer, flags=re.DOTALL).strip()
+        if buffer:
+            yield buffer
+
+
 def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
     """Generate text using the LLM with IPv4 forcing to avoid VPN timeouts."""
     original_content = _call_llm_with_curl(

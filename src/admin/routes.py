@@ -310,13 +310,25 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         try:
             from src.agent.graph import create_agent_graph
             from src.agent.state import AgentState
+            from langgraph.graph import END
             import time, html as html_mod
 
-            graph = create_agent_graph(
-                vector_store=get_vector_store(),
-                schema_registry=get_schema_registry(),
-                metadata_store=get_metadata_store(),
-            )
+            # Build graph WITHOUT synthesize — we'll stream that separately
+            from src.agent.classifier import classify_query
+            from src.agent.strategies.lookup import retrieve_lookup
+            from src.agent.strategies.sweep import retrieve_sweep
+            from src.agent.strategies.analytical import retrieve_analytical
+            from src.agent.strategies.cross_reference import retrieve_cross_reference
+            from src.agent.state import QueryType
+            from langgraph.graph import StateGraph
+
+            vs = get_vector_store()
+            sr = get_schema_registry()
+            ms = get_metadata_store()
+
+            # Use the full graph but we'll intercept before synthesis
+            graph = create_agent_graph(vector_store=vs, schema_registry=sr, metadata_store=ms)
+
             initial_state = AgentState(
                 question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
                 retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
@@ -340,14 +352,38 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     step_start = now
                     final_state.update(node_output if isinstance(node_output, dict) else {})
 
+                    # When synthesize starts, signal streaming ready with context
+                    if node_name == "synthesize" and not _playground_jobs[query_id].get("stream_ready"):
+                        from src.agent.synthesizer import _filter_relevant_chunks
+                        synth_chunks = _filter_relevant_chunks(
+                            final_state.get("retrieved_chunks", []), question
+                        )
+                        ctx_parts = []
+                        for ci, ch in enumerate(synth_chunks, 1):
+                            src = f"Source: {ch.metadata.filename}"
+                            if ch.metadata.page is not None:
+                                src += f", page {ch.metadata.page}"
+                            ctx_parts.append(f"{src}\n{ch.text}")
+                        sql = final_state.get("sql_results", [])
+                        if sql:
+                            ctx_parts.append(f"[Database query results]:\n{json.dumps(sql, indent=2)}")
+                        _playground_jobs[query_id]["stream_ready"] = True
+                        _playground_jobs[query_id]["stream_context"] = {
+                            "context": "\n\n".join(ctx_parts),
+                            "question": question,
+                        }
+
             if prev_node:
                 steps_data.append({"step": prev_node, "time": round(time.time() - step_start, 2), "output": prev_output})
 
             total_time = sum(s["time"] for s in steps_data)
             answer = final_state.get("answer", "No answer")
             chunks = final_state.get("retrieved_chunks", [])
-            citations = final_state.get("citations", [])
             query_type = str(final_state.get("query_type", "lookup"))
+
+            # Use streamed answer if available (from SSE endpoint)
+            if _playground_jobs[query_id].get("streamed_answer"):
+                answer = _playground_jobs[query_id]["streamed_answer"]
 
             # Build trace with expandable step details
             step_labels = {"classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "synthesize": "Generate Answer"}
@@ -420,6 +456,21 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 page = f' &mdash; page {c.page}' if c.page else ''
                 citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.filename}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
 
+            # Deduplicate citations
+            from src.retrieval.models import Citation
+            seen_docs = {}
+            for c in chunks:
+                doc_id = c.metadata.doc_id
+                if doc_id == "knowledge-graph":
+                    continue
+                if doc_id not in seen_docs or c.score > seen_docs[doc_id].score:
+                    seen_docs[doc_id] = c
+            citations = [
+                Citation(doc_id=c.metadata.doc_id, filename=c.metadata.filename, doc_type=c.metadata.doc_type,
+                         chunk_index=c.metadata.chunk_index, page=c.metadata.page, snippet=c.text[:200], relevance=c.score)
+                for c in seen_docs.values()
+            ]
+
             result_html = f"""{trace_html}
             <div class="result-card">
                 <div class="result-meta">Groups: {', '.join(user_groups)}</div>
@@ -443,6 +494,55 @@ async def playground_status(query_id: str):
     from fastapi.responses import JSONResponse
     job = _playground_jobs.get(query_id, {"step": "error", "error": "Not found"})
     return JSONResponse(job)
+
+
+@router.get("/api/playground/stream/{query_id}")
+async def playground_stream(query_id: str):
+    """SSE endpoint that streams the synthesized answer token by token."""
+    from fastapi.responses import StreamingResponse
+
+    async def event_stream():
+        import asyncio
+
+        # Wait for the job to reach synthesize step with context ready
+        for _ in range(300):  # 5 min timeout
+            job = _playground_jobs.get(query_id, {})
+            if job.get("stream_ready"):
+                break
+            if job.get("step") in ("complete", "error"):
+                return
+            await asyncio.sleep(0.2)
+
+        context_data = job.get("stream_context")
+        if not context_data:
+            return
+
+        from src.generation.llm_client import generate_stream
+        from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts
+
+        try:
+            full_text = ""
+            for token in generate_stream(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=USER_PROMPT_TEMPLATE.format(
+                    context=context_data["context"],
+                    question=context_data["question"],
+                ),
+                max_tokens=4096,
+            ):
+                full_text += token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+
+            # Send cleaned final answer
+            cleaned = _strip_reasoning_artifacts(full_text)
+            yield f"data: {json.dumps({'done': True, 'answer': cleaned})}\n\n"
+
+            # Store the final answer back in the job for citations
+            _playground_jobs[query_id]["streamed_answer"] = cleaned
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/api/playground/query")

@@ -89,8 +89,9 @@ async function runQuery() {
         const startData = await startResp.json();
         queryId = startData.query_id;
 
-        // Poll for progress
+        // Poll for progress, then stream the answer
         let done = false;
+        let streaming = false;
         while (!done) {
             await new Promise(r => setTimeout(r, 500));
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -98,20 +99,78 @@ async function runQuery() {
             const statusResp = await fetch(`/admin/api/playground/status/${queryId}`);
             const status = await statusResp.json();
 
-            if (status.step === 'complete') {
+            if (status.step === 'streaming' && !streaming) {
+                // Start streaming the answer via SSE
+                streaming = true;
+                progress.innerHTML = buildProgressHTML('synthesize', elapsed);
+                results.innerHTML = `<div class="result-card"><div class="result-meta">Groups: ${user}</div><div class="result-answer" id="stream-output"><span class="streaming-cursor">▊</span></div></div>`;
+
+                const evtSource = new EventSource(`/admin/api/playground/stream/${queryId}`);
+                const outputDiv = document.getElementById('stream-output');
+                let fullText = '';
+
+                evtSource.onmessage = function(e) {
+                    const data = JSON.parse(e.data);
+                    if (data.token) {
+                        fullText += data.token;
+                        if (typeof marked !== 'undefined') {
+                            outputDiv.innerHTML = marked.parse(fullText) + '<span class="streaming-cursor">▊</span>';
+                        } else {
+                            outputDiv.textContent = fullText;
+                        }
+                    }
+                    if (data.done) {
+                        evtSource.close();
+                        if (typeof marked !== 'undefined') {
+                            outputDiv.innerHTML = marked.parse(data.answer || fullText);
+                        } else {
+                            outputDiv.textContent = data.answer || fullText;
+                        }
+                        // Continue polling for final result with citations
+                    }
+                    if (data.error) {
+                        evtSource.close();
+                        outputDiv.innerHTML = `<div class="status-err">${data.error}</div>`;
+                    }
+                };
+                evtSource.onerror = function() { evtSource.close(); };
+            } else if (status.step === 'complete') {
                 done = true;
                 progress.style.display = 'none';
-                results.innerHTML = status.result_html;
-                // Render markdown in the answer div
-                const answerDiv = results.querySelector('.result-answer');
-                if (answerDiv && typeof marked !== 'undefined') {
-                    answerDiv.innerHTML = marked.parse(answerDiv.textContent);
+                // Keep streamed answer but add trace + citations from final result
+                const currentAnswer = document.getElementById('stream-output');
+                if (currentAnswer) {
+                    // Extract trace and citations from result_html, keep our streamed answer
+                    const temp = document.createElement('div');
+                    temp.innerHTML = status.result_html;
+                    const trace = temp.querySelector('.trace-panel');
+                    const citationsEl = temp.querySelector('h3');
+                    let citationsHtml = '';
+                    if (citationsEl) {
+                        let node = citationsEl;
+                        while (node) {
+                            citationsHtml += node.outerHTML;
+                            node = node.nextElementSibling;
+                        }
+                    }
+                    results.innerHTML = `${trace ? trace.outerHTML : ''}
+                        <div class="result-card">
+                            <div class="result-meta">Groups: ${user}</div>
+                            <div class="result-answer">${currentAnswer.innerHTML}</div>
+                            ${citationsHtml}
+                        </div>`;
+                } else {
+                    results.innerHTML = status.result_html;
+                    const answerDiv = results.querySelector('.result-answer');
+                    if (answerDiv && typeof marked !== 'undefined') {
+                        answerDiv.innerHTML = marked.parse(answerDiv.textContent);
+                    }
                 }
             } else if (status.step === 'error') {
                 done = true;
                 progress.style.display = 'none';
                 results.innerHTML = `<div class="status-err">${status.error}</div>`;
-            } else {
+            } else if (!streaming) {
                 progress.innerHTML = buildProgressHTML(status.step, elapsed);
             }
         }
