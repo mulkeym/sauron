@@ -1,11 +1,10 @@
-"""LightRAG adapter — wraps our LLM and embedding functions for LightRAG's API."""
+"""LightRAG adapter — uses LightRAG's built-in OpenAI adapter for best format compliance."""
 import asyncio
 import logging
 import numpy as np
 
-import aiohttp
-
 from lightrag import LightRAG, QueryParam
+from lightrag.llm.openai import openai_complete_if_cache
 from lightrag.utils import EmbeddingFunc
 
 from src.config import settings
@@ -21,46 +20,23 @@ async def _llm_func(
     system_prompt: str | None = None,
     history_messages: list[dict] = [],
     keyword_extraction: bool = False,
-    enable_cot: bool = False,
-    stream: bool = False,
     **kwargs,
 ) -> str:
-    """LLM function for LightRAG — async HTTP to avoid blocking the event loop."""
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    if history_messages:
-        messages.extend(history_messages)
-    messages.append({"role": "user", "content": prompt})
+    """LLM function using LightRAG's built-in OpenAI adapter.
 
-    payload = {
-        "model": settings.vllm_model_name,
-        "messages": messages,
-        "max_tokens": 4096,
-        "temperature": 0.0 if keyword_extraction else 0.1,
-    }
-
-    try:
-        timeout = aiohttp.ClientTimeout(total=settings.vllm_request_timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f'{settings.vllm_base_url}/chat/completions',
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-
-        message = data["choices"][0]["message"]
-        content = message.get("content", "").strip()
-
-        # Fallback for thinking models
-        if not content:
-            content = (message.get("reasoning_content") or message.get("reasoning") or "").strip()
-
-        return content
-    except Exception as e:
-        logger.error(f"LightRAG LLM call failed: {e}")
-        return ""
+    This adapter has better prompt construction and format enforcement
+    than a raw HTTP call, resulting in more reliable entity extraction.
+    """
+    return await openai_complete_if_cache(
+        model=settings.vllm_model_name,
+        prompt=prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        keyword_extraction=keyword_extraction,
+        base_url=settings.vllm_base_url,
+        api_key="not-needed",
+        **kwargs,
+    )
 
 
 async def _embed_func(texts: list[str], **kwargs) -> np.ndarray:
