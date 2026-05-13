@@ -18,6 +18,11 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="RAG Knowledge Service", description="Agentic RAG system with document-level access control", version="0.1.0", lifespan=lifespan)
+
+    @app.get("/api/health")
+    async def health():
+        return {"status": "ok"}
+
     app.include_router(auth_router)
     app.include_router(ingest_router)
     app.include_router(query_router)

@@ -1,8 +1,6 @@
 version: "3.9"
 services:
-  # NOTE: vLLM (LLM inference) and embedding services run externally.
-  # Configure VLLM_BASE_URL and EMBEDDING_API_URL in .env to point to your GPU servers.
-
+  # RAG API + Admin UI
   api:
     build: .
     ports:
@@ -10,19 +8,20 @@ services:
     environment:
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
+      - VLLM_REQUEST_TIMEOUT=${VLLM_REQUEST_TIMEOUT:-300}
       - EMBEDDING_MODE=${EMBEDDING_MODE:-api}
       - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:8000/v1}
       - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-intfloat/e5-large-v2}
       - LANCEDB_PATH=/app/data/lancedb
-      - LANCEDB_TABLE_NAME=chunks
+      - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - API_KEYS=${API_KEYS:-dev-key-1}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
     volumes:
-      - api_data:/app/data
+      - app_data:/app/data
     restart: unless-stopped
 
-  # MCP Server (Knowledge Service for AI agents)
+  # MCP Server (SSE transport for direct MCP clients)
   mcp:
     build: .
     command: ["python", "-m", "src.mcp.run"]
@@ -31,26 +30,50 @@ services:
     environment:
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
+      - VLLM_REQUEST_TIMEOUT=${VLLM_REQUEST_TIMEOUT:-300}
       - EMBEDDING_MODE=${EMBEDDING_MODE:-api}
       - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:8000/v1}
       - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-intfloat/e5-large-v2}
       - LANCEDB_PATH=/app/data/lancedb
-      - LANCEDB_TABLE_NAME=chunks
+      - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - API_KEYS=${API_KEYS:-dev-key-1}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
       - MCP_PORT=8090
     volumes:
-      - api_data:/app/data
+      - app_data:/app/data
     restart: unless-stopped
 
+  # MCP-to-OpenAPI proxy (for OpenWebUI and REST clients)
+  mcpo:
+    build: .
+    entrypoint: ["mcpo", "--port", "8091", "--", "python", "-m", "src.mcp.run_stdio"]
+    ports:
+      - "8091:8091"
+    environment:
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
+      - VLLM_REQUEST_TIMEOUT=${VLLM_REQUEST_TIMEOUT:-300}
+      - EMBEDDING_MODE=${EMBEDDING_MODE:-api}
+      - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:8000/v1}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-intfloat/e5-large-v2}
+      - LANCEDB_PATH=/app/data/lancedb
+      - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - API_KEYS=${API_KEYS:-dev-key-1}
+      - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
+    volumes:
+      - app_data:/app/data
+    restart: unless-stopped
+
+  # OpenWebUI (optional — connects to mcpo for MCP tools)
   open-webui:
     image: ghcr.io/open-webui/open-webui:v0.9.0
     ports:
       - "3000:8080"
     environment:
       - OPENAI_API_BASE_URL=http://api:8080/v1
-      - OPENAI_API_KEY=dev-key-1
+      - OPENAI_API_KEY=${API_KEYS:-dev-key-1}
     volumes:
       - webui_data:/app/backend/data
     depends_on:
@@ -58,5 +81,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  api_data:
+  app_data:
   webui_data:
