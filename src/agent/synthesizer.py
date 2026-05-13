@@ -10,21 +10,21 @@ SYSTEM_PROMPT = """You are a knowledgeable assistant that answers questions base
 
 Rules:
 - Only answer based on the provided context. Do not use outside knowledge.
-- Cite document sources using [N] notation, where N corresponds to the context chunk number.
+- Cite sources by filename, e.g. (2026-01-08_4373866.md). Each context chunk is labeled with its filename.
 - If SQL results are provided, reference them in your answer.
 - If the context does not contain enough information, say so clearly.
 - Be THOROUGH and COMPLETE. Include ALL relevant information from the context, not just the first match.
 - When asked about what someone said or asked, list EVERY instance found in the context.
 - When listing items, use bullet points or numbered lists for clarity.
 
-IMPORTANT: Output ONLY the final answer. Do NOT show your reasoning, self-corrections, internal checks, or thought process. No lines like "Wait, checking...", "Re-checking...", "Self-correction...", "Check: Did I miss any?". Just provide the clean, organized answer."""
+IMPORTANT: Output ONLY the final answer. Do NOT show your reasoning, self-corrections, internal checks, or thought process. Just provide the clean, organized answer."""
 
 USER_PROMPT_TEMPLATE = """Context:
 {context}
 
 Question: {question}
 
-Provide a clean, organized answer based on ALL the context above. Include every relevant detail. Cite sources using [N] notation. Do NOT include your reasoning process — only the final answer."""
+Provide a clean, organized answer based on ALL the context above. Include every relevant detail. Cite sources by filename (e.g. 2026-01-08_4373866.md). Do NOT include your reasoning process — only the final answer."""
 
 def _strip_reasoning_artifacts(text: str) -> str:
     """Remove thinking model reasoning that leaked into the answer."""
@@ -98,10 +98,10 @@ def synthesize_answer(state: AgentState) -> dict:
 
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
-        source = f"[{i}] {chunk.metadata.filename}"
+        source = f"Source: {chunk.metadata.filename}"
         if chunk.metadata.page is not None:
             source += f", page {chunk.metadata.page}"
-        context_parts.append(f"{source}:\n{chunk.text}")
+        context_parts.append(f"{source}\n{chunk.text}")
     if sql_results:
         context_parts.append(f"[Database query results]:\n{json.dumps(sql_results, indent=2)}")
     context = "\n\n".join(context_parts)
