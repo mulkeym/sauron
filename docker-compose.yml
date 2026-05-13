@@ -1,11 +1,7 @@
-version: "3.9"
 services:
-  # RAG API + Admin UI
+  # SAURON API + Admin UI
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sauron:latest
+    build: .
     ports:
       - "8080:8080"
     environment:
@@ -26,10 +22,7 @@ services:
 
   # MCP Server (SSE transport for direct MCP clients)
   mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sauron:latest
+    build: .
     command: ["python", "-m", "src.mcp.run"]
     ports:
       - "8090:8090"
@@ -52,10 +45,7 @@ services:
 
   # MCP-to-OpenAPI proxy (for OpenWebUI and REST clients)
   mcpo:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sauron:latest
+    build: .
     entrypoint: ["mcpo", "--port", "8091", "--", "python", "-m", "src.mcp.run_stdio"]
     ports:
       - "8091:8091"
