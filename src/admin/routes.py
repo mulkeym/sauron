@@ -451,11 +451,6 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 {steps_html}
             </div>"""
 
-            citations_html = ""
-            for i, c in enumerate(citations, 1):
-                page = f' &mdash; page {c.page}' if c.page else ''
-                citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.filename}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
-
             # Deduplicate citations
             from src.retrieval.models import Citation
             seen_docs = {}
@@ -470,6 +465,11 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                          chunk_index=c.metadata.chunk_index, page=c.metadata.page, snippet=c.text[:200], relevance=c.score)
                 for c in seen_docs.values()
             ]
+
+            citations_html = ""
+            for i, c in enumerate(citations, 1):
+                page = f' &mdash; page {c.page}' if c.page else ''
+                citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.filename}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
 
             result_html = f"""{trace_html}
             <div class="result-card">
