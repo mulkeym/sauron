@@ -10,10 +10,10 @@ class Settings(BaseSettings):
     vllm_request_timeout: int = 300  # seconds - increase for thinking models
 
     # Embeddings
-    embedding_mode: str = "api"  # "api" (external OpenAI-compat endpoint) or "local" (sentence-transformers)
-    embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint
-    embedding_model_name: str = "intfloat/e5-large-v2"
-    embedding_device: str = "cpu"  # only used when embedding_mode=local
+    embedding_mode: str = "local"  # "local" (sentence-transformers, no server needed) or "api" (external endpoint)
+    embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint (only used when mode=api)
+    embedding_model_name: str = "nomic-ai/nomic-embed-text-v1"  # local default; set to API model name when mode=api
+    embedding_device: str = "cpu"  # "cpu" or "cuda" (only used when mode=local)
     embedding_dimension: int = 0  # auto-detect from first embedding call if 0
 
     # LanceDB

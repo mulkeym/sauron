@@ -18,6 +18,7 @@ openpyxl>=3.1.0
 
 # Embeddings & Vector DB
 sentence-transformers>=3.3.0
+einops>=0.8.0
 lancedb>=0.30.0
 
 # LLM
