@@ -233,6 +233,15 @@ class IngestQueue:
                     name=category, description="", acl_groups=job.acl_groups, routing_keywords=[],
                 )
 
+        # Get category metadata for entity extraction guidance
+        cat_desc = ""
+        cat_kw = []
+        if category and category != "uncategorized":
+            cat_record = await metadata_store.get_category(category)
+            if cat_record:
+                cat_desc = cat_record.description or ""
+                cat_kw = cat_record.routing_keywords or []
+
         # Step 6: Extract entities (LLM call per chunk — run in thread)
         total_entities = 0
         total_relationships = 0
@@ -243,7 +252,7 @@ class IngestQueue:
                 break
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                              f"Chunk {i+1}/{len(chunks)} — {total_entities} entities, {total_relationships} relationships so far")
-            extraction = await asyncio.to_thread(extract_entities, chunk.text, category)
+            extraction = await asyncio.to_thread(extract_entities, chunk.text, category, cat_desc, cat_kw)
             entity_id_map = {}
             for ent in extraction.entities:
                 if not isinstance(ent, dict) or "name" not in ent or "type" not in ent:

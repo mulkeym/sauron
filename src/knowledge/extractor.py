@@ -67,9 +67,27 @@ DEFAULT_PROFILE = {
 }
 
 
-def _build_prompt(category: str = "") -> str:
-    """Build a category-aware extraction prompt."""
-    profile = CATEGORY_PROFILES.get(category, DEFAULT_PROFILE)
+def _build_prompt(category: str = "", category_description: str = "", category_keywords: list[str] | None = None) -> str:
+    """Build a category-aware extraction prompt.
+
+    Uses hardcoded profiles for known categories, otherwise auto-generates
+    guidance from the category description and keywords stored in the DB.
+    """
+    if category in CATEGORY_PROFILES:
+        profile = CATEGORY_PROFILES[category]
+    elif category and category != "uncategorized" and (category_description or category_keywords):
+        # Auto-generate guidance from category metadata
+        kw_str = ", ".join(category_keywords[:10]) if category_keywords else ""
+        desc = category_description or category
+        profile = {
+            "guidance": f"This is a {category.upper().replace('_', ' ')} document ({desc}). Focus on extracting the most important entities specific to this domain. Keywords: {kw_str}",
+            "entity_types": DEFAULT_PROFILE["entity_types"],
+            "relationship_types": DEFAULT_PROFILE["relationship_types"],
+            "examples": DEFAULT_PROFILE["examples"],
+        }
+    else:
+        profile = DEFAULT_PROFILE
+
     return BASE_EXTRACTION_PROMPT.format(
         domain_guidance=f"\nDOMAIN CONTEXT: {profile['guidance']}\n",
         entity_types=profile["entity_types"],
@@ -85,7 +103,7 @@ class ExtractionResult:
     sections: list[dict] = field(default_factory=list)
 
 
-def extract_entities(text: str, category: str = "") -> ExtractionResult:
+def extract_entities(text: str, category: str = "", category_description: str = "", category_keywords: list[str] | None = None) -> ExtractionResult:
     if not text.strip():
         return ExtractionResult()
 
@@ -97,7 +115,7 @@ def extract_entities(text: str, category: str = "") -> ExtractionResult:
         logger.debug("Skipping navigation/boilerplate chunk for entity extraction")
         return ExtractionResult()
 
-    prompt = _build_prompt(category)
+    prompt = _build_prompt(category, category_description, category_keywords)
 
     try:
         response = generate(system_prompt=prompt, user_prompt=text[:4000], temperature=0.0, max_tokens=4096)

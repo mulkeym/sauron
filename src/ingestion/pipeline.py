@@ -125,9 +125,18 @@ async def ingest_document(
             await metadata_store.add_category(
                 name=category, description="", acl_groups=acl_groups, routing_keywords=[],
             )
+    # Get category metadata for entity extraction guidance
+    cat_desc = ""
+    cat_kw = []
+    if category and category != "uncategorized":
+        cat_record = await metadata_store.get_category(category)
+        if cat_record:
+            cat_desc = cat_record.description or ""
+            cat_kw = cat_record.routing_keywords or []
+
     # Extract entities and relationships from each chunk
     for chunk in chunks:
-        extraction = extract_entities(chunk.text, category=category)
+        extraction = extract_entities(chunk.text, category=category, category_description=cat_desc, category_keywords=cat_kw)
         entity_id_map = {}
         for ent in extraction.entities:
             eid = await metadata_store.add_entity(name=ent["name"], entity_type=ent["type"], first_seen_doc_id=doc_id)
