@@ -166,14 +166,18 @@ def list_documents_in_category(
     ]
 
 
-async def search_knowledge_graph(query, metadata_store, entity_type=None):
-    entities = await metadata_store.search_entities(query, entity_type=entity_type)
-    if not entities:
-        return {"entity": None, "error": f"No entity found matching '{query}'", "suggestions": "Try a different name or use tool_list_documents to find documents first."}
-    best = entities[0]
-    details = await metadata_store.get_entity_details(best.id)
-    other_matches = [{"name": e.name, "type": e.entity_type} for e in entities[1:5]]
-    return {"entity": details["entity"], "mentions_in": details["mentions"], "relationships": details["relationships"], "other_matches": other_matches}
+async def search_knowledge_graph(query, metadata_store=None, entity_type=None):
+    from src.knowledge.graph_rag import get_graph_data, get_knowledge_graph
+    try:
+        # Try to get a subgraph for the entity
+        kg = await get_knowledge_graph(query, max_depth=2)
+        if kg:
+            return {"query": query, "knowledge_graph": kg}
+        # Fallback to data query
+        data = await get_graph_data(query, mode="local")
+        return {"query": query, "data": data}
+    except Exception as e:
+        return {"query": query, "error": str(e)}
 
 
 def list_sources(

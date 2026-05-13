@@ -14,6 +14,13 @@ ADMIN_STATIC = Path(__file__).parent / "admin" / "static"
 async def lifespan(app: FastAPI):
     store = get_metadata_store()
     await store.init()
+    # Initialize LightRAG knowledge graph
+    try:
+        from src.knowledge.graph_rag import get_lightrag
+        await get_lightrag()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"LightRAG init deferred: {e}")
     yield
 
 def create_app() -> FastAPI:

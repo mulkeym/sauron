@@ -21,6 +21,9 @@ sentence-transformers>=3.3.0
 einops>=0.8.0
 lancedb>=0.30.0
 
+# Knowledge Graph
+lightrag-hku>=1.4.0
+
 # LLM
 openai>=1.55.0
 

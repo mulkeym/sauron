@@ -134,7 +134,6 @@ class IngestQueue:
         from src.ingestion.chunker import chunk_text
         from src.ingestion.embedder import embed_texts
         from src.knowledge.categorizer import categorize_document
-        from src.knowledge.extractor import extract_entities
         from src.retrieval.models import ChunkMetadata
 
         doc_id = str(uuid.uuid4())
@@ -233,60 +232,18 @@ class IngestQueue:
                     name=category, description="", acl_groups=job.acl_groups, routing_keywords=[],
                 )
 
-        # Get category metadata for entity extraction guidance
-        cat_desc = ""
-        cat_kw = []
-        if category and category != "uncategorized":
-            cat_record = await metadata_store.get_category(category)
-            if cat_record:
-                cat_desc = cat_record.description or ""
-                cat_kw = cat_record.routing_keywords or []
-
-        # Step 6: Extract entities (LLM call per chunk — run in thread)
-        total_entities = 0
-        total_relationships = 0
-        if not job.build_graph:
+        # Step 6: Build knowledge graph via LightRAG
+        if job.build_graph:
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph (LightRAG)")
+            from src.knowledge.graph_rag import insert_document as lightrag_insert
+            await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
+        else:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Skipped (knowledge graph disabled)")
-        for i, chunk in enumerate(chunks):
-            if not job.build_graph:
-                break
-            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                             f"Chunk {i+1}/{len(chunks)} — {total_entities} entities, {total_relationships} relationships so far")
-            extraction = await asyncio.to_thread(extract_entities, chunk.text, category, cat_desc, cat_kw)
-            entity_id_map = {}
-            for ent in extraction.entities:
-                if not isinstance(ent, dict) or "name" not in ent or "type" not in ent:
-                    continue
-                eid = await metadata_store.add_entity(name=ent["name"], entity_type=ent["type"], first_seen_doc_id=doc_id)
-                entity_id_map[ent["name"]] = eid
-                await metadata_store.add_mention(entity_id=eid, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
-                total_entities += 1
-            for rel in extraction.relationships:
-                if not isinstance(rel, dict) or "source" not in rel or "target" not in rel:
-                    continue
-                source_id = entity_id_map.get(rel["source"])
-                if source_id is None:
-                    continue
-                target_id = entity_id_map.get(rel["target"])
-                if target_id is None:
-                    target_id = await metadata_store.add_entity(name=rel["target"], entity_type="unknown", first_seen_doc_id=doc_id)
-                    await metadata_store.add_mention(entity_id=target_id, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
-                    total_entities += 1
-                await metadata_store.add_relationship(
-                    source_entity_id=source_id, target_entity_id=target_id,
-                    relationship_type=rel.get("type", "related_to"), doc_id=doc_id,
-                    context_snippet=chunk.text[:100],
-                )
-                total_relationships += 1
-            for section in extraction.sections:
-                if isinstance(section, dict) and "name" in section:
-                    section_id = await metadata_store.add_entity(name=section["name"], entity_type="document_section", first_seen_doc_id=doc_id)
-                    await metadata_store.add_mention(entity_id=section_id, doc_id=doc_id, chunk_index=chunk.index, context_snippet=chunk.text[:200])
-                    total_entities += 1
 
         # Done
         self.complete_job(job.job_id, doc_id=doc_id, chunk_count=len(chunks),
-                          entity_count=total_entities, relationship_count=total_relationships)
+                          entity_count=0, relationship_count=0)
 
         # Cleanup temp file
         try:
