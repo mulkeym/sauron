@@ -3,101 +3,78 @@
 {% block content %}
 <h1>Knowledge Graph</h1>
 
-<div class="settings-section">
-    <div class="form-row">
-        <div class="form-group">
-            <label for="kg-search">Search Entities</label>
-            <div class="input-with-button">
-                <input type="text" id="kg-search" name="query" placeholder="e.g., TOEE 26, Mike, Policy 4.2">
-                <button type="button" onclick="searchGraph()">Search</button>
-                <button type="button" class="secondary" onclick="loadFullGraph()">Show All</button>
-            </div>
-        </div>
-        <div class="form-group">
-            <label for="kg-type-filter">Filter by type</label>
-            <select id="kg-type-filter" name="entity_type" onchange="loadFullGraph()">
-                <option value="">All types</option>
-                <option value="person">Person</option>
-                <option value="organization">Organization</option>
-                <option value="policy">Policy</option>
-                <option value="project">Project</option>
-                <option value="system">System</option>
-                <option value="date">Date</option>
-                <option value="location">Location</option>
-                <option value="document_section">Document Section</option>
-            </select>
-        </div>
-    </div>
-</div>
+<p class="section-desc">Powered by LightRAG — entities and relationships extracted automatically during document ingestion.</p>
 
 <div id="graph-container" style="width:100%; height:500px; background:white; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-bottom:1.5rem;"></div>
 
-{% if merge_proposals %}
-<div class="settings-section" style="border-left: 3px solid #ea580c;">
-    <h2>Pending Merge Proposals ({{ merge_proposals | length }})</h2>
+<div class="settings-section">
+    <h2>Entities ({{ entities | length }})</h2>
+    {% if entities %}
     <table>
-        <thead><tr><th>Entity A</th><th>Entity B</th><th>Confidence</th><th>Reason</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th></tr></thead>
         <tbody>
-            {% for p in merge_proposals %}
-            <tr id="merge-{{ p.id }}">
-                <td>{{ p.entity_a_name }}</td>
-                <td>{{ p.entity_b_name }}</td>
-                <td>{{ "%.0f" | format(p.confidence * 100) }}%</td>
-                <td>{{ p.reason }}</td>
-                <td>
-                    <button hx-post="/admin/api/knowledge-graph/merge/{{ p.id }}/approve" hx-target="#merge-{{ p.id }}" hx-swap="innerHTML">Merge</button>
-                    <button class="danger" hx-post="/admin/api/knowledge-graph/merge/{{ p.id }}/reject" hx-target="#merge-{{ p.id }}" hx-swap="innerHTML">Reject</button>
-                </td>
-            </tr>
+            {% for e in entities %}
+            <tr><td>{{ e.name }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No entities yet. Ingest documents with "Build knowledge graph" enabled.</p>
+    {% endif %}
+</div>
+
+{% if relationships %}
+<div class="settings-section">
+    <h2>Relationships ({{ relationships | length }})</h2>
+    <table>
+        <thead><tr><th>Source</th><th>Target</th></tr></thead>
+        <tbody>
+            {% for r in relationships %}
+            <tr><td>{{ r.source }}</td><td>{{ r.target }}</td></tr>
             {% endfor %}
         </tbody>
     </table>
 </div>
 {% endif %}
 
-<div id="entity-detail" class="settings-section" style="display:none;">
-    <h2 id="detail-name"></h2>
-    <div id="detail-content"></div>
-</div>
-
-<div id="kg-table">
-{% if entities %}
-<h2 style="margin-bottom:1rem;">Entity List</h2>
-<table>
-    <thead><tr><th>Name</th><th>Type</th><th>First Seen In</th><th>Actions</th></tr></thead>
-    <tbody>
-        {% for e in entities %}
-        <tr>
-            <td>{{ e.name }}</td>
-            <td>{{ e.entity_type }}</td>
-            <td>{{ e.first_seen_doc_id[:12] }}...</td>
-            <td><button onclick="focusEntity({{ e.id }})">View</button></td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% endif %}
-</div>
-
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
 <script>
-const TYPE_COLORS = {
-    person: '#2563eb',
-    organization: '#16a34a',
-    policy: '#dc2626',
-    project: '#ea580c',
-    system: '#9333ea',
-    date: '#6b7280',
-    location: '#0891b2',
-    document_section: '#ca8a04',
-    unknown: '#9ca3af',
-};
+document.addEventListener('DOMContentLoaded', function() {
+    const entities = {{ entities | tojson }};
+    const relationships = {{ relationships | tojson }};
 
-let cy = null;
+    if (!entities.length) return;
 
-function initGraph(elements) {
-    if (cy) cy.destroy();
-    cy = cytoscape({
+    const elements = [];
+    const nodeSet = new Set();
+
+    // Add entity nodes
+    entities.forEach(e => {
+        if (!nodeSet.has(e.name)) {
+            nodeSet.add(e.name);
+            elements.push({
+                data: { id: e.name, label: e.name },
+            });
+        }
+    });
+
+    // Add relationship edges
+    relationships.forEach(r => {
+        // Ensure both endpoints exist as nodes
+        if (!nodeSet.has(r.source)) {
+            nodeSet.add(r.source);
+            elements.push({ data: { id: r.source, label: r.source } });
+        }
+        if (!nodeSet.has(r.target)) {
+            nodeSet.add(r.target);
+            elements.push({ data: { id: r.target, label: r.target } });
+        }
+        elements.push({
+            data: { source: r.source, target: r.target },
+        });
+    });
+
+    cytoscape({
         container: document.getElementById('graph-container'),
         elements: elements,
         style: [
@@ -105,47 +82,27 @@ function initGraph(elements) {
                 selector: 'node',
                 style: {
                     'label': 'data(label)',
-                    'background-color': 'data(color)',
+                    'background-color': '#2563eb',
                     'color': '#1f2937',
                     'text-valign': 'bottom',
                     'text-margin-y': 6,
                     'font-size': '11px',
-                    'width': 'data(size)',
-                    'height': 'data(size)',
+                    'width': 25,
+                    'height': 25,
                     'text-wrap': 'ellipsis',
-                    'text-max-width': '100px',
+                    'text-max-width': '120px',
                 }
             },
             {
                 selector: 'edge',
                 style: {
-                    'label': 'data(label)',
                     'width': 2,
                     'line-color': '#d1d5db',
                     'target-arrow-color': '#9ca3af',
                     'target-arrow-shape': 'triangle',
                     'curve-style': 'bezier',
-                    'font-size': '9px',
-                    'color': '#6b7280',
-                    'text-rotation': 'autorotate',
-                    'text-margin-y': -10,
                 }
             },
-            {
-                selector: 'node:selected',
-                style: {
-                    'border-width': 3,
-                    'border-color': '#1f2937',
-                }
-            },
-            {
-                selector: '.highlighted',
-                style: {
-                    'border-width': 3,
-                    'border-color': '#2563eb',
-                    'background-color': '#2563eb',
-                }
-            }
         ],
         layout: {
             name: 'cose',
@@ -156,71 +113,6 @@ function initGraph(elements) {
             gravity: 0.3,
         },
     });
-
-    cy.on('tap', 'node', function(evt) {
-        const id = evt.target.data('entityId');
-        if (id) showEntityDetail(id);
-    });
-}
-
-async function loadFullGraph() {
-    const typeFilter = document.getElementById('kg-type-filter').value;
-    const url = '/admin/api/knowledge-graph/graph-data' + (typeFilter ? '?entity_type=' + typeFilter : '');
-    const resp = await fetch(url);
-    const data = await resp.json();
-    initGraph(data.elements);
-}
-
-async function searchGraph() {
-    const query = document.getElementById('kg-search').value;
-    if (!query) { loadFullGraph(); return; }
-    const resp = await fetch('/admin/api/knowledge-graph/graph-data?query=' + encodeURIComponent(query));
-    const data = await resp.json();
-    initGraph(data.elements);
-}
-
-async function focusEntity(entityId) {
-    const resp = await fetch('/admin/api/knowledge-graph/graph-data?entity_id=' + entityId);
-    const data = await resp.json();
-    initGraph(data.elements);
-    showEntityDetail(entityId);
-}
-
-async function showEntityDetail(entityId) {
-    const resp = await fetch('/admin/api/knowledge-graph/detail-json?entity_id=' + entityId);
-    const data = await resp.json();
-    if (!data.entity) return;
-
-    const detail = document.getElementById('entity-detail');
-    document.getElementById('detail-name').textContent = data.entity.name + ' (' + data.entity.type + ')';
-
-    let html = '';
-    if (data.mentions.length > 0) {
-        html += '<h3>Mentioned in ' + data.mentions.length + ' places</h3><table><thead><tr><th>Document</th><th>Context</th></tr></thead><tbody>';
-        data.mentions.forEach(m => {
-            html += '<tr><td>' + m.doc_id.substring(0,12) + '...</td><td>' + (m.context_snippet || '').substring(0,120) + '</td></tr>';
-        });
-        html += '</tbody></table>';
-    }
-    if (data.relationships.length > 0) {
-        html += '<h3>' + data.relationships.length + ' Relationships</h3><table><thead><tr><th>Entity</th><th>Relationship</th><th>Direction</th></tr></thead><tbody>';
-        data.relationships.forEach(r => {
-            html += '<tr><td>' + r.related_entity + '</td><td>' + r.relationship_type + '</td><td>' + r.direction + '</td></tr>';
-        });
-        html += '</tbody></table>';
-    }
-
-    document.getElementById('detail-content').innerHTML = html;
-    detail.style.display = 'block';
-
-    // Highlight the node in the graph
-    if (cy) {
-        cy.nodes().removeClass('highlighted');
-        cy.nodes('[entityId="' + entityId + '"]').addClass('highlighted');
-    }
-}
-
-// Load graph on page load
-document.addEventListener('DOMContentLoaded', loadFullGraph);
+});
 </script>
 {% endblock %}

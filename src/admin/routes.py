@@ -19,7 +19,18 @@ async def dashboard(request: Request):
     docs = await store.list_documents()
     categories = await store.list_categories()
     proposals = await store.list_proposals(status="pending")
-    entities = await store.list_entities(limit=10000)
+    # LightRAG entity count
+    entity_count = 0
+    try:
+        import json
+        from pathlib import Path
+        kg_file = Path("data/lightrag/kv_store_full_entities.json")
+        if kg_file.exists():
+            data = json.loads(kg_file.read_text())
+            for v in data.values():
+                entity_count = len(v.get("entity_names", []))
+    except Exception:
+        pass
 
     # LanceDB stats
     vector_count = 0
@@ -31,7 +42,7 @@ async def dashboard(request: Request):
 
     return templates.TemplateResponse(request, "dashboard.html", {
         "doc_count": len(docs), "category_count": len(categories),
-        "pending_proposals": len(proposals), "entity_count": len(entities),
+        "pending_proposals": len(proposals), "entity_count": entity_count,
         "vector_count": vector_count,
     })
 
@@ -704,10 +715,33 @@ async def queue_status():
 
 @router.get("/knowledge-graph", response_class=HTMLResponse)
 async def knowledge_graph_page(request: Request):
-    store = get_metadata_store()
-    entities = await store.list_entities(limit=500)
-    merge_proposals = await store.list_merge_proposals(status="pending")
-    return templates.TemplateResponse(request, "knowledge_graph.html", {"entities": entities, "merge_proposals": merge_proposals})
+    # Read entities and relationships from LightRAG
+    import json as json_mod
+    from pathlib import Path
+
+    entities = []
+    relationships = []
+    try:
+        ent_file = Path("data/lightrag/kv_store_full_entities.json")
+        if ent_file.exists():
+            data = json_mod.loads(ent_file.read_text())
+            for v in data.values():
+                for name in v.get("entity_names", []):
+                    entities.append({"name": name, "type": "entity"})
+
+        rel_file = Path("data/lightrag/kv_store_full_relations.json")
+        if rel_file.exists():
+            data = json_mod.loads(rel_file.read_text())
+            for v in data.values():
+                for pair in v.get("relation_pairs", []):
+                    if len(pair) >= 2:
+                        relationships.append({"source": pair[0], "target": pair[1]})
+    except Exception:
+        pass
+
+    return templates.TemplateResponse(request, "knowledge_graph.html", {
+        "entities": entities, "relationships": relationships, "merge_proposals": [],
+    })
 
 
 @router.post("/api/knowledge-graph/merge/{proposal_id}/approve")
