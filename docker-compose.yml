@@ -65,20 +65,5 @@ services:
       - app_data:/app/data
     restart: unless-stopped
 
-  # OpenWebUI (optional — connects to mcpo for MCP tools)
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.9.0
-    ports:
-      - "3000:8080"
-    environment:
-      - OPENAI_API_BASE_URL=http://api:8080/v1
-      - OPENAI_API_KEY=${API_KEYS:-dev-key-1}
-    volumes:
-      - webui_data:/app/backend/data
-    depends_on:
-      - api
-    restart: unless-stopped
-
 volumes:
   app_data:
-  webui_data:
