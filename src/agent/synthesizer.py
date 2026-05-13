@@ -94,6 +94,14 @@ def synthesize_answer(state: AgentState) -> dict:
         max_tokens=4096,
     )
 
+    # Deduplicate citations — one per document, with best relevance score
+    seen_docs = {}
+    for c in chunks:
+        doc_id = c.metadata.doc_id
+        if doc_id == "knowledge-graph":
+            continue
+        if doc_id not in seen_docs or c.score > seen_docs[doc_id].score:
+            seen_docs[doc_id] = c
     citations = [
         Citation(
             doc_id=c.metadata.doc_id,
@@ -104,6 +112,6 @@ def synthesize_answer(state: AgentState) -> dict:
             snippet=c.text[:200],
             relevance=c.score,
         )
-        for c in chunks
+        for c in seen_docs.values()
     ]
     return {"answer": answer, "citations": citations}

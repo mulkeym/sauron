@@ -199,10 +199,13 @@ class VectorStore:
             logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
             return self.hybrid_search(vector, text_query, user_groups, top_k, tier)
 
-    def get_chunks_by_doc(self, doc_id: str, limit: int = 200) -> list[RetrievedChunk]:
-        """Retrieve all chunks for a given document."""
+    def get_chunks_by_doc(self, doc_id: str, limit: int = 200, tier: str | None = None) -> list[RetrievedChunk]:
+        """Retrieve chunks for a document, optionally filtered by tier."""
         try:
-            results = self.table.search().where(f"doc_id = '{doc_id}'").limit(limit).to_list()
+            where = f"doc_id = '{doc_id}'"
+            if tier:
+                where += f" AND chunk_size_tier = '{tier}'"
+            results = self.table.search().where(where).limit(limit).to_list()
             chunks = self._results_to_chunks(results)
             chunks.sort(key=lambda c: c.metadata.chunk_index)
             return chunks
@@ -211,9 +214,16 @@ class VectorStore:
             return []
 
     def expand_window(self, chunks: list[RetrievedChunk], window: int = 3) -> list[RetrievedChunk]:
-        """Pull neighboring chunks from the same document."""
+        """Pull neighboring chunks from the same document and tier."""
         if not chunks:
             return chunks
+
+        # Detect the dominant tier from input chunks to stay consistent
+        tier_counts: dict[str, int] = {}
+        for c in chunks:
+            t = c.metadata.chunk_size_tier
+            tier_counts[t] = tier_counts.get(t, 0) + 1
+        dominant_tier = max(tier_counts, key=tier_counts.get) if tier_counts else "medium"
 
         # Collect doc_ids that need expansion
         doc_chunk_map: dict[str, set[int]] = {}
@@ -242,7 +252,7 @@ class VectorStore:
             try:
                 results = (
                     self.table.search()
-                    .where(f"doc_id = '{doc_id}' AND chunk_index IN ({idx_list})")
+                    .where(f"doc_id = '{doc_id}' AND chunk_index IN ({idx_list}) AND chunk_size_tier = '{dominant_tier}'")
                     .limit(len(needed_indexes))
                     .to_list()
                 )

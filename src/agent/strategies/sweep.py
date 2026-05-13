@@ -28,17 +28,14 @@ def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 50
 
     logger.info(f"Sweep: found {len(relevant_doc_ids)} relevant documents from xlarge search")
 
-    # Step 2: Retrieve all large chunks from each relevant document
+    # Step 2: Retrieve large-tier chunks from each relevant document (one tier only, no duplicates)
     all_chunks: list[RetrievedChunk] = []
     for doc_id in relevant_doc_ids:
-        doc_chunks = vector_store.get_chunks_by_doc(doc_id)
-        # Filter to large tier only — avoids duplicate content from smaller tiers
-        large_chunks = [c for c in doc_chunks if c.metadata.chunk_size_tier == "large"]
-        if large_chunks:
-            all_chunks.extend(large_chunks)
-        else:
+        doc_chunks = vector_store.get_chunks_by_doc(doc_id, tier="large")
+        if not doc_chunks:
             # Fallback if no large chunks (old data without tiers)
-            all_chunks.extend(doc_chunks)
+            doc_chunks = vector_store.get_chunks_by_doc(doc_id)
+        all_chunks.extend(doc_chunks)
 
     logger.info(f"Sweep: retrieved {len(all_chunks)} large chunks from {len(relevant_doc_ids)} documents")
 
