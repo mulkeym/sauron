@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     embedding_mode: str = "local"  # "local" (sentence-transformers, no server needed) or "api" (external endpoint)
     embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint (only used when mode=api)
     embedding_model_name: str = "nomic-ai/nomic-embed-text-v1"  # local default; set to API model name when mode=api
-    embedding_device: str = "cpu"  # "cpu" or "cuda" (only used when mode=local)
+    embedding_device: str = "cpu"  # "cpu", "cuda", "cuda:0", or "multi-gpu" (only used when mode=local)
+    embedding_batch_size: int = 64  # batch size for local embedding
     embedding_dimension: int = 0  # auto-detect from first embedding call if 0
 
     # LanceDB

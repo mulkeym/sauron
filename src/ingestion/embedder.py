@@ -76,21 +76,53 @@ def _embed_via_api(texts: list[str]) -> list[list[float]]:
 def _get_local_model():
     """Load and cache the local embedding model."""
     from sentence_transformers import SentenceTransformer
-    logger.info(f"Loading local embedding model: {settings.embedding_model_name}")
+    device = settings.embedding_device
+    if device == "multi-gpu":
+        device = "cuda"  # base model on first GPU; multi-GPU handled in encode
+    logger.info(f"Loading local embedding model: {settings.embedding_model_name} on {device}")
     model = SentenceTransformer(
         settings.embedding_model_name,
-        device=settings.embedding_device,
+        device=device,
         trust_remote_code=True,
     )
     dim = model.get_embedding_dimension() if hasattr(model, 'get_embedding_dimension') else model.get_sentence_embedding_dimension()
-    logger.info(f"Model loaded: {dim} dimensions")
+    logger.info(f"Model loaded: {dim} dimensions on {device}")
     return model
 
 
-def _embed_via_local(texts: list[str], batch_size: int = 32) -> list[list[float]]:
-    """Embed using local sentence-transformers model."""
+def _get_gpu_count() -> int:
+    """Detect available CUDA GPUs."""
+    try:
+        import torch
+        return torch.cuda.device_count()
+    except Exception:
+        return 0
+
+
+def _embed_via_local(texts: list[str], batch_size: int = 0) -> list[list[float]]:
+    """Embed using local sentence-transformers model.
+
+    Supports multi-GPU via sentence-transformers' encode_multi_process
+    when EMBEDDING_DEVICE=multi-gpu and multiple GPUs are available.
+    """
     import numpy as np
+    if batch_size == 0:
+        batch_size = settings.embedding_batch_size
+
     model = _get_local_model()
+
+    # Multi-GPU: use encode_multi_process for parallel encoding
+    if settings.embedding_device == "multi-gpu":
+        gpu_count = _get_gpu_count()
+        if gpu_count > 1:
+            pool = model.start_multi_process_pool(
+                target_devices=[f"cuda:{i}" for i in range(gpu_count)]
+            )
+            logger.info(f"Multi-GPU embedding: {len(texts)} texts across {gpu_count} GPUs")
+            embeddings = model.encode_multi_process(texts, pool, batch_size=batch_size)
+            model.stop_multi_process_pool(pool)
+            return embeddings.tolist()
+
     embeddings: np.ndarray = model.encode(texts, batch_size=batch_size, show_progress_bar=False)
     return embeddings.tolist()
 
