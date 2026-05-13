@@ -19,24 +19,19 @@ async def dashboard(request: Request):
     docs = await store.list_documents()
     categories = await store.list_categories()
     proposals = await store.list_proposals(status="pending")
-    # LightRAG entity count
+    # Quick stats — avoid slow table scans on every page load
     entity_count = 0
+    vector_count = 0
     try:
-        import json
         from pathlib import Path
         kg_file = Path("data/lightrag/kv_store_full_entities.json")
         if kg_file.exists():
-            data = json.loads(kg_file.read_text())
-            for v in data.values():
-                entity_count = len(v.get("entity_names", []))
+            entity_count = kg_file.stat().st_size // 50  # rough estimate from file size
     except Exception:
         pass
-
-    # LanceDB stats
-    vector_count = 0
     try:
         vs = get_vector_store()
-        vector_count = len(vs.table)
+        vector_count = vs.table.count_rows()
     except Exception:
         pass
 
@@ -715,7 +710,16 @@ async def queue_status():
 
 @router.get("/knowledge-graph", response_class=HTMLResponse)
 async def knowledge_graph_page(request: Request):
-    # Read entities and relationships from LightRAG
+    # Read entities and relationships from LightRAG — load in thread to avoid blocking
+    import asyncio
+    entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
+    return templates.TemplateResponse(request, "knowledge_graph.html", {
+        "entities": entities, "relationships": relationships,
+    })
+
+
+def _load_lightrag_graph():
+    """Load LightRAG graph data from JSON files (runs in thread)."""
     import json as json_mod
     from pathlib import Path
 
@@ -738,10 +742,7 @@ async def knowledge_graph_page(request: Request):
                         relationships.append({"source": pair[0], "target": pair[1]})
     except Exception:
         pass
-
-    return templates.TemplateResponse(request, "knowledge_graph.html", {
-        "entities": entities, "relationships": relationships, "merge_proposals": [],
-    })
+    return entities, relationships
 
 
 @router.post("/api/knowledge-graph/merge/{proposal_id}/approve")
