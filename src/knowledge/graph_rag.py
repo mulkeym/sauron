@@ -104,9 +104,9 @@ async def get_lightrag() -> LightRAG:
         ),
         embedding_batch_num=10,
 
-        # Chunking — LightRAG handles its own chunking for graph extraction
-        chunk_token_size=1200,
-        chunk_overlap_token_size=100,
+        # Chunking — smaller chunks help smaller models extract entities more reliably
+        chunk_token_size=500,
+        chunk_overlap_token_size=50,
 
         # Storage — file-based, zero infrastructure
         kv_storage="JsonKVStorage",
