@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
     yield
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="RAG Knowledge Service", description="Agentic RAG system with document-level access control", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="SAURON", description="Structured Agentic Unified Retrieval Over Networks", version="0.1.0", lifespan=lifespan)
 
     @app.get("/api/health")
     async def health():

@@ -15,7 +15,7 @@ def create_mcp_server(
     metadata_store: MetadataStore,
     agent_registry: AgentRegistry,
 ) -> FastMCP:
-    mcp = FastMCP("rag-knowledge-service")
+    mcp = FastMCP("sauron")
     job_store = JobStore()
 
     @mcp.tool()

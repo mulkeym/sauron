@@ -25,7 +25,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "rag-knowledge-service"
+    model: str = "sauron"
     messages: list[ChatMessage]
     temperature: float = 0.1
     max_tokens: int = 2048
@@ -38,7 +38,7 @@ async def list_models():
         "object": "list",
         "data": [
             {
-                "id": "rag-knowledge-service",
+                "id": "sauron",
                 "object": "model",
                 "created": int(time.time()),
                 "owned_by": "local",
