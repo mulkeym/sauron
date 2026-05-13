@@ -914,25 +914,13 @@ async def save_settings(
 async def list_llm_models(vllm_base_url: str = Form("")):
     url = vllm_base_url or settings.vllm_base_url
     try:
-        import subprocess
-        import json
-
-        # Use curl with -4 flag to force IPv4 (avoids IPv6 timeout issues with VPN)
-        result = subprocess.run(
-            ['curl', '-4', '-s', f'{url}/models'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            model_ids = [m['id'] for m in data.get('data', [])]
-            if not model_ids:
-                return HTMLResponse('<select name="vllm_model_name" id="vllm_model_name"><option value="">No models found</option></select>')
-            options = "".join(f'<option value="{m}">{m}</option>' for m in model_ids)
-            return HTMLResponse(f'<select name="vllm_model_name" id="vllm_model_name">{options}</select>')
-        else:
-            return HTMLResponse(f'<select name="vllm_model_name" id="vllm_model_name"><option value="">Error: {result.stderr}</option></select>')
+        import requests as req
+        resp = req.get(f'{url}/models', timeout=10)
+        model_ids = [m['id'] for m in resp.json().get('data', [])]
+        if not model_ids:
+            return HTMLResponse('<select name="vllm_model_name" id="vllm_model_name"><option value="">No models found</option></select>')
+        options = "".join(f'<option value="{m}">{m}</option>' for m in model_ids)
+        return HTMLResponse(f'<select name="vllm_model_name" id="vllm_model_name">{options}</select>')
     except Exception as e:
         return HTMLResponse(f'<select name="vllm_model_name" id="vllm_model_name"><option value="">Error: {e}</option></select>')
 
@@ -941,25 +929,13 @@ async def list_llm_models(vllm_base_url: str = Form("")):
 async def list_embedding_models(embedding_api_url: str = Form("")):
     url = embedding_api_url or settings.embedding_api_url
     try:
-        import subprocess
-        import json
-
-        # Use curl with -4 flag to force IPv4 (avoids IPv6 timeout issues with VPN)
-        result = subprocess.run(
-            ['curl', '-4', '-s', f'{url}/models'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            model_ids = [m['id'] for m in data.get('data', [])]
-            if not model_ids:
-                return HTMLResponse('<select name="embedding_model_name" id="embedding_model_name"><option value="">No models found</option></select>')
-            options = "".join(f'<option value="{m}">{m}</option>' for m in model_ids)
-            return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name">{options}</select>')
-        else:
-            return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name"><option value="">Error: {result.stderr}</option></select>')
+        import requests as req
+        resp = req.get(f'{url}/models', timeout=10)
+        model_ids = [m['id'] for m in resp.json().get('data', [])]
+        if not model_ids:
+            return HTMLResponse('<select name="embedding_model_name" id="embedding_model_name"><option value="">No models found</option></select>')
+        options = "".join(f'<option value="{m}">{m}</option>' for m in model_ids)
+        return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name">{options}</select>')
     except Exception as e:
         return HTMLResponse(f'<select name="embedding_model_name" id="embedding_model_name"><option value="">Error: {e}</option></select>')
 
@@ -1030,22 +1006,10 @@ async def reconcile_status():
 async def test_llm_connection(vllm_base_url: str = Form("")):
     url = vllm_base_url or settings.vllm_base_url
     try:
-        import subprocess
-        import json
-
-        # Use curl with -4 flag to force IPv4 (avoids IPv6 timeout issues with VPN)
-        result = subprocess.run(
-            ['curl', '-4', '-s', f'{url}/models'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            model_ids = [m['id'] for m in data.get('data', [])[:3]]
-            return HTMLResponse(f'<span class="status-ok">Connected to {url}. Models: {", ".join(model_ids)}</span>')
-        else:
-            return HTMLResponse(f'<span class="status-err">Failed connecting to {url}: {result.stderr}</span>')
+        import requests as req
+        resp = req.get(f'{url}/models', timeout=10)
+        model_ids = [m['id'] for m in resp.json().get('data', [])[:3]]
+        return HTMLResponse(f'<span class="status-ok">Connected to {url}. Models: {", ".join(model_ids)}</span>')
     except Exception as e:
         return HTMLResponse(f'<span class="status-err">Failed connecting to {url}: {e}</span>')
 
@@ -1061,28 +1025,14 @@ async def test_embedding_connection(
     model_name = embedding_model_name or settings.embedding_model_name
     try:
         if mode == "api":
-            import subprocess
-            import json
-
-            # Use curl with -4 flag to force IPv4 (avoids IPv6 timeout issues with VPN)
-            result = subprocess.run(
-                ['curl', '-4', '-s', '-X', 'POST', f'{url}/embeddings',
-                 '-H', 'Content-Type: application/json',
-                 '-d', json.dumps({"model": model_name, "input": ["test"]})],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                dim = len(data['data'][0]['embedding'])
-                return HTMLResponse(f'<span class="status-ok">Connected to {url}. Model: {model_name}, Dimension: {dim}</span>')
-            else:
-                return HTMLResponse(f'<span class="status-err">Failed: {result.stderr}</span>')
+            import requests as req
+            resp = req.post(f'{url}/embeddings', json={"model": model_name, "input": ["test"]}, timeout=10)
+            dim = len(resp.json()['data'][0]['embedding'])
+            return HTMLResponse(f'<span class="status-ok">Connected to {url}. Model: {model_name}, Dimension: {dim}</span>')
         else:
             from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(model_name, device=settings.embedding_device)
-            dim = model.get_sentence_embedding_dimension()
+            model = SentenceTransformer(model_name, device=settings.embedding_device, trust_remote_code=True)
+            dim = model.get_embedding_dimension() if hasattr(model, 'get_embedding_dimension') else model.get_sentence_embedding_dimension()
             return HTMLResponse(f'<span class="status-ok">Loaded locally. Model: {model_name}, Dimension: {dim}</span>')
     except Exception as e:
         return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')

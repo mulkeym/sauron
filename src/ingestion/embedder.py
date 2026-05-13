@@ -1,7 +1,8 @@
 import json
 import logging
-import subprocess
 from functools import lru_cache
+
+import requests
 
 from src.config import settings
 
@@ -25,50 +26,32 @@ def _get_prefixes() -> dict:
     return MODEL_PREFIXES["default"]
 
 
-def _curl_post(url: str, payload: dict, timeout: int = 60) -> dict:
-    """POST JSON via curl using a temp file to avoid argument length limits."""
-    import tempfile, os
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        f.write(json.dumps(payload))
-        payload_file = f.name
-    try:
-        result = subprocess.run(
-            ['curl', '-4', '-s', '-X', 'POST', url,
-             '-H', 'Content-Type: application/json',
-             '-d', f'@{payload_file}'],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    finally:
-        os.unlink(payload_file)
-    if result.returncode != 0:
-        raise RuntimeError(f"Request failed: {result.stderr}")
-    response = json.loads(result.stdout)
-    if 'error' in response:
-        raise RuntimeError(f"API error: {response['error']}")
-    return response
-
-
-def _embed_single(text: str) -> list[float]:
-    """Embed a single text via API."""
-    response = _curl_post(
-        f'{settings.embedding_api_url}/embeddings',
-        {"model": settings.embedding_model_name, "input": text},
-    )
-    return response['data'][0]['embedding']
-
-
 def _embed_via_api(texts: list[str]) -> list[list[float]]:
-    """Call an OpenAI-compatible /v1/embeddings endpoint with IPv4 forcing."""
+    """Call an OpenAI-compatible /v1/embeddings endpoint."""
     try:
-        response = _curl_post(
+        resp = requests.post(
             f'{settings.embedding_api_url}/embeddings',
-            {"model": settings.embedding_model_name, "input": texts},
+            json={"model": settings.embedding_model_name, "input": texts},
             timeout=120,
         )
-        return [item['embedding'] for item in response['data']]
-    except Exception:
-        # Fallback: send individually
-        return [_embed_single(text) for text in texts]
+        resp.raise_for_status()
+        data = resp.json()
+        if 'data' in data:
+            return [item['embedding'] for item in data['data']]
+    except Exception as e:
+        logger.warning(f"Batch embedding failed, trying individually: {e}")
+
+    # Fallback: send individually
+    embeddings = []
+    for text in texts:
+        resp = requests.post(
+            f'{settings.embedding_api_url}/embeddings',
+            json={"model": settings.embedding_model_name, "input": text},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        embeddings.append(resp.json()['data'][0]['embedding'])
+    return embeddings
 
 
 @lru_cache(maxsize=1)
@@ -110,11 +93,7 @@ def _get_gpu_count() -> int:
 
 
 def _embed_via_local(texts: list[str], batch_size: int = 0) -> list[list[float]]:
-    """Embed using local sentence-transformers model.
-
-    Supports multi-GPU via sentence-transformers' encode_multi_process
-    when EMBEDDING_DEVICE=multi-gpu and multiple GPUs are available.
-    """
+    """Embed using local sentence-transformers model."""
     import numpy as np
     if batch_size == 0:
         batch_size = settings.embedding_batch_size
