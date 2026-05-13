@@ -25,10 +25,21 @@ def _detect_vector_size() -> int:
 
 
 class VectorStore:
+    _cross_encoder = None  # class-level cache for CrossEncoder model
+
     def __init__(self):
         self.db = lancedb.connect(settings.lancedb_path)
         self.table_name = settings.lancedb_table_name
         self._table = None
+
+    @classmethod
+    def _get_cross_encoder(cls):
+        """Lazy-load and cache the CrossEncoder reranker (loads model once)."""
+        if cls._cross_encoder is None:
+            from lancedb.rerankers import CrossEncoderReranker
+            cls._cross_encoder = CrossEncoderReranker(column="text")
+            logger.info("CrossEncoder model loaded and cached")
+        return cls._cross_encoder
 
     @property
     def table(self):
@@ -171,11 +182,9 @@ class VectorStore:
 
     def hybrid_search_reranked(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
         """Hybrid search with CrossEncoder reranking for highest quality."""
-        from lancedb.rerankers import CrossEncoderReranker
-
         combined = self._build_filter(user_groups, tier)
         try:
-            reranker = CrossEncoderReranker(column="text")
+            reranker = self._get_cross_encoder()
             query = (
                 self.table.search(query_type="hybrid")
                 .vector(vector)
