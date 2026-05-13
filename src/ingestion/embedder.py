@@ -75,10 +75,21 @@ def _embed_via_api(texts: list[str]) -> list[list[float]]:
 @lru_cache(maxsize=1)
 def _get_local_model():
     """Load and cache the local embedding model."""
+    import os
     from sentence_transformers import SentenceTransformer
+
     device = settings.embedding_device
     if device == "multi-gpu":
         device = "cuda"  # base model on first GPU; multi-GPU handled in encode
+
+    # Maximize CPU thread usage
+    if device == "cpu":
+        import torch
+        cores = os.cpu_count() or 4
+        torch.set_num_threads(cores)
+        torch.set_num_interop_threads(cores)
+        logger.info(f"CPU threading: {cores} cores")
+
     logger.info(f"Loading local embedding model: {settings.embedding_model_name} on {device}")
     model = SentenceTransformer(
         settings.embedding_model_name,
