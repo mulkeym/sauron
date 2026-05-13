@@ -15,14 +15,44 @@ Rules:
 - If the context does not contain enough information, say so clearly.
 - Be THOROUGH and COMPLETE. Include ALL relevant information from the context, not just the first match.
 - When asked about what someone said or asked, list EVERY instance found in the context.
-- When listing items, use bullet points or numbered lists for clarity."""
+- When listing items, use bullet points or numbered lists for clarity.
+
+IMPORTANT: Output ONLY the final answer. Do NOT show your reasoning, self-corrections, internal checks, or thought process. No lines like "Wait, checking...", "Re-checking...", "Self-correction...", "Check: Did I miss any?". Just provide the clean, organized answer."""
 
 USER_PROMPT_TEMPLATE = """Context:
 {context}
 
 Question: {question}
 
-Answer the question thoroughly based on ALL the context above. Include every relevant detail found. Cite sources using [N] notation."""
+Provide a clean, organized answer based on ALL the context above. Include every relevant detail. Cite sources using [N] notation. Do NOT include your reasoning process — only the final answer."""
+
+def _strip_reasoning_artifacts(text: str) -> str:
+    """Remove thinking model reasoning that leaked into the answer."""
+    import re
+    lines = text.split("\n")
+    cleaned = []
+    reasoning_patterns = [
+        r'^\s*\*\s*\*?(Wait|Re-check|Self-Correct|Check:|Conclusion:|Scanning|Let me)',
+        r'^\s*\*\s*Constraint \d+:',
+        r'^\s*\*\s*Question:\s*"',
+        r'^\s*\*\s*\*?(Task|Plan):',
+        r'^\s*\*\s*Did I (miss|include)',
+        r'^\s*\*\s*\*?Final check',
+        r'^\s*\*\s*\*?No,\s+let me re-read',
+    ]
+    pattern = re.compile("|".join(reasoning_patterns), re.IGNORECASE)
+    for line in lines:
+        if not pattern.match(line):
+            cleaned.append(line)
+    result = "\n".join(cleaned).strip()
+    # Remove runs of empty bullet points
+    result = re.sub(r'(\n\s*\*\s*\n){2,}', '\n', result)
+    if len(result) < len(text) * 0.5 and len(text) > 100:
+        # If we stripped more than half, something went wrong — return original
+        logger.warning("Reasoning strip removed too much content, keeping original")
+        return text
+    return result
+
 
 RELEVANCE_PROMPT = """Rate each chunk's relevance to the question. Return ONLY a JSON array of chunk numbers (1-based) that are relevant.
 
@@ -93,6 +123,9 @@ def synthesize_answer(state: AgentState) -> dict:
         user_prompt=USER_PROMPT_TEMPLATE.format(context=context, question=question),
         max_tokens=4096,
     )
+
+    # Strip thinking model reasoning artifacts that leak into the answer
+    answer = _strip_reasoning_artifacts(answer)
 
     # Deduplicate citations — one per document, with best relevance score
     seen_docs = {}
