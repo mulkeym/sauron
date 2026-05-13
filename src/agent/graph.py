@@ -94,6 +94,12 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         chunks = state.get("retrieved_chunks", [])
         if not chunks:
             return {}
+
+        # Skip entirely if the knowledge graph is empty — no point making LLM calls
+        entity_count = len(await metadata_store.list_entities(limit=1))
+        if entity_count == 0:
+            return {}
+
         question = state.get("question", "")
         try:
             import asyncio
