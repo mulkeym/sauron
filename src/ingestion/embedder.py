@@ -82,7 +82,8 @@ def _get_local_model():
         device=settings.embedding_device,
         trust_remote_code=True,
     )
-    logger.info(f"Model loaded: {model.get_sentence_embedding_dimension()} dimensions")
+    dim = model.get_embedding_dimension() if hasattr(model, 'get_embedding_dimension') else model.get_sentence_embedding_dimension()
+    logger.info(f"Model loaded: {dim} dimensions")
     return model
 
 
