@@ -44,63 +44,72 @@ def _parse_markdown(path: Path) -> ParsedDocument:
 
 
 def _strip_web_boilerplate(text: str) -> str:
-    """Strip website navigation, headers, footers, and social media links from markdown.
+    """Strip web boilerplate from markdown documents.
 
-    Many documents are scraped from government websites and contain huge
-    amounts of navigation boilerplate that pollutes chunking and entity extraction.
+    Works on any scraped website by removing lines that are structurally
+    boilerplate (navigation links, social media, footers) while preserving
+    actual content paragraphs. Generic enough for any document type.
     """
     import re
 
     lines = text.split("\n")
-    content_lines = []
-    in_content = False
-    consecutive_link_lines = 0
+    kept = []
 
     for line in lines:
         stripped = line.strip()
 
-        # Detect main content start: first heading (# ...) or bold section header (**ARMY**)
-        if not in_content:
-            if re.match(r'^#{1,3}\s+\w', stripped) and 'skip to' not in stripped.lower():
-                in_content = True
-            elif re.match(r'^\*\*[A-Z][A-Z\s]+\*\*$', stripped):  # **ARMY**, **NAVY**
-                in_content = True
-
-        if not in_content:
+        # Keep blank lines (preserve paragraph structure)
+        if not stripped:
+            kept.append(line)
             continue
 
-        # Skip lines that are purely links/navigation
-        is_link_line = bool(re.match(r'^\s*\*?\s*\[', stripped)) and '](' in stripped and len(stripped.split('](')) > 1
-        is_social = any(s in stripped.lower() for s in ['facebook', 'instagram', 'linkedin', 'youtube', 'twitter', '/#x)', '/#facebook'])
-        is_nav = stripped.startswith('*   [') and stripped.count('](') >= 1 and len(stripped) < 200
+        # Remove: lines that are purely markdown links with no meaningful text
+        # e.g., "*   [News](https://...)" or "[](https://...)"
+        plain_text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', stripped)  # extract link text
+        plain_text = re.sub(r'[*_\[\]()#|>!]', '', plain_text).strip()  # strip markdown formatting
 
-        if is_social:
+        link_count = stripped.count('](')
+
+        # Line is a navigation list item: "* [Link](url)" with minimal text
+        if link_count >= 1 and len(plain_text) < 30 and stripped.startswith('*'):
             continue
-        if is_nav or is_link_line:
-            consecutive_link_lines += 1
-            if consecutive_link_lines >= 3:
-                continue  # skip runs of navigation links
-        else:
-            consecutive_link_lines = 0
 
-        # Skip footer patterns
+        # Line is mostly links: 2+ links and plain text is minimal
+        if link_count >= 2 and len(plain_text) < 20:
+            continue
+
+        # Line is an empty link: [](url) or [![Image](url)](url)
+        if re.match(r'^\s*\[?\[?\]?\(', stripped) and len(plain_text) < 5:
+            continue
+
+        # Remove: social media links
+        if any(s in stripped.lower() for s in ['facebook.com', 'instagram.com', 'linkedin.com',
+               'youtube.com', 'twitter.com', '/#facebook', '/#x)', '/#email']):
+            continue
+
+        # Remove: common website boilerplate phrases
         if any(p in stripped.lower() for p in [
-            'privacy & security', 'links disclaimer', 'no fear act',
-            'information quality', 'plain writing act', 'usa.gov',
-            'hosted by department', 'web.mil', 'addtoany', 'thanks for sharing',
-            'small business act', 'foia', 'accessibility/508',
+            'skip to main content', 'official websites use .gov',
+            'secure .gov websites', 'how you know', 'share sensitive information',
+            'official government organization', 'safely connected',
+            'addtoany', 'thanks for sharing', 'previous next slideshow',
         ]):
             continue
 
-        # Skip sharing widgets
-        if stripped in ('×', 'Share', '**Copy Link**'):
+        # Remove: sharing widgets
+        if stripped in ('×', 'Share', '**Copy Link**', '---', 'Search', 'Search Search'):
             continue
 
-        content_lines.append(line)
+        # Remove: image-only lines
+        if re.match(r'^!\[.*\]\(.*\)$', stripped) or re.match(r'^\[!\[.*\]\(.*\)\]\(.*\)$', stripped):
+            continue
 
-    result = "\n".join(content_lines).strip()
+        kept.append(line)
 
-    # If stripping removed too much, return original
+    # Collapse multiple consecutive blank lines
+    result = re.sub(r'\n{4,}', '\n\n\n', "\n".join(kept)).strip()
+
+    # Safety: if we removed >90%, something went wrong — keep original
     if len(result) < len(text) * 0.1 and len(text) > 500:
         return text
 
