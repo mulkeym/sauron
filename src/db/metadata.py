@@ -17,6 +17,17 @@ class MetadataStore:
     async def init(self):
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        # Migrate: add columns that may not exist in older databases
+        await self._migrate()
+
+    async def _migrate(self):
+        """Add new columns to existing tables if they don't exist."""
+        from sqlalchemy import text
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text("SELECT content_hash FROM documents LIMIT 1"))
+            except Exception:
+                await conn.execute(text('ALTER TABLE documents ADD COLUMN content_hash TEXT DEFAULT ""'))
 
     async def add_document(
         self,
