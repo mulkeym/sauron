@@ -900,6 +900,7 @@ async def settings_page(request: Request):
 async def save_settings(
     vllm_base_url: str = Form(""),
     vllm_model_name: str = Form(""),
+    vllm_api_key: str = Form(""),
     embedding_mode: str = Form(""),
     embedding_api_url: str = Form(""),
     embedding_model_name: str = Form(""),
@@ -912,6 +913,7 @@ async def save_settings(
         settings.vllm_base_url = vllm_base_url
     if vllm_model_name:
         settings.vllm_model_name = vllm_model_name
+    settings.vllm_api_key = vllm_api_key  # can be empty (local models)
     if embedding_mode:
         settings.embedding_mode = embedding_mode
     if embedding_api_url:
@@ -933,6 +935,7 @@ async def save_settings(
 
     env_lines["VLLM_BASE_URL"] = settings.vllm_base_url
     env_lines["VLLM_MODEL_NAME"] = settings.vllm_model_name
+    env_lines["VLLM_API_KEY"] = settings.vllm_api_key
     env_lines["EMBEDDING_MODE"] = settings.embedding_mode
     env_lines["EMBEDDING_API_URL"] = settings.embedding_api_url
     env_lines["EMBEDDING_MODEL_NAME"] = settings.embedding_model_name
@@ -946,11 +949,12 @@ async def save_settings(
 
 
 @router.post("/api/settings/list-llm-models")
-async def list_llm_models(vllm_base_url: str = Form("")):
+async def list_llm_models(vllm_base_url: str = Form(""), vllm_api_key: str = Form("")):
     url = vllm_base_url or settings.vllm_base_url
+    key = vllm_api_key or settings.vllm_api_key
     try:
         import requests as req
-        headers = {"Authorization": f"Bearer {settings.vllm_api_key}"} if settings.vllm_api_key else {}
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
         resp = req.get(f'{url}/models', headers=headers, timeout=10)
         model_ids = [m['id'] for m in resp.json().get('data', [])]
         if not model_ids:
@@ -1039,11 +1043,13 @@ async def reconcile_status():
 
 
 @router.post("/api/settings/test-llm")
-async def test_llm_connection(vllm_base_url: str = Form("")):
+async def test_llm_connection(vllm_base_url: str = Form(""), vllm_api_key: str = Form("")):
     url = vllm_base_url or settings.vllm_base_url
+    key = vllm_api_key or settings.vllm_api_key
     try:
         import requests as req
-        resp = req.get(f'{url}/models', timeout=10)
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        resp = req.get(f'{url}/models', headers=headers, timeout=10)
         model_ids = [m['id'] for m in resp.json().get('data', [])[:3]]
         return HTMLResponse(f'<span class="status-ok">Connected to {url}. Models: {", ".join(model_ids)}</span>')
     except Exception as e:
