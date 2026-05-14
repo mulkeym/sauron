@@ -99,7 +99,8 @@ async def documents_page(request: Request):
         return redirect
     store = get_metadata_store()
     docs = await store.list_documents()
-    return templates.TemplateResponse(request, "documents.html", {"documents": docs})
+    apps = await store.list_applications()
+    return templates.TemplateResponse(request, "documents.html", {"documents": docs, "applications": apps})
 
 @router.get("/categories", response_class=HTMLResponse)
 async def categories_page(request: Request):
@@ -118,6 +119,56 @@ async def proposals_page(request: Request):
     store = get_metadata_store()
     proposals = await store.list_proposals(status="pending")
     return templates.TemplateResponse(request, "proposals.html", {"proposals": proposals})
+
+@router.get("/applications", response_class=HTMLResponse)
+async def applications_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
+    store = get_metadata_store()
+    apps = await store.list_applications(active_only=False)
+    # Count docs per app
+    docs = await store.list_documents(None)
+    for app in apps:
+        app.doc_count = sum(1 for d in docs if getattr(d, 'application_id', 0) == app.id)
+    return templates.TemplateResponse(request, "applications.html", {"applications": apps})
+
+
+@router.post("/api/applications/create")
+async def create_application(
+    name: str = Form(""), slug: str = Form(""),
+    description: str = Form(""), default_acl_groups: str = Form(""),
+    allowed_categories: str = Form(""),
+):
+    if not name.strip() or not slug.strip():
+        return HTMLResponse('<span class="status-err">Name and slug are required.</span>')
+
+    slug_clean = slug.strip().lower().replace(" ", "-")
+    acl = [g.strip() for g in default_acl_groups.split(",") if g.strip()]
+    cats = [c.strip() for c in allowed_categories.split(",") if c.strip()]
+
+    store = get_metadata_store()
+    result = await store.add_application(
+        name=name.strip(), slug=slug_clean, description=description.strip(),
+        default_acl_groups=acl, allowed_categories=cats,
+    )
+    if result is None:
+        return HTMLResponse(f'<span class="status-err">Slug "{slug_clean}" already exists.</span>')
+    return HTMLResponse(f'<span class="status-ok">Application "{name}" created. Reload to see it.</span>')
+
+
+@router.delete("/api/applications/{app_id}")
+async def deactivate_application(app_id: int):
+    store = get_metadata_store()
+    app = await store.get_application(app_id)
+    if app:
+        from sqlalchemy import update as sql_update
+        from src.db.models import Application
+        async with store.session_factory() as session:
+            await session.execute(sql_update(Application).where(Application.id == app_id).values(active=False))
+            await session.commit()
+    return HTMLResponse(f'<tr><td colspan="7" style="color:#6b7280;">Deactivated</td></tr>')
+
 
 @router.get("/audit", response_class=HTMLResponse)
 async def audit_page(request: Request):
@@ -829,12 +880,21 @@ async def bulk_upload(
     files: List[UploadFile] = File(...),
     acl_groups: str = Form(""),
     category: str = Form(""),
+    application_id: int = Form(0),
     auto_categorize: str = Form(""),
     build_graph: str = Form(""),
 ):
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
     do_auto_cat = auto_categorize == "true"
     do_build_graph = build_graph == "true"
+
+    # Inherit defaults from application if selected
+    if application_id > 0:
+        store = get_metadata_store()
+        app = await store.get_application(application_id)
+        if app:
+            if not groups and app.default_acl_groups:
+                groups = app.default_acl_groups
 
     # Start the queue worker if not running
     await ingest_queue.start_worker(get_vector_store(), get_metadata_store())
@@ -850,8 +910,8 @@ async def bulk_upload(
         job_id = ingest_queue.enqueue(
             filename=file.filename, file_path=tmp_path,
             acl_groups=groups, uploaded_by="admin",
-            category=category, auto_categorize=do_auto_cat,
-            build_graph=do_build_graph,
+            category=category, application_id=application_id,
+            auto_categorize=do_auto_cat, build_graph=do_build_graph,
         )
         job_ids.append((file.filename, job_id))
 

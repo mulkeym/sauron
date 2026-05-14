@@ -22,6 +22,17 @@
                 <input type="text" id="upload_category" name="category" placeholder="Leave blank to auto-categorize">
             </div>
         </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="application_id">Application</label>
+                <select id="application_id" name="application_id">
+                    <option value="0">None (unassigned)</option>
+                    {% for app in applications %}
+                    <option value="{{ app.id }}">{{ app.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
         <div class="form-group">
             <label><input type="checkbox" name="auto_categorize" value="true" checked> Auto-categorize (use LLM to assign category)</label>
         </div>

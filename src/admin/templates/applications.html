@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Applications - SAURON{% endblock %}
+{% block content %}
+<h1>Applications</h1>
+
+<div class="settings-section">
+    <h2>Create Application</h2>
+    <p class="section-desc">Group documents, connectors, and categories by project or team.</p>
+    <form hx-post="/admin/api/applications/create" hx-target="#app-status" hx-swap="innerHTML">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="app_name">Name</label>
+                <input type="text" id="app_name" name="name" placeholder="DoD Contract Intelligence" required>
+            </div>
+            <div class="form-group">
+                <label for="app_slug">Slug</label>
+                <input type="text" id="app_slug" name="slug" placeholder="dod-contracts" required>
+                <span style="font-size:0.8rem; color:#6b7280;">URL-friendly identifier (lowercase, hyphens)</span>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="app_description">Description</label>
+            <input type="text" id="app_description" name="description" placeholder="Track and analyze military contract awards">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="app_acl">Default ACL Groups (comma-separated)</label>
+                <input type="text" id="app_acl" name="default_acl_groups" placeholder="contracts, executives">
+                <span style="font-size:0.8rem; color:#6b7280;">Documents in this app inherit these groups by default.</span>
+            </div>
+            <div class="form-group">
+                <label for="app_categories">Allowed Categories (comma-separated)</label>
+                <input type="text" id="app_categories" name="allowed_categories" placeholder="contracts, budget_finance">
+                <span style="font-size:0.8rem; color:#6b7280;">Leave blank to allow all categories.</span>
+            </div>
+        </div>
+        <button type="submit">Create Application</button>
+        <span id="app-status" style="margin-left:0.5rem;"></span>
+    </form>
+</div>
+
+<h2 style="margin-top:2rem; margin-bottom:1rem;">Applications ({{ applications | length }})</h2>
+{% if applications %}
+<table>
+    <thead><tr><th>Name</th><th>Slug</th><th>Description</th><th>Default ACL</th><th>Categories</th><th>Docs</th><th>Actions</th></tr></thead>
+    <tbody>
+        {% for app in applications %}
+        <tr id="app-{{ app.id }}">
+            <td><strong>{{ app.name }}</strong></td>
+            <td><code>{{ app.slug }}</code></td>
+            <td>{{ app.description[:60] }}</td>
+            <td>{{ app.default_acl_groups | join(", ") }}</td>
+            <td>{{ app.allowed_categories | join(", ") or "all" }}</td>
+            <td>{{ app.doc_count or 0 }}</td>
+            <td>
+                <button class="danger small" hx-delete="/admin/api/applications/{{ app.id }}" hx-confirm="Deactivate this application?" hx-target="#app-{{ app.id }}" hx-swap="outerHTML">Deactivate</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No applications yet. Create one above to start organizing documents.</p>
+{% endif %}
+{% endblock %}
