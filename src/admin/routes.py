@@ -417,7 +417,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 skip_graph=(mode == "vector_only"),
             )
 
-            steps_data = []
+            steps_data = [{"step": "cache_check", "time": cache_time, "output": {"result": "miss"}}]
             step_start = time.time()
             prev_node = None
             prev_output = None
@@ -472,7 +472,12 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
 
             def format_step_detail(step_name, output):
                 """Format step output for display."""
-                if step_name == "classify":
+                if step_name == "cache_check":
+                    result = output.get("result", "miss")
+                    if result == "miss":
+                        return "<strong>Cache:</strong> No match found — running full pipeline"
+                    return f"<strong>Cache:</strong> {result}"
+                elif step_name == "classify":
                     qt = output.get("query_type", "")
                     subs = output.get("sub_tasks", [])
                     detail = f"<strong>Query Type:</strong> {qt}<br>"
