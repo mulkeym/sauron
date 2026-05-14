@@ -767,14 +767,17 @@ def _load_lightrag_graph():
             if name.lower() not in junk and etype not in ("UNKNOWN", "entity_type"):
                 entities.append({"name": name, "type": etype})
 
-        # Parse edges: <edge source="SRC" target="TGT">...<data key="d4">DESC</data>...</edge>
+        # Parse edges: <edge source="SRC" target="TGT">...<data key="d8">DESC</data>...</edge>
         for match in re_mod.finditer(
-            r'<edge source="([^"]+)" target="([^"]+)"[^>]*>(?:.*?<data key="d4">(.*?)</data>)?',
+            r'<edge source="([^"]+)" target="([^"]+)"[^>]*>(.*?)</edge>',
             content, re_mod.DOTALL
         ):
             src = match.group(1)
             tgt = match.group(2)
-            desc = (match.group(3) or "").split("<SEP>")[0].strip()[:100]
+            desc_match = re_mod.search(r'<data key="d8">(.*?)</data>', match.group(3), re_mod.DOTALL)
+            desc = ""
+            if desc_match:
+                desc = desc_match.group(1).split("&lt;SEP&gt;")[0].split("<SEP>")[0].strip()[:120]
             if src.lower() not in junk and tgt.lower() not in junk:
                 relationships.append({"source": src, "target": tgt, "label": desc})
     except Exception:
