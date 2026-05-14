@@ -53,6 +53,54 @@ def _get_cache_table():
     return _cache_table
 
 
+def _has_new_related_docs(source_doc_ids: list[str], cached_at: float) -> bool:
+    """Check if new documents were added in the same categories since the cache was built."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    if not source_doc_ids:
+        return False
+
+    try:
+        from src.db.metadata import MetadataStore
+
+        async def _check():
+            store = MetadataStore()
+            await store.init()
+
+            # Get categories of the cached source documents
+            source_categories = set()
+            for doc_id in source_doc_ids:
+                doc = await store.get_document(doc_id)
+                if doc and doc.category:
+                    source_categories.add(doc.category)
+
+            if not source_categories:
+                return False
+
+            # Check if any documents in those categories were created after the cache
+            cached_time = datetime.fromtimestamp(cached_at, tz=timezone.utc)
+            all_docs = await store.list_documents(None)
+            for doc in all_docs:
+                if doc.category in source_categories and doc.doc_id not in source_doc_ids:
+                    if doc.created_at and doc.created_at > cached_time:
+                        return True
+            return False
+
+        # Run async check — handle both async and sync contexts
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, _check()).result()
+        except RuntimeError:
+            return asyncio.run(_check())
+
+    except Exception as e:
+        logger.warning(f"New doc check failed: {e}")
+        return False  # on error, use cache (conservative)
+
+
 def _acl_key(user_groups: list[str]) -> str:
     """Normalize ACL groups to a comparable string."""
     return json.dumps(sorted(set(user_groups)))
@@ -83,13 +131,20 @@ def cache_lookup(query_vector: list[float], user_groups: list[str],
             if row.get("acl_groups_json", "") != acl_key:
                 continue
 
+            # Check if new related documents have been added since cache was built
+            cached_at = row.get("created_at", 0)
+            source_doc_ids = json.loads(row.get("source_doc_ids_json", "[]"))
+            if _has_new_related_docs(source_doc_ids, cached_at):
+                logger.info(f"Cache stale: new related documents added since {time.strftime('%Y-%m-%d %H:%M', time.localtime(cached_at))}")
+                continue
+
             logger.info(f"Cache hit: \"{row['query_text'][:60]}\" (similarity: {score:.3f})")
             return {
                 "answer": row["answer"],
                 "citations": json.loads(row.get("citations_json", "[]")),
                 "query_type": row.get("query_type", ""),
-                "source_doc_ids": json.loads(row.get("source_doc_ids_json", "[]")),
-                "cached_at": row.get("created_at", 0),
+                "source_doc_ids": source_doc_ids,
+                "cached_at": cached_at,
                 "cached_query": row["query_text"],
             }
 
