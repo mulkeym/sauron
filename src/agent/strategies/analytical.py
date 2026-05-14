@@ -23,8 +23,8 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     schema_prompt = schema_registry.schemas_to_prompt(user_groups)
     if schema_prompt == "No database schemas available.":
         # Fall back to sweep strategy — analytical questions need comprehensive data
-        from src.agent.strategies.sweep import retrieve_sweep
-        return await retrieve_sweep(state, vector_store=vector_store)
+        from src.agent.strategies.map_reduce import retrieve_map_reduce
+        return await retrieve_map_reduce(state, vector_store=vector_store)
 
     sql = generate(
         system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
@@ -41,8 +41,8 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
         rows = await execute_sql(database_url=database_url, sql=sql)
     except (ValueError, Exception) as e:
         # Fall back to sweep strategy if SQL fails
-        from src.agent.strategies.sweep import retrieve_sweep
-        return await retrieve_sweep(state, vector_store=vector_store)
+        from src.agent.strategies.map_reduce import retrieve_map_reduce
+        return await retrieve_map_reduce(state, vector_store=vector_store)
     return {
         "retrieved_chunks": [],
         "sql_results": rows,

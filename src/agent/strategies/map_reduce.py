@@ -1,0 +1,143 @@
+"""Map-Reduce strategy for exhaustive queries spanning many documents.
+
+Map:    Extract relevant data from each document individually
+Reduce: Combine all extractions into a final answer
+
+This avoids the problem of dumping 100+ chunks into one LLM call
+where details get lost in the noise.
+"""
+import asyncio
+import logging
+
+from src.agent.state import AgentState
+from src.generation.llm_client import generate
+from src.ingestion.embedder import embed_query
+from src.retrieval.models import RetrievedChunk, ChunkMetadata
+from src.retrieval.vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
+
+MAP_PROMPT = """Extract ONLY the information relevant to this question from the document below.
+If the document contains no relevant information, respond with "NO_RELEVANT_DATA".
+Be specific — include names, amounts, dates, locations, and contract numbers.
+
+Question: {question}
+
+Document ({filename}):
+{content}"""
+
+REDUCE_PROMPT = """Combine these per-document extractions into a complete, thorough answer.
+Include ALL items found — do not summarize or omit any. Cite the source filename for each item.
+
+Question: {question}
+
+Extractions:
+{extractions}"""
+
+
+async def retrieve_map_reduce(
+    state: AgentState,
+    vector_store: VectorStore,
+    top_k: int = 50,
+) -> dict:
+    """Map-reduce: extract from each doc individually, then combine."""
+    question = state["question"]
+    user_groups = state["user_groups"]
+
+    # Step 1: Find relevant documents (same as sweep discovery)
+    query_vector = await asyncio.to_thread(embed_query, question)
+
+    # Check for date-specific query
+    from src.agent.strategies.sweep import _extract_date_filter
+    date_filter_docs = _extract_date_filter(question, vector_store)
+
+    if date_filter_docs:
+        relevant_doc_ids = date_filter_docs
+        logger.info(f"Map-reduce: date filter matched {len(relevant_doc_ids)} documents")
+    else:
+        initial_results = vector_store.hybrid_search(
+            vector=query_vector, text_query=question,
+            user_groups=user_groups, top_k=top_k, tier="xlarge",
+        )
+        relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
+        logger.info(f"Map-reduce: found {len(relevant_doc_ids)} relevant documents")
+
+    # Step 2: MAP — extract relevant data from each document in parallel
+    async def map_document(doc_id: str) -> dict:
+        chunks = await asyncio.to_thread(
+            vector_store.get_chunks_by_doc, doc_id, 200, "large"
+        )
+        if not chunks:
+            return {"doc_id": doc_id, "filename": "unknown", "extraction": ""}
+
+        filename = chunks[0].metadata.filename
+        content = "\n\n".join(c.text for c in chunks)
+
+        # Truncate if too long for a single LLM call
+        if len(content) > 12000:
+            content = content[:12000] + "\n... [truncated]"
+
+        try:
+            extraction = await asyncio.to_thread(
+                generate,
+                system_prompt="You extract specific data from documents. Be thorough and precise.",
+                user_prompt=MAP_PROMPT.format(
+                    question=question,
+                    filename=filename,
+                    content=content,
+                ),
+                temperature=0.0,
+                max_tokens=2048,
+            )
+
+            if "NO_RELEVANT_DATA" in extraction:
+                return {"doc_id": doc_id, "filename": filename, "extraction": ""}
+
+            return {"doc_id": doc_id, "filename": filename, "extraction": extraction.strip()}
+        except Exception as e:
+            logger.warning(f"Map failed for {filename}: {e}")
+            return {"doc_id": doc_id, "filename": filename, "extraction": ""}
+
+    # Run map in parallel (bounded concurrency)
+    semaphore = asyncio.Semaphore(4)
+
+    async def bounded_map(doc_id):
+        async with semaphore:
+            return await map_document(doc_id)
+
+    map_results = await asyncio.gather(*[bounded_map(did) for did in relevant_doc_ids])
+
+    # Filter out empty extractions
+    valid_extractions = [r for r in map_results if r["extraction"]]
+    logger.info(f"Map-reduce: {len(valid_extractions)}/{len(map_results)} documents had relevant data")
+
+    if not valid_extractions:
+        return {
+            "retrieved_chunks": [],
+            "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
+        }
+
+    # Step 3: REDUCE — build extractions into a synthetic chunk for the synthesizer
+    extraction_text = "\n\n".join(
+        f"[{r['filename']}]:\n{r['extraction']}"
+        for r in valid_extractions
+    )
+
+    # Create a synthetic chunk containing the combined map results
+    reduce_chunk = RetrievedChunk(
+        text=f"Map-Reduce Results ({len(valid_extractions)} documents processed):\n\n{extraction_text}",
+        score=1.0,
+        metadata=ChunkMetadata(
+            doc_id="map-reduce",
+            filename="map_reduce_synthesis",
+            doc_type="synthesis",
+            chunk_index=0,
+            start_char=0,
+            acl_groups=["ALL"],
+        ),
+    )
+
+    return {
+        "retrieved_chunks": [reduce_chunk],
+        "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
+    }

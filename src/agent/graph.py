@@ -6,6 +6,7 @@ from src.agent.classifier import classify_query
 from src.agent.synthesizer import synthesize_answer
 from src.agent.strategies.lookup import retrieve_lookup
 from src.agent.strategies.sweep import retrieve_sweep
+from src.agent.strategies.map_reduce import retrieve_map_reduce
 from src.agent.strategies.analytical import retrieve_analytical
 from src.agent.strategies.cross_reference import retrieve_cross_reference
 from src.db.metadata import MetadataStore
@@ -36,7 +37,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         if query_type == QueryType.LOOKUP:
             result = retrieve_lookup(retry_state, vector_store=vector_store)
         elif query_type == QueryType.SWEEP:
-            result = await retrieve_sweep(retry_state, vector_store=vector_store)
+            result = await retrieve_map_reduce(retry_state, vector_store=vector_store)
         elif query_type == QueryType.ANALYTICAL:
             result = await retrieve_analytical(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.CROSS_REFERENCE:
