@@ -95,6 +95,11 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     async def enrich_with_graph(state: AgentState) -> dict:
         if state.get("skip_graph"):
             return {}
+        # ACL safety: graph has no per-document ACL filtering, so only
+        # enrich for users with ALL access to prevent data leakage
+        user_groups = state.get("user_groups", [])
+        if "ALL" not in user_groups:
+            return {}
         chunks = state.get("retrieved_chunks", [])
         if not chunks:
             return {}
