@@ -47,11 +47,11 @@
 
 <h2 style="margin-top: 2rem; margin-bottom: 1rem;">Indexed Documents</h2>
 <table>
-    <thead><tr><th>Filename</th><th>Type</th><th>Category</th><th>ACL Groups</th><th>Chunks</th><th>Uploaded By</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Filename</th><th>Application</th><th>Type</th><th>Category</th><th>ACL Groups</th><th>Chunks</th><th>Uploaded By</th><th>Actions</th></tr></thead>
     <tbody id="doc-table-body">
         {% for doc in documents %}
         <tr>
-            <td>{{ doc.filename }}</td><td>{{ doc.doc_type }}</td>
+            <td>{{ doc.filename }}</td><td>{{ doc._app_name or "—" }}</td><td>{{ doc.doc_type }}</td>
             <td>{{ doc.category or "uncategorized" }}</td>
             <td>{{ doc.acl_groups | join(", ") }}</td>
             <td>{{ doc.chunk_count }}</td><td>{{ doc.uploaded_by }}</td>

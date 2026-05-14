@@ -100,6 +100,9 @@ async def documents_page(request: Request):
     store = get_metadata_store()
     docs = await store.list_documents()
     apps = await store.list_applications()
+    app_map = {a.id: a.name for a in apps}
+    for doc in docs:
+        doc._app_name = app_map.get(getattr(doc, 'application_id', 0), "")
     return templates.TemplateResponse(request, "documents.html", {"documents": docs, "applications": apps})
 
 @router.get("/categories", response_class=HTMLResponse)
