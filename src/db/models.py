@@ -25,6 +25,20 @@ class DocumentRecord(Base):
     )
 
 
+class AclGroup(Base):
+    __tablename__ = "acl_groups"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # internal name (e.g., "it_support")
+    display_name: Mapped[str] = mapped_column(String, default="")  # human-friendly (e.g., "IT Support Team")
+    ad_group_dn: Mapped[str] = mapped_column(String, default="")  # future: AD distinguished name (e.g., "CN=IT Support,OU=Groups,DC=corp,DC=com")
+    description: Mapped[str] = mapped_column(String, default="")
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class Category(Base):
     __tablename__ = "categories"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

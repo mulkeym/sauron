@@ -3,7 +3,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup
 
 
 class MetadataStore:
@@ -116,6 +116,30 @@ class MetadataStore:
         async with self.session_factory() as session:
             result = await session.execute(select(Category))
             return list(result.scalars().all())
+
+    # --- ACL Groups ---
+
+    async def add_acl_group(self, name, display_name="", description="", ad_group_dn=""):
+        async with self.session_factory() as session:
+            existing = await session.execute(select(AclGroup).where(AclGroup.name == name))
+            if existing.scalar_one_or_none():
+                return  # already exists
+            group = AclGroup(name=name, display_name=display_name or name, description=description, ad_group_dn=ad_group_dn)
+            session.add(group)
+            await session.commit()
+
+    async def list_acl_groups(self, active_only=True):
+        async with self.session_factory() as session:
+            stmt = select(AclGroup)
+            if active_only:
+                stmt = stmt.where(AclGroup.active == True)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_acl_group_names(self) -> list[str]:
+        """Get just the names of active ACL groups."""
+        groups = await self.list_acl_groups()
+        return [g.name for g in groups]
 
     async def add_proposal(self, proposed_name, proposed_description, proposed_acl_groups, proposed_keywords, proposed_by, proposed_grs=""):
         record = CategoryProposal(proposed_name=proposed_name, proposed_description=proposed_description, proposed_acl_groups=proposed_acl_groups, proposed_keywords=proposed_keywords, proposed_grs=proposed_grs, proposed_by=proposed_by)

@@ -64,8 +64,10 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as pool:
             categories = pool.submit(asyncio.run, metadata_store.list_categories()).result()
+            acl_groups = pool.submit(asyncio.run, metadata_store.get_acl_group_names()).result()
     else:
         categories = asyncio.run(metadata_store.list_categories())
+        acl_groups = asyncio.run(metadata_store.get_acl_group_names())
 
     cat_names = [cat.name for cat in categories]
     cat_descriptions = []
@@ -75,9 +77,11 @@ def categorize_document(filename, doc_type, text_preview, metadata_store):
         cat_descriptions.append(f"- {cat.name}{grs}: {cat.description[:80]} ({keywords})")
     categories_text = "\n".join(cat_descriptions) if cat_descriptions else "No existing categories."
 
+    acl_list = ", ".join(acl_groups) if acl_groups else "it_support, engineering, finance, executives"
+
     response = generate(
         system_prompt=CATEGORIZATION_PROMPT.format(categories=categories_text),
-        user_prompt=f"Filename: {filename}\nType: {doc_type}\nPreview: {text_preview[:500]}",
+        user_prompt=f"Filename: {filename}\nType: {doc_type}\nPreview: {text_preview[:500]}\n\nAvailable ACL groups (choose ONLY from these): {acl_list}",
         temperature=0.0, max_tokens=2048,
     )
     try:

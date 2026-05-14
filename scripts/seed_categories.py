@@ -91,6 +91,28 @@ async def main():
 
     print(f"\nDone. Created {created}, skipped {skipped}.")
 
+    # Seed ACL groups
+    ACL_GROUPS = [
+        {"name": "it_support", "display_name": "IT Support", "description": "IT help desk and support staff"},
+        {"name": "devops", "display_name": "DevOps", "description": "DevOps and infrastructure team"},
+        {"name": "cybersecurity", "display_name": "Cybersecurity", "description": "Information security team"},
+        {"name": "engineering", "display_name": "Engineering", "description": "Software and systems engineering"},
+        {"name": "finance", "display_name": "Finance", "description": "Finance and budget team"},
+        {"name": "executives", "display_name": "Executives", "description": "Leadership and executives"},
+        {"name": "compliance", "display_name": "Compliance", "description": "Compliance and regulatory"},
+        {"name": "contracts", "display_name": "Contracts", "description": "Contracts and procurement"},
+        {"name": "clinical", "display_name": "Clinical", "description": "Clinical and medical staff"},
+        {"name": "medical", "display_name": "Medical", "description": "Medical systems and support"},
+        {"name": "biomedical", "display_name": "Biomedical", "description": "Biomedical device engineering"},
+    ]
+
+    print("\nSeeding ACL groups...")
+    for g in ACL_GROUPS:
+        await store.add_acl_group(**g)
+        print(f"  {g['name']}: {g['display_name']}")
+
+    print(f"Done. {len(ACL_GROUPS)} ACL groups seeded.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
