@@ -345,62 +345,62 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 _playground_jobs[query_id]["step"] = "classify"
 
             if cache_accepted:
-                    from src.retrieval.models import Citation
-                    cached_age = time.time() - cached.get("cached_at", 0)
-                    if cached_age < 3600:
-                        age_str = f"{int(cached_age)}s ago"
-                    elif cached_age < 86400:
-                        age_str = f"{int(cached_age/3600)}h ago"
-                    else:
-                        age_str = f"{int(cached_age/86400)}d ago"
+                from src.retrieval.models import Citation
+                cached_age = time.time() - cached.get("cached_at", 0)
+                if cached_age < 3600:
+                    age_str = f"{int(cached_age)}s ago"
+                elif cached_age < 86400:
+                    age_str = f"{int(cached_age/3600)}h ago"
+                else:
+                    age_str = f"{int(cached_age/86400)}d ago"
 
-                    confidence_pct = int(judgment.get("confidence", 0) * 100)
-                    judge_reason = html_mod.escape(judgment.get("reason", ""))
+                confidence_pct = int(judgment.get("confidence", 0) * 100)
+                judge_reason = html_mod.escape(judgment.get("reason", ""))
 
-                    citations = cached.get("citations", [])
-                    citations_html = ""
-                    for i, c in enumerate(citations, 1):
-                        page = f' &mdash; page {c.get("page", "")}' if c.get("page") else ''
-                        citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.get("filename", "")}</span>{page}<span class="score"> &mdash; relevance: {c.get("relevance", 0):.2f}</span><div class="snippet">{c.get("snippet", "")[:300]}</div></div>'
+                citations = cached.get("citations", [])
+                citations_html = ""
+                for i, c in enumerate(citations, 1):
+                    page = f' &mdash; page {c.get("page", "")}' if c.get("page") else ''
+                    citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.get("filename", "")}</span>{page}<span class="score"> &mdash; relevance: {c.get("relevance", 0):.2f}</span><div class="snippet">{c.get("snippet", "")[:300]}</div></div>'
 
-                    result_html = f"""<div class="trace-panel">
-                    <div class="trace-header">
-                        <span style="color:#16a34a; font-weight:600;">&#9889; Cache Hit</span>
-                        <span>Original query: <strong>{html_mod.escape(cached.get('cached_query', ''))}</strong></span>
-                        <span>Cached: <strong>{age_str}</strong></span>
-                        <span>Lookup: <strong>{cache_time}s</strong></span>
+                result_html = f"""<div class="trace-panel">
+                <div class="trace-header">
+                    <span style="color:#16a34a; font-weight:600;">&#9889; Cache Hit</span>
+                    <span>Original query: <strong>{html_mod.escape(cached.get('cached_query', ''))}</strong></span>
+                    <span>Cached: <strong>{age_str}</strong></span>
+                    <span>Lookup: <strong>{cache_time}s</strong></span>
+                </div>
+                <div class="trace-step-wrap">
+                    <div class="trace-step" style="background:#16a34a; color:white;">
+                        <span>&#9889; Step 1 of 5: Check Cache — <strong>HIT</strong> (similarity ≥ 92%)</span>
+                        <span class="trace-time">{cache_time}s</span>
                     </div>
-                    <div class="trace-step-wrap">
-                        <div class="trace-step" style="background:#16a34a; color:white;">
-                            <span>&#9889; Step 1 of 5: Check Cache — <strong>HIT</strong> (similarity ≥ 92%)</span>
-                            <span class="trace-time">{cache_time}s</span>
-                        </div>
-                        <div class="trace-detail expanded" style="padding:0.5rem 1rem; font-size:0.85rem; background:#f0fdf4; border-left:3px solid #16a34a;">
-                            <strong>LLM Judge:</strong> Applicable ({confidence_pct}% confidence)<br>
-                            <strong>Reason:</strong> {judge_reason}<br>
-                            <strong>Judge time:</strong> {judge_time}s
-                        </div>
+                    <div class="trace-detail expanded" style="padding:0.5rem 1rem; font-size:0.85rem; background:#f0fdf4; border-left:3px solid #16a34a;">
+                        <strong>LLM Judge:</strong> Applicable ({confidence_pct}% confidence)<br>
+                        <strong>Reason:</strong> {judge_reason}<br>
+                        <strong>Judge time:</strong> {judge_time}s
                     </div>
-                    <div class="trace-step-wrap">
-                        <div class="trace-step" style="opacity:0.4;">
-                            <span>&#9898; Step 2 of 5: Classify Query — skipped</span>
-                        </div>
+                </div>
+                <div class="trace-step-wrap">
+                    <div class="trace-step" style="opacity:0.4;">
+                        <span>&#9898; Step 2 of 5: Classify Query — skipped</span>
                     </div>
-                    <div class="trace-step-wrap">
-                        <div class="trace-step" style="opacity:0.4;">
-                            <span>&#9898; Step 3 of 5: Retrieve Documents — skipped</span>
-                        </div>
+                </div>
+                <div class="trace-step-wrap">
+                    <div class="trace-step" style="opacity:0.4;">
+                        <span>&#9898; Step 3 of 5: Retrieve Documents — skipped</span>
                     </div>
-                    <div class="trace-step-wrap">
-                        <div class="trace-step" style="opacity:0.4;">
-                            <span>&#9898; Step 4 of 5: Knowledge Graph Enrichment — skipped</span>
-                        </div>
+                </div>
+                <div class="trace-step-wrap">
+                    <div class="trace-step" style="opacity:0.4;">
+                        <span>&#9898; Step 4 of 5: Knowledge Graph Enrichment — skipped</span>
                     </div>
-                    <div class="trace-step-wrap">
-                        <div class="trace-step" style="opacity:0.4;">
-                            <span>&#9898; Step 5 of 5: Generate Answer — skipped</span>
-                        </div>
+                </div>
+                <div class="trace-step-wrap">
+                    <div class="trace-step" style="opacity:0.4;">
+                        <span>&#9898; Step 5 of 5: Generate Answer — skipped</span>
                     </div>
+                </div>
                 </div>
                 <div class="result-card">
                     <div class="result-meta">Groups: {', '.join(user_groups)} | Source: Cache</div>
