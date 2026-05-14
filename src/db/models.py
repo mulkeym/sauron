@@ -14,11 +14,28 @@ class DocumentRecord(Base):
     doc_id: Mapped[str] = mapped_column(String, primary_key=True)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     doc_type: Mapped[str] = mapped_column(String, nullable=False)
-    content_hash: Mapped[str] = mapped_column(String, default="")  # SHA-256 of file content
+    content_hash: Mapped[str] = mapped_column(String, default="")
+    application_id: Mapped[int] = mapped_column(default=0)  # 0 = unassigned
     category: Mapped[str] = mapped_column(String, default="")
     acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     chunk_count: Mapped[int] = mapped_column(default=0)
     uploaded_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class Application(Base):
+    __tablename__ = "applications"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # URL-friendly
+    description: Mapped[str] = mapped_column(String, default="")
+    owner: Mapped[str] = mapped_column(String, default="admin")
+    default_acl_groups: Mapped[list] = mapped_column(JSON, default=list)
+    allowed_categories: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

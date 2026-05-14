@@ -30,6 +30,7 @@ class IngestJob:
     acl_groups: list[str]
     uploaded_by: str
     category: str = ""
+    application_id: int = 0
     auto_categorize: bool = True
     build_graph: bool = True
     step: IngestStep = IngestStep.QUEUED
@@ -50,14 +51,14 @@ class IngestQueue:
         self._worker_running = False
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
-                uploaded_by: str, category: str = "", auto_categorize: bool = True,
-                build_graph: bool = True) -> str:
+                uploaded_by: str, category: str = "", application_id: int = 0,
+                auto_categorize: bool = True, build_graph: bool = True) -> str:
         job_id = str(uuid.uuid4())[:8]
         job = IngestJob(
             job_id=job_id, filename=filename, file_path=file_path,
             acl_groups=acl_groups, uploaded_by=uploaded_by,
-            category=category, auto_categorize=auto_categorize,
-            build_graph=build_graph,
+            category=category, application_id=application_id,
+            auto_categorize=auto_categorize, build_graph=build_graph,
         )
         self._jobs[job_id] = job
         if self._queue:
@@ -259,7 +260,7 @@ class IngestQueue:
             doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
             acl_groups=job.acl_groups, chunk_count=total_chunks,
             uploaded_by=job.uploaded_by, category=category,
-            content_hash=content_hash,
+            content_hash=content_hash, application_id=job.application_id,
         )
         if category and category != "uncategorized":
             existing = await metadata_store.get_category(category)

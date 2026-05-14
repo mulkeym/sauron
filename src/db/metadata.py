@@ -3,7 +3,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Application
 
 
 class MetadataStore:
@@ -24,11 +24,16 @@ class MetadataStore:
         """Add new columns to existing tables if they don't exist."""
         from sqlalchemy import text
         async with self.engine.begin() as conn:
-            for col, table in [("content_hash", "documents"), ("proposed_grs", "category_proposals")]:
+            migrations = [
+                ("content_hash", "documents", 'TEXT DEFAULT ""'),
+                ("application_id", "documents", "INTEGER DEFAULT 0"),
+                ("proposed_grs", "category_proposals", 'TEXT DEFAULT ""'),
+            ]
+            for col, table, col_type in migrations:
                 try:
                     await conn.execute(text(f"SELECT {col} FROM {table} LIMIT 1"))
                 except Exception:
-                    await conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} TEXT DEFAULT ""'))
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
 
     async def add_document(
         self,
@@ -40,9 +45,11 @@ class MetadataStore:
         uploaded_by,
         category="",
         content_hash="",
+        application_id=0,
     ):
         record = DocumentRecord(
             doc_id=doc_id,
+            application_id=application_id,
             filename=filename,
             doc_type=doc_type,
             content_hash=content_hash,
@@ -116,6 +123,40 @@ class MetadataStore:
         async with self.session_factory() as session:
             result = await session.execute(select(Category))
             return list(result.scalars().all())
+
+    # --- Applications ---
+
+    async def add_application(self, name, slug, description="", owner="admin", default_acl_groups=None, allowed_categories=None):
+        async with self.session_factory() as session:
+            existing = await session.execute(select(Application).where(Application.slug == slug))
+            if existing.scalar_one_or_none():
+                return None
+            app = Application(
+                name=name, slug=slug, description=description, owner=owner,
+                default_acl_groups=default_acl_groups or [],
+                allowed_categories=allowed_categories or [],
+            )
+            session.add(app)
+            await session.commit()
+            await session.refresh(app)
+            return app
+
+    async def list_applications(self, active_only=True):
+        async with self.session_factory() as session:
+            stmt = select(Application)
+            if active_only:
+                stmt = stmt.where(Application.active == True)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_application(self, app_id: int):
+        async with self.session_factory() as session:
+            return await session.get(Application, app_id)
+
+    async def get_application_by_slug(self, slug: str):
+        async with self.session_factory() as session:
+            result = await session.execute(select(Application).where(Application.slug == slug))
+            return result.scalar_one_or_none()
 
     # --- ACL Groups ---
 
