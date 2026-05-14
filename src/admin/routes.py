@@ -733,12 +733,40 @@ async def queue_status():
 
 @router.get("/knowledge-graph", response_class=HTMLResponse)
 async def knowledge_graph_page(request: Request):
-    # Read entities and relationships from LightRAG — load in thread to avoid blocking
+    # Load full graph for initial render (admin view)
     import asyncio
     entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
     return templates.TemplateResponse(request, "knowledge_graph.html", {
         "entities": entities, "relationships": relationships,
     })
+
+
+@router.get("/api/knowledge-graph/filtered")
+async def knowledge_graph_filtered(groups: str = ""):
+    """Return ACL-filtered graph data for a persona."""
+    from fastapi.responses import JSONResponse
+    import asyncio
+
+    user_groups = [g.strip() for g in groups.split(",") if g.strip()] if groups else ["ALL"]
+
+    entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
+
+    if "ALL" in user_groups or not groups:
+        return JSONResponse({"entities": entities, "relationships": relationships})
+
+    # Filter: find which entities come from documents the user can access
+    from src.knowledge.graph_rag import _get_acl_allowed_entities
+    allowed = await asyncio.to_thread(_get_acl_allowed_entities, user_groups)
+
+    if allowed is None:
+        return JSONResponse({"entities": entities, "relationships": relationships})
+
+    filtered_entities = [e for e in entities if e["name"] in allowed]
+    filtered_names = {e["name"] for e in filtered_entities}
+    filtered_rels = [r for r in relationships
+                     if r["source"] in filtered_names and r["target"] in filtered_names]
+
+    return JSONResponse({"entities": filtered_entities, "relationships": filtered_rels})
 
 
 def _load_lightrag_graph():

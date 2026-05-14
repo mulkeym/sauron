@@ -10,6 +10,16 @@
 
 <div class="form-row" style="margin-bottom:1rem;">
     <div class="form-group">
+        <label for="kg-persona">View as</label>
+        <select id="kg-persona" onchange="loadGraphForPersona()">
+            <option value="">Admin (All documents)</option>
+            <option value="finance,executives">Mike (Finance, Executives)</option>
+            <option value="it_support,devops">Bob (IT Support, DevOps)</option>
+            <option value="engineering">Sarah (Engineering)</option>
+            <option value="contracts,executives">Carol (Contracts, Executives)</option>
+        </select>
+    </div>
+    <div class="form-group">
         <label for="kg-filter">Filter by type</label>
         <select id="kg-filter" onchange="filterGraph()">
             <option value="">All types</option>
@@ -134,6 +144,55 @@ const graph = ForceGraph3D()(container)
 // Warm up the simulation
 graph.d3Force('charge').strength(-80);
 graph.d3Force('link').distance(60);
+
+async function loadGraphForPersona() {
+    const groups = document.getElementById('kg-persona').value;
+    const url = '/admin/api/knowledge-graph/filtered' + (groups ? '?groups=' + encodeURIComponent(groups) : '');
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    // Rebuild nodes and links from filtered data
+    nodes.length = 0;
+    links.length = 0;
+    nodeMap.clear();
+
+    data.entities.forEach(e => {
+        if (!nodeMap.has(e.name)) {
+            const node = { id: e.name, type: e.type, color: TYPE_COLORS[e.type] || '#9ca3af', connections: 0 };
+            nodeMap.set(e.name, node);
+            nodes.push(node);
+        }
+    });
+
+    data.relationships.forEach(r => {
+        if (!nodeMap.has(r.source)) {
+            const node = { id: r.source, type: 'unknown', color: '#9ca3af', connections: 0 };
+            nodeMap.set(r.source, node);
+            nodes.push(node);
+        }
+        if (!nodeMap.has(r.target)) {
+            const node = { id: r.target, type: 'unknown', color: '#9ca3af', connections: 0 };
+            nodeMap.set(r.target, node);
+            nodes.push(node);
+        }
+        nodeMap.get(r.source).connections++;
+        nodeMap.get(r.target).connections++;
+        links.push({ source: r.source, target: r.target, label: r.label || '' });
+    });
+
+    graph.graphData({ nodes, links });
+
+    // Update type filter
+    const filterEl = document.getElementById('kg-filter');
+    filterEl.innerHTML = '<option value="">All types</option>';
+    const newTypes = [...new Set(data.entities.map(e => e.type))].sort();
+    newTypes.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = `${t} (${data.entities.filter(e => e.type === t).length})`;
+        filterEl.appendChild(opt);
+    });
+}
 
 function filterGraph() {
     const type = document.getElementById('kg-filter').value;

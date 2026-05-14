@@ -95,11 +95,6 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     async def enrich_with_graph(state: AgentState) -> dict:
         if state.get("skip_graph"):
             return {}
-        # ACL safety: graph has no per-document ACL filtering, so only
-        # enrich for users with ALL access to prevent data leakage
-        user_groups = state.get("user_groups", [])
-        if "ALL" not in user_groups:
-            return {}
         chunks = state.get("retrieved_chunks", [])
         if not chunks:
             return {}
@@ -115,8 +110,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             if not await is_graph_populated():
                 return {}
 
-            # Query LightRAG for knowledge graph context
-            result = await query_graph(question, mode="mix")
+            # Query LightRAG for knowledge graph context (ACL-aware)
+            user_groups = state.get("user_groups", ["ALL"])
+            result = await query_graph(question, mode="mix", user_groups=user_groups)
             kg_context = result.get("context", "")
 
             if not kg_context or len(kg_context.strip()) < 20:

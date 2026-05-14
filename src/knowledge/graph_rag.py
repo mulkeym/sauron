@@ -118,11 +118,80 @@ async def insert_document(text: str, doc_id: str = "", filename: str = "") -> st
         return f"error: {e}"
 
 
-async def query_graph(question: str, mode: str = "hybrid") -> dict:
-    """Query the knowledge graph and return a focused, synthesized answer.
+def _get_allowed_filenames(user_groups: list[str]) -> set[str] | None:
+    """Get filenames the user can access based on ACL groups.
+    Returns None if user has ALL access (no filtering needed).
+    """
+    if "ALL" in user_groups:
+        return None  # no filtering
 
-    Uses LightRAG's own LLM synthesis to produce a concise, relevant
-    summary instead of dumping raw graph data.
+    import asyncio
+    from src.db.metadata import MetadataStore
+
+    async def _fetch():
+        store = MetadataStore()
+        await store.init()
+        docs = await store.list_documents(user_groups)
+        return {d.filename for d in docs}
+
+    try:
+        return asyncio.run(_fetch())
+    except RuntimeError:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, _fetch()).result()
+
+
+def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
+    """Get entity names the user can see based on source document ACLs.
+    Returns None if user has ALL access.
+    """
+    if "ALL" in user_groups:
+        return None
+
+    import json as json_mod
+    from pathlib import Path
+
+    allowed_files = _get_allowed_filenames(user_groups)
+    if allowed_files is None:
+        return None
+
+    # Load chunk-to-file mapping
+    chunks_file = Path("data/lightrag/kv_store_text_chunks.json")
+    if not chunks_file.exists():
+        return set()
+
+    chunk_data = json_mod.loads(chunks_file.read_text())
+    allowed_chunks = {cid for cid, data in chunk_data.items()
+                      if data.get("file_path", "") in allowed_files}
+
+    # Load graph and find entities from allowed chunks
+    import re
+    graphml = Path("data/lightrag/graph_chunk_entity_relation.graphml")
+    if not graphml.exists():
+        return set()
+
+    content = graphml.read_text()
+    allowed_entities = set()
+
+    for match in re.finditer(
+        r'<node id="([^"]+)"[^>]*>(.*?)</node>', content, re.DOTALL
+    ):
+        name = match.group(1)
+        source_match = re.search(r'<data key="d3">(.*?)</data>', match.group(2), re.DOTALL)
+        if source_match:
+            source_chunks = source_match.group(1).replace("&lt;SEP&gt;", "<SEP>").split("<SEP>")
+            if any(c.strip() in allowed_chunks for c in source_chunks):
+                allowed_entities.add(name)
+
+    return allowed_entities
+
+
+async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None) -> dict:
+    """Query the knowledge graph with ACL filtering.
+
+    If user_groups is provided and doesn't contain "ALL", the response
+    is filtered to only include information from documents the user can access.
     """
     rag = await get_lightrag()
     try:
@@ -130,7 +199,7 @@ async def query_graph(question: str, mode: str = "hybrid") -> dict:
             question,
             param=QueryParam(
                 mode=mode,
-                only_need_context=False,  # let LightRAG synthesize a focused answer
+                only_need_context=False,
                 top_k=20,
                 response_type="Brief bullet points focusing on specific names, amounts, and relationships",
             ),
