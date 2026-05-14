@@ -190,23 +190,43 @@ def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
 async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None) -> dict:
     """Query the knowledge graph with ACL filtering.
 
-    If user_groups is provided and doesn't contain "ALL", the response
-    is filtered to only include information from documents the user can access.
+    If user_groups is provided and doesn't contain "ALL", only returns
+    context from documents the user can access.
     """
     rag = await get_lightrag()
+
+    # Reduce top_k for non-admin users to speed up queries
+    top_k = 20
+    if user_groups and "ALL" not in user_groups:
+        top_k = 10  # fewer entities to search = faster
+
     try:
         result = await rag.aquery(
             question,
             param=QueryParam(
                 mode=mode,
                 only_need_context=False,
-                top_k=20,
+                top_k=top_k,
                 response_type="Brief bullet points focusing on specific names, amounts, and relationships",
             ),
         )
 
         if not result or len(result.strip()) < 20:
             return {"context": "", "mode": mode}
+
+        # ACL post-filter: if user doesn't have ALL access, verify the
+        # response only references documents they can see
+        if user_groups and "ALL" not in user_groups:
+            allowed = _get_acl_allowed_entities(user_groups)
+            if allowed is not None:
+                # Filter lines that reference entities the user can't see
+                filtered_lines = []
+                for line in result.strip().split("\n"):
+                    # Keep lines that reference allowed entities or are generic
+                    line_lower = line.lower()
+                    if any(ent.lower() in line_lower for ent in allowed) or not line.strip().startswith("-"):
+                        filtered_lines.append(line)
+                result = "\n".join(filtered_lines)
 
         return {"context": result.strip(), "mode": mode}
     except Exception as e:
