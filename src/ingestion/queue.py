@@ -145,6 +145,19 @@ class IngestQueue:
         doc_id = str(uuid.uuid4())
         file_path = Path(job.file_path)
 
+        # Duplicate check: hash file content before doing any work
+        import hashlib
+        content_bytes = file_path.read_bytes()
+        content_hash = hashlib.sha256(content_bytes).hexdigest()
+        existing = await metadata_store.find_by_content_hash(content_hash)
+        if existing:
+            self.fail_job(job.job_id, f"Duplicate: identical content already ingested as '{existing.filename}' (doc_id: {existing.doc_id[:8]}...)")
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+
         # Step 1: Parse (fast, ok on event loop)
         self.update_step(job.job_id, IngestStep.PARSING, f"Parsing {job.filename}")
         parsed = await asyncio.to_thread(parse_document, file_path)
@@ -232,6 +245,7 @@ class IngestQueue:
             doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
             acl_groups=job.acl_groups, chunk_count=total_chunks,
             uploaded_by=job.uploaded_by, category=category,
+            content_hash=content_hash,
         )
         if category and category != "uncategorized":
             existing = await metadata_store.get_category(category)

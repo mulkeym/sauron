@@ -14,6 +14,7 @@ class DocumentRecord(Base):
     doc_id: Mapped[str] = mapped_column(String, primary_key=True)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     doc_type: Mapped[str] = mapped_column(String, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String, default="")  # SHA-256 of file content
     category: Mapped[str] = mapped_column(String, default="")
     acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     chunk_count: Mapped[int] = mapped_column(default=0)

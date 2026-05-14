@@ -27,11 +27,13 @@ class MetadataStore:
         chunk_count,
         uploaded_by,
         category="",
+        content_hash="",
     ):
         record = DocumentRecord(
             doc_id=doc_id,
             filename=filename,
             doc_type=doc_type,
+            content_hash=content_hash,
             acl_groups=acl_groups,
             chunk_count=chunk_count,
             uploaded_by=uploaded_by,
@@ -42,6 +44,14 @@ class MetadataStore:
             await session.commit()
             await session.refresh(record)
         return record
+
+    async def find_by_content_hash(self, content_hash: str):
+        """Find an existing document with the same content hash."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(DocumentRecord).where(DocumentRecord.content_hash == content_hash)
+            )
+            return result.scalar_one_or_none()
 
     async def get_document(self, doc_id):
         async with self.session_factory() as session:
