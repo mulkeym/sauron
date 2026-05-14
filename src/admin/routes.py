@@ -345,14 +345,35 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
 
                 result_html = f"""<div class="trace-panel">
                     <div class="trace-header">
-                        <span style="color:#16a34a; font-weight:600;">Cache Hit</span>
+                        <span style="color:#16a34a; font-weight:600;">&#9889; Cache Hit</span>
                         <span>Original query: <strong>{html_mod.escape(cached.get('cached_query', ''))}</strong></span>
                         <span>Cached: <strong>{age_str}</strong></span>
                         <span>Lookup: <strong>{cache_time}s</strong></span>
                     </div>
                     <div class="trace-step-wrap">
-                        <div class="trace-step">
-                            <span>&#9889; Matched cached result (similarity ≥ 92%)</span>
+                        <div class="trace-step" style="background:#16a34a; color:white;">
+                            <span>&#9889; Step 1 of 5: Check Cache — <strong>HIT</strong> (similarity ≥ 92%)</span>
+                            <span class="trace-time">{cache_time}s</span>
+                        </div>
+                    </div>
+                    <div class="trace-step-wrap">
+                        <div class="trace-step" style="opacity:0.4;">
+                            <span>&#9898; Step 2 of 5: Classify Query — skipped</span>
+                        </div>
+                    </div>
+                    <div class="trace-step-wrap">
+                        <div class="trace-step" style="opacity:0.4;">
+                            <span>&#9898; Step 3 of 5: Retrieve Documents — skipped</span>
+                        </div>
+                    </div>
+                    <div class="trace-step-wrap">
+                        <div class="trace-step" style="opacity:0.4;">
+                            <span>&#9898; Step 4 of 5: Knowledge Graph Enrichment — skipped</span>
+                        </div>
+                    </div>
+                    <div class="trace-step-wrap">
+                        <div class="trace-step" style="opacity:0.4;">
+                            <span>&#9898; Step 5 of 5: Generate Answer — skipped</span>
                         </div>
                     </div>
                 </div>
