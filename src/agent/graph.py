@@ -51,18 +51,23 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         sub_tasks = state.get("sub_tasks", [])
         unique_tasks = [t for t in sub_tasks if t != state["question"]] if sub_tasks else []
         if unique_tasks:
-            from src.ingestion.embedder import embed_query
+            from src.ingestion.embedder import embed_texts
             import asyncio
 
-            async def search_subtask(task):
-                task_vector = await asyncio.to_thread(embed_query, task)
+            # Embed all sub-tasks in one batch (thread-safe, no concurrent model access)
+            task_vectors = await asyncio.to_thread(embed_texts, unique_tasks, "query")
+
+            # Search in parallel (safe — LanceDB handles concurrent reads)
+            async def search_subtask(task, vector):
                 return vector_store.hybrid_search(
-                    vector=task_vector, text_query=task,
+                    vector=vector, text_query=task,
                     user_groups=state.get("user_groups", ["ALL"]),
                     top_k=10, tier="small",
                 )
 
-            all_subtask_results = await asyncio.gather(*[search_subtask(t) for t in unique_tasks])
+            all_subtask_results = await asyncio.gather(
+                *[search_subtask(t, v) for t, v in zip(unique_tasks, task_vectors)]
+            )
 
             existing_keys = {(c.metadata.doc_id, c.metadata.chunk_index)
                             for c in result.get("retrieved_chunks", [])}
