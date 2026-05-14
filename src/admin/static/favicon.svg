@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Outer eye shape -->
+  <ellipse cx="32" cy="32" rx="30" ry="18" fill="none" stroke="#ef4444" stroke-width="3"/>
+  <!-- Inner glow -->
+  <ellipse cx="32" cy="32" rx="22" ry="12" fill="#7f1d1d" opacity="0.5"/>
+  <!-- Iris ring -->
+  <circle cx="32" cy="32" r="10" fill="none" stroke="#f97316" stroke-width="2.5"/>
+  <!-- Pupil slit -->
+  <ellipse cx="32" cy="32" rx="3" ry="10" fill="#ef4444"/>
+  <!-- Highlight -->
+  <circle cx="29" cy="28" r="2" fill="#fbbf24" opacity="0.8"/>
+  <!-- Top/bottom points -->
+  <path d="M2 32 Q32 10 62 32" fill="none" stroke="#dc2626" stroke-width="2" opacity="0.6"/>
+  <path d="M2 32 Q32 54 62 32" fill="none" stroke="#dc2626" stroke-width="2" opacity="0.6"/>
+</svg>
