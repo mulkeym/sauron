@@ -118,26 +118,82 @@ async def insert_document(text: str, doc_id: str = "", filename: str = "") -> st
         return f"error: {e}"
 
 
-async def query_graph(question: str, mode: str = "mix") -> dict:
-    """Query the knowledge graph.
+async def query_graph(question: str, mode: str = "local") -> dict:
+    """Query the knowledge graph and return formatted entity/relationship context."""
+    import json as json_mod
 
-    Modes:
-    - local: entities + relationships (specific entity questions)
-    - global: high-level patterns and themes
-    - hybrid: local + global combined
-    - mix: knowledge graph + vector chunks (recommended)
-    - naive: vector search only (no graph)
-    """
     rag = await get_lightrag()
     try:
         result = await rag.aquery(
             question,
             param=QueryParam(
                 mode=mode,
-                only_need_context=True,  # return context, we'll synthesize ourselves
+                only_need_context=True,
+                top_k=20,
             ),
         )
-        return {"context": result, "mode": mode}
+
+        if not result or len(result.strip()) < 20:
+            return {"context": "", "mode": mode}
+
+        # Parse and format — extract just entities and relationships, not raw chunks
+        lines = []
+        in_entity = False
+        in_relation = False
+
+        for line in result.split("\n"):
+            stripped = line.strip()
+
+            if "Knowledge Graph Data (Entity)" in stripped:
+                in_entity = True
+                in_relation = False
+                continue
+            if "Knowledge Graph Data (Relationship)" in stripped:
+                in_entity = False
+                in_relation = True
+                continue
+            if "Sources" in stripped or "Chunks" in stripped:
+                in_entity = False
+                in_relation = False
+                continue
+
+            if not stripped or stripped in ('```json', '```'):
+                continue
+
+            # Skip junk entries from LLM template output
+            junk = {"entity_name", "source_entity", "target_entity", "UNKNOWN"}
+
+            if in_entity and stripped.startswith('{'):
+                try:
+                    ent = json_mod.loads(stripped)
+                    name = ent.get("entity", "")
+                    etype = ent.get("type", "")
+                    desc = ent.get("description", "").split("<SEP>")[0].strip().rstrip('`')
+                    if name and name not in junk and etype not in junk and desc:
+                        lines.append(f"- {name} ({etype}): {desc}")
+                except Exception:
+                    pass
+
+            elif in_relation and stripped.startswith('{'):
+                try:
+                    rel = json_mod.loads(stripped)
+                    src = rel.get("source", "")
+                    tgt = rel.get("target", "")
+                    desc = rel.get("description", "").split("<SEP>")[0].strip().rstrip('`')
+                    if src and tgt and src not in junk and tgt not in junk:
+                        lines.append(f"- {src} → {tgt}: {desc}")
+                except Exception:
+                    pass
+
+        # Deduplicate and cap
+        seen = set()
+        unique = []
+        for line in lines:
+            if line not in seen:
+                seen.add(line)
+                unique.append(line)
+        context = "\n".join(unique[:50])
+        return {"context": context, "mode": mode}
     except Exception as e:
         logger.error(f"LightRAG query failed: {e}")
         return {"context": "", "mode": mode, "error": str(e)}
