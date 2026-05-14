@@ -3,6 +3,50 @@
 {% block content %}
 <h1>Settings</h1>
 
+<div class="settings-section">
+    <h2>Admin Account</h2>
+    <p class="section-desc">Change the admin login credentials for this UI.</p>
+    <form hx-post="/admin/api/settings/admin-account" hx-target="#admin-status" hx-swap="innerHTML">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="admin_username">Username</label>
+                <input type="text" id="admin_username" name="admin_username" value="{{ settings.admin_username }}">
+            </div>
+            <div class="form-group">
+                <label for="admin_password">New Password</label>
+                <input type="password" id="admin_password" name="admin_password" placeholder="Leave blank to keep current">
+            </div>
+        </div>
+        <button type="submit">Update Account</button>
+        <span id="admin-status" style="margin-left:0.5rem;"></span>
+    </form>
+</div>
+
+<div class="settings-section">
+    <h2>API Keys</h2>
+    <p class="section-desc">Keys used to authenticate REST API and MCP access. Comma-separated.</p>
+    <form hx-post="/admin/api/settings/api-keys" hx-target="#apikey-status" hx-swap="innerHTML">
+        <div class="form-group">
+            <label for="api_keys">API Keys</label>
+            <input type="text" id="api_keys" name="api_keys" value="{{ settings.api_keys }}" style="width:100%; font-family:monospace;">
+            <span style="font-size:0.8rem; color:#6b7280;">Comma-separated. Each key can be used as X-API-Key header or Bearer token.</span>
+        </div>
+        <button type="submit">Update API Keys</button>
+        <button type="button" class="secondary" onclick="generateApiKey()" style="margin-left:0.5rem;">Generate New Key</button>
+        <span id="apikey-status" style="margin-left:0.5rem;"></span>
+    </form>
+</div>
+
+<script>
+function generateApiKey() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let key = 'sk-';
+    for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
+    const input = document.getElementById('api_keys');
+    input.value = input.value ? input.value + ',' + key : key;
+}
+</script>
+
 <div id="save-status"></div>
 
 <form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">

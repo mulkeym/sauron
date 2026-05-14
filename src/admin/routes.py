@@ -1160,6 +1160,53 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", {"settings": settings})
 
 
+@router.post("/api/settings/admin-account")
+async def update_admin_account(admin_username: str = Form(""), admin_password: str = Form("")):
+    if admin_username:
+        settings.admin_username = admin_username
+    if admin_password:
+        settings.admin_password = admin_password
+
+    # Persist to .env
+    env_path = Path(".env")
+    env_lines = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                key, _, val = line.partition("=")
+                env_lines[key.strip()] = val.strip()
+    env_lines["ADMIN_USERNAME"] = settings.admin_username
+    env_lines["ADMIN_PASSWORD"] = settings.admin_password
+    env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
+
+    msg = "Account updated."
+    if admin_password:
+        msg += " Password changed — you will need to log in again."
+    return HTMLResponse(f'<span class="status-ok">{msg}</span>')
+
+
+@router.post("/api/settings/api-keys")
+async def update_api_keys(api_keys: str = Form("")):
+    if not api_keys.strip():
+        return HTMLResponse('<span class="status-err">At least one API key is required.</span>')
+
+    settings.api_keys = api_keys.strip()
+
+    # Persist to .env
+    env_path = Path(".env")
+    env_lines = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                key, _, val = line.partition("=")
+                env_lines[key.strip()] = val.strip()
+    env_lines["API_KEYS"] = settings.api_keys
+    env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
+
+    count = len(settings.api_key_list)
+    return HTMLResponse(f'<span class="status-ok">Saved {count} API key(s).</span>')
+
+
 @router.post("/api/settings")
 async def save_settings(
     vllm_base_url: str = Form(""),
