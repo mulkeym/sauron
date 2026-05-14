@@ -33,8 +33,20 @@ def parse_document(path: Path) -> ParsedDocument:
         return _parse_markdown(path)
     elif suffix == ".txt":
         return _parse_transcript(path)
+    elif suffix in (".conf", ".cfg", ".ini", ".yaml", ".yml", ".json",
+                     ".xml", ".log", ".sh", ".bat", ".ps1", ".py",
+                     ".html", ".htm", ".rtf", ".tsv"):
+        return _parse_plaintext(path)
     else:
-        raise ValueError(f"Unsupported file format: {suffix}")
+        # Try as plain text for any unrecognized extension
+        return _parse_plaintext(path)
+
+
+def _parse_plaintext(path: Path) -> ParsedDocument:
+    """Parse any plain text file (config, log, script, etc.)."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    doc_type = path.suffix.lstrip(".") or "text"
+    return ParsedDocument(filename=path.name, doc_type=doc_type, text=text)
 
 
 def _parse_markdown(path: Path) -> ParsedDocument:
