@@ -45,16 +45,30 @@
     <div id="upload-status" style="margin-top: 1rem;"></div>
 </div>
 
-<h2 style="margin-top: 2rem; margin-bottom: 1rem;">Indexed Documents</h2>
-<table>
-    <thead><tr><th>Filename</th><th>Application</th><th>Type</th><th>Category</th><th>ACL Groups</th><th>Chunks</th><th>Uploaded By</th><th>Actions</th></tr></thead>
+<h2 style="margin-top: 2rem; margin-bottom: 1rem;">Indexed Documents ({{ documents | length }})</h2>
+<table id="doc-table">
+    <thead><tr>
+        <th onclick="sortTable(0)" style="cursor:pointer;">Filename ⇅</th>
+        <th onclick="sortTable(1)" style="cursor:pointer;">Application ⇅</th>
+        <th onclick="sortTable(2)" style="cursor:pointer;">Type ⇅</th>
+        <th onclick="sortTable(3)" style="cursor:pointer;">Category ⇅</th>
+        <th>ACL Groups</th>
+        <th onclick="sortTable(5)" style="cursor:pointer;">Chunks ⇅</th>
+        <th onclick="sortTable(6)" style="cursor:pointer;">Uploaded By ⇅</th>
+        <th onclick="sortTable(7)" style="cursor:pointer;">Added ⇅</th>
+        <th>Actions</th>
+    </tr></thead>
     <tbody id="doc-table-body">
         {% for doc in documents %}
         <tr>
-            <td>{{ doc.filename }}</td><td>{{ doc._app_name or "—" }}</td><td>{{ doc.doc_type }}</td>
+            <td>{{ doc.filename }}</td>
+            <td>{{ doc._app_name or "—" }}</td>
+            <td>{{ doc.doc_type }}</td>
             <td>{{ doc.category or "uncategorized" }}</td>
             <td>{{ doc.acl_groups | join(", ") }}</td>
-            <td>{{ doc.chunk_count }}</td><td>{{ doc.uploaded_by }}</td>
+            <td>{{ doc.chunk_count }}</td>
+            <td>{{ doc.uploaded_by }}</td>
+            <td>{{ doc.created_at.strftime('%Y-%m-%d %H:%M') if doc.created_at else '—' }}</td>
             <td>
                 <button class="small" hx-get="/admin/api/documents/{{ doc.doc_id }}/edit" hx-target="closest tr" hx-swap="outerHTML">Edit</button>
                 <button class="danger small" hx-delete="/admin/api/documents/{{ doc.doc_id }}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
@@ -63,4 +77,28 @@
         {% endfor %}
     </tbody>
 </table>
+
+<script>
+let sortDir = {};
+function sortTable(col) {
+    const table = document.getElementById('doc-table');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    sortDir[col] = !sortDir[col]; // toggle direction
+    const dir = sortDir[col] ? 1 : -1;
+
+    rows.sort((a, b) => {
+        let aVal = a.cells[col]?.textContent.trim() || '';
+        let bVal = b.cells[col]?.textContent.trim() || '';
+        // Try numeric sort for chunks column
+        if (col === 5) {
+            return (parseInt(aVal) - parseInt(bVal)) * dir;
+        }
+        return aVal.localeCompare(bVal) * dir;
+    });
+
+    rows.forEach(row => tbody.appendChild(row));
+}
+</script>
 {% endblock %}
