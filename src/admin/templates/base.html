@@ -21,8 +21,23 @@
             <a href="/admin/audit">Audit Log</a>
             <a href="/admin/settings">Settings</a>
             <a href="/admin/logout" style="color:#fca5a5;">Logout</a>
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌓</button>
         </div>
     </nav>
     <main>{% block content %}{% endblock %}</main>
+    <script>
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('sauron-theme', next);
+    }
+    // Apply saved theme on load
+    (function() {
+        const saved = localStorage.getItem('sauron-theme') ||
+            (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    })();
+    </script>
 </body>
 </html>
