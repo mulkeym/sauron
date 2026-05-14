@@ -99,6 +99,49 @@ def cache_lookup(query_vector: list[float], user_groups: list[str],
     return None
 
 
+async def cache_judge(original_query: str, new_query: str, cached_answer: str) -> dict:
+    """Ask LLM to judge if a cached result is applicable to the new query.
+
+    Returns {"applicable": bool, "confidence": float, "reason": str}
+    """
+    import asyncio
+    from src.generation.llm_client import generate, parse_json_response
+
+    prompt = f"""You are judging whether a cached answer is applicable to a new question.
+
+Cached question: "{original_query}"
+New question: "{new_query}"
+
+First 500 chars of cached answer:
+{cached_answer[:500]}
+
+Is the cached answer applicable to the new question? Consider:
+- Do they ask about the same topic/entities?
+- Would the cached answer satisfy the new question?
+- Are there important differences that make the cache invalid?
+
+Respond with ONLY JSON:
+{{"applicable": true/false, "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
+
+    try:
+        response = await asyncio.to_thread(
+            generate,
+            system_prompt="You judge cache applicability. Return ONLY JSON.",
+            user_prompt=prompt,
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        parsed = parse_json_response(response)
+        return {
+            "applicable": parsed.get("applicable", False),
+            "confidence": parsed.get("confidence", 0.0),
+            "reason": parsed.get("reason", ""),
+        }
+    except Exception as e:
+        logger.warning(f"Cache judge failed: {e}")
+        return {"applicable": True, "confidence": 0.5, "reason": "Judge unavailable, using cache"}
+
+
 def cache_store(query_text: str, query_vector: list[float], answer: str,
                 citations: list[dict], user_groups: list[str],
                 source_doc_ids: list[str], query_type: str = ""):
