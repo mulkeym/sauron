@@ -28,7 +28,7 @@
             <td>{{ job.progress }}</td>
             <td>{{ job.uploaded_by }}</td>
             <td>{{ job.category or '-' }}</td>
-            <td>{{ job.chunk_count if job.step == 'complete' else '-' }}</td>
+            <td>{{ job.chunk_count if job.chunk_count > 0 else '-' }}</td>
             <td>
                 {% if job.step == 'complete' %}
                     {{ job.entity_count }} / {{ job.relationship_count }}

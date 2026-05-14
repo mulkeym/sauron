@@ -225,6 +225,7 @@ class IngestQueue:
             if tier_name == "medium":
                 total_chunks = len(tier_chunks)
                 chunks = tier_chunks  # use medium tier for entity extraction
+                job.chunk_count = total_chunks  # show count in UI immediately
 
         await metadata_store.add_document(
             doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,

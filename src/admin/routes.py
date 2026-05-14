@@ -720,7 +720,7 @@ async def queue_status():
         rows += f"""<tr>
             <td>{job.filename}</td><td>{status}</td><td>{job.progress}</td>
             <td>{job.uploaded_by}</td><td>{job.category or '-'}</td>
-            <td>{job.chunk_count if job.step == 'complete' else '-'}</td>
+            <td>{job.chunk_count if job.chunk_count > 0 else '-'}</td>
             <td>{kg_info}</td>
             <td>{elapsed}</td>
         </tr>{error_row}"""
