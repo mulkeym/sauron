@@ -424,7 +424,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     kg_chunks = [c for c in rc if (c.metadata.filename if hasattr(c, 'metadata') else '') == 'knowledge_graph']
                     if kg_chunks:
                         text = kg_chunks[0].text if hasattr(kg_chunks[0], 'text') else ''
-                        return f"<strong>Knowledge graph context added:</strong><pre style='font-size:0.8rem; white-space:pre-wrap;'>{html_mod.escape(text[:500])}</pre>"
+                        return f"<strong>Knowledge graph context added:</strong><pre style='font-size:0.8rem; white-space:pre-wrap;'>{html_mod.escape(text)}</pre>"
                     return "<em>No knowledge graph enrichment applied</em>"
                 elif step_name == "evaluate":
                     needs = output.get("needs_reretrieval", False)
