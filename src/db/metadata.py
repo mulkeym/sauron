@@ -24,10 +24,11 @@ class MetadataStore:
         """Add new columns to existing tables if they don't exist."""
         from sqlalchemy import text
         async with self.engine.begin() as conn:
-            try:
-                await conn.execute(text("SELECT content_hash FROM documents LIMIT 1"))
-            except Exception:
-                await conn.execute(text('ALTER TABLE documents ADD COLUMN content_hash TEXT DEFAULT ""'))
+            for col, table in [("content_hash", "documents"), ("proposed_grs", "category_proposals")]:
+                try:
+                    await conn.execute(text(f"SELECT {col} FROM {table} LIMIT 1"))
+                except Exception:
+                    await conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} TEXT DEFAULT ""'))
 
     async def add_document(
         self,
@@ -116,8 +117,8 @@ class MetadataStore:
             result = await session.execute(select(Category))
             return list(result.scalars().all())
 
-    async def add_proposal(self, proposed_name, proposed_description, proposed_acl_groups, proposed_keywords, proposed_by):
-        record = CategoryProposal(proposed_name=proposed_name, proposed_description=proposed_description, proposed_acl_groups=proposed_acl_groups, proposed_keywords=proposed_keywords, proposed_by=proposed_by)
+    async def add_proposal(self, proposed_name, proposed_description, proposed_acl_groups, proposed_keywords, proposed_by, proposed_grs=""):
+        record = CategoryProposal(proposed_name=proposed_name, proposed_description=proposed_description, proposed_acl_groups=proposed_acl_groups, proposed_keywords=proposed_keywords, proposed_grs=proposed_grs, proposed_by=proposed_by)
         async with self.session_factory() as session:
             session.add(record)
             await session.commit()
@@ -135,7 +136,7 @@ class MetadataStore:
             if proposal:
                 proposal.status = "approved"
                 proposal.reviewed_by = approved_by
-                cat = Category(name=proposal.proposed_name, description=proposal.proposed_description, acl_groups=proposal.proposed_acl_groups, routing_keywords=proposal.proposed_keywords)
+                cat = Category(name=proposal.proposed_name, description=proposal.proposed_description, acl_groups=proposal.proposed_acl_groups, routing_keywords=proposal.proposed_keywords, grs_number=proposal.proposed_grs if hasattr(proposal, 'proposed_grs') else "")
                 session.add(cat)
                 await session.commit()
 

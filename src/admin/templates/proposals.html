@@ -4,11 +4,12 @@
 <h1>Pending Category Proposals</h1>
 {% if proposals %}
 <table>
-    <thead><tr><th>Proposed Name</th><th>Description</th><th>ACL Groups</th><th>Keywords</th><th>Proposed By</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Proposed Name</th><th>Description</th><th>GRS</th><th>ACL Groups</th><th>Keywords</th><th>Proposed By</th><th>Actions</th></tr></thead>
     <tbody>
         {% for p in proposals %}
         <tr id="proposal-{{ p.id }}">
             <td>{{ p.proposed_name }}</td><td>{{ p.proposed_description }}</td>
+            <td>{{ p.proposed_grs or '-' }}</td>
             <td>{{ p.proposed_acl_groups | join(", ") }}</td>
             <td>{{ p.proposed_keywords | join(", ") }}</td><td>{{ p.proposed_by }}</td>
             <td>

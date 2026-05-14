@@ -47,6 +47,7 @@ class CategoryProposal(Base):
     proposed_description: Mapped[str] = mapped_column(String, default="")
     proposed_acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     proposed_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    proposed_grs: Mapped[str] = mapped_column(String, default="")
     proposed_by: Mapped[str] = mapped_column(String, default="")
     status: Mapped[str] = mapped_column(String, default="pending")
     reviewed_by: Mapped[str] = mapped_column(String, default="")

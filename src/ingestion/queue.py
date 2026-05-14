@@ -189,7 +189,8 @@ class IngestQueue:
                 await metadata_store.add_proposal(
                     proposed_name=cat_result.category, proposed_description=cat_result.description,
                     proposed_acl_groups=cat_result.suggested_acl_groups,
-                    proposed_keywords=cat_result.suggested_keywords, proposed_by="auto-categorizer",
+                    proposed_keywords=cat_result.suggested_keywords,
+                    proposed_grs=cat_result.suggested_grs, proposed_by="auto-categorizer",
                 )
                 category = "uncategorized"
             else:
