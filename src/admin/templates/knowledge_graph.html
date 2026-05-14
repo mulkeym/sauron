@@ -147,8 +147,40 @@ function filterGraph() {
 
 function searchGraph() {
     const query = document.getElementById('kg-search').value.toLowerCase();
-    nodes.forEach(n => { n.__highlight = query && n.id.toLowerCase().includes(query); });
-    graph.nodeColor(graph.nodeColor()); // trigger re-render
+    if (!query) {
+        // Reset — show all nodes
+        graph.graphData({ nodes, links });
+        return;
+    }
+
+    // Find matching nodes and their direct neighbors
+    const matchIds = new Set();
+    const neighborIds = new Set();
+    nodes.forEach(n => {
+        if (n.id.toLowerCase().includes(query)) matchIds.add(n.id);
+    });
+
+    // Include neighbors of matched nodes
+    links.forEach(l => {
+        const src = l.source.id || l.source;
+        const tgt = l.target.id || l.target;
+        if (matchIds.has(src)) neighborIds.add(tgt);
+        if (matchIds.has(tgt)) neighborIds.add(src);
+    });
+
+    const visibleIds = new Set([...matchIds, ...neighborIds]);
+    const filteredNodes = nodes.filter(n => visibleIds.has(n.id)).map(n => ({
+        ...n,
+        color: matchIds.has(n.id) ? '#ffffff' : n.color,
+        __match: matchIds.has(n.id),
+    }));
+    const filteredLinks = links.filter(l =>
+        visibleIds.has(l.source.id || l.source) && visibleIds.has(l.target.id || l.target)
+    );
+
+    graph.graphData({ nodes: filteredNodes, links: filteredLinks });
+    graph.nodeColor(n => n.__match ? '#ffffff' : (TYPE_COLORS[n.type] || '#9ca3af'));
+    graph.nodeVal(n => n.__match ? 15 : Math.max(3, Math.min(20, (n.connections || 0) * 2 + 3)));
 }
 
 function showNodeDetail(node) {
