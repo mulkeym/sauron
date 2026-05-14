@@ -119,4 +119,13 @@
          hx-get="/admin/api/settings/reconcile-status" hx-trigger="load" hx-swap="innerHTML">
     </div>
 </div>
+
+<div class="settings-section" style="margin-top:1.5rem;">
+    <h2>Query Result Cache</h2>
+    <p class="section-desc">Cached answers are reused when a semantically similar question is asked with the same ACL permissions. Purge when documents are updated or to force fresh answers.</p>
+    <button type="button" hx-post="/admin/api/settings/purge-cache" hx-target="#cache-status" hx-swap="innerHTML" hx-confirm="Purge all cached query results?">Purge Cache</button>
+    <span id="cache-status" style="margin-left:0.5rem;"
+          hx-get="/admin/api/settings/cache-stats" hx-trigger="load" hx-swap="innerHTML">
+    </span>
+</div>
 {% endblock %}

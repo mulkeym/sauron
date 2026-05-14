@@ -59,5 +59,47 @@ def rag_query(question, user_groups, vector_store, top_k=10):
 
 
 async def agent_query(question: str, user_groups: list[str], vector_store, schema_registry, metadata_store=None) -> RAGResponse:
+    import asyncio
+    from src.ingestion.embedder import embed_query
+    from src.retrieval.query_cache import cache_lookup, cache_store
+
+    # Check cache first
+    try:
+        query_vector = await asyncio.to_thread(embed_query, question)
+        cached = cache_lookup(query_vector, user_groups)
+        if cached:
+            citations = [
+                Citation(
+                    doc_id=c.get("doc_id", ""), filename=c.get("filename", ""),
+                    doc_type=c.get("doc_type", ""), chunk_index=c.get("chunk_index", 0),
+                    page=c.get("page"), snippet=c.get("snippet", ""),
+                    relevance=c.get("relevance", 0.0),
+                )
+                for c in cached.get("citations", [])
+            ]
+            return RAGResponse(answer=f"[Cached result from: \"{cached['cached_query']}\"]\n\n{cached['answer']}", citations=citations)
+    except Exception:
+        pass
+
+    # Run the full agent pipeline
     from src.agent.graph import run_agent
-    return await run_agent(question=question, user_groups=user_groups, vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
+    result = await run_agent(question=question, user_groups=user_groups, vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
+
+    # Cache the result
+    try:
+        citation_dicts = [
+            {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
+             "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
+             "relevance": c.relevance}
+            for c in result.citations
+        ]
+        source_ids = list({c.doc_id for c in result.citations})
+        cache_store(
+            query_text=question, query_vector=query_vector,
+            answer=result.answer, citations=citation_dicts,
+            user_groups=user_groups, source_doc_ids=source_ids,
+        )
+    except Exception:
+        pass
+
+    return result

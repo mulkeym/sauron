@@ -1146,3 +1146,17 @@ async def test_embedding_connection(
             return HTMLResponse(f'<span class="status-ok">Loaded locally. Model: {model_name}, Dimension: {dim}</span>')
     except Exception as e:
         return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')
+
+
+@router.post("/api/settings/purge-cache")
+async def purge_query_cache():
+    from src.retrieval.query_cache import cache_purge
+    count = cache_purge()
+    return HTMLResponse(f'<span class="status-ok">Purged {count} cached results.</span>')
+
+
+@router.get("/api/settings/cache-stats")
+async def cache_stats():
+    from src.retrieval.query_cache import cache_stats
+    stats = cache_stats()
+    return HTMLResponse(f'{stats["entries"]} cached results')
