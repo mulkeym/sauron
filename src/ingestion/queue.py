@@ -290,12 +290,17 @@ class IngestQueue:
             handler = _ProgressHandler()
             handler.setLevel(_logging.INFO)
             root_logger = _logging.getLogger()
+            # Temporarily lower root logger level so INFO messages reach our handler
+            original_level = root_logger.level
+            if root_logger.level > _logging.INFO:
+                root_logger.setLevel(_logging.INFO)
             root_logger.addHandler(handler)
 
             try:
                 await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
             finally:
                 root_logger.removeHandler(handler)
+                root_logger.setLevel(original_level)
 
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
         else:
