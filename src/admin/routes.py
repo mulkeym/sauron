@@ -300,7 +300,7 @@ _playground_jobs: dict = {}
 
 
 @router.post("/api/playground/start")
-async def playground_start(question: str = Form(""), play_user: str = Form("finance")):
+async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full")):
     import uuid, asyncio
     from fastapi.responses import JSONResponse
 
@@ -314,10 +314,33 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
 
     async def run_query():
         try:
+            import time, html as html_mod
+
+            # Graph-only mode: bypass the full pipeline, use LightRAG directly
+            if mode == "graph_only":
+                _playground_jobs[query_id]["step"] = "enrich"
+                from src.knowledge.graph_rag import query_graph
+                start_time = time.time()
+                result = await query_graph(question, mode="hybrid")
+                elapsed = round(time.time() - start_time, 1)
+                answer = result.get("context", "No graph data available.")
+
+                result_html = f"""<div class="trace-panel">
+                    <div class="trace-header">
+                        <span>Mode: <strong>Knowledge Graph Only</strong></span>
+                        <span>Total: <strong>{elapsed}s</strong></span>
+                    </div>
+                </div>
+                <div class="result-card">
+                    <div class="result-meta">Groups: {', '.join(user_groups)} | Source: LightRAG</div>
+                    <div class="result-answer">{answer}</div>
+                </div>"""
+                _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+                return
+
             from src.agent.graph import create_agent_graph
             from src.agent.state import AgentState
             from langgraph.graph import END
-            import time, html as html_mod
 
             # Build graph WITHOUT synthesize — we'll stream that separately
             from src.agent.classifier import classify_query
@@ -332,8 +355,11 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             sr = get_schema_registry()
             ms = get_metadata_store()
 
-            # Use the full graph but we'll intercept before synthesis
-            graph = create_agent_graph(vector_store=vs, schema_registry=sr, metadata_store=ms)
+            # Use the full graph; vector_only mode skips graph enrichment by passing metadata_store=None
+            graph = create_agent_graph(
+                vector_store=vs, schema_registry=sr,
+                metadata_store=None if mode == "vector_only" else ms,
+            )
 
             initial_state = AgentState(
                 question=question, user_groups=user_groups, query_type=None, sub_tasks=[],

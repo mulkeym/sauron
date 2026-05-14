@@ -18,6 +18,14 @@
         <label for="play_question">Question</label>
         <textarea id="play_question" name="question" rows="3" placeholder="What is the expense policy?" style="width:100%; max-width:700px; padding:0.5rem 0.75rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.9rem; font-family:inherit;"></textarea>
     </div>
+    <div class="form-group">
+        <label for="play_mode">Search Mode</label>
+        <select id="play_mode" name="mode">
+            <option value="full">Full Pipeline (vector + graph)</option>
+            <option value="graph_only">Knowledge Graph Only (LightRAG)</option>
+            <option value="vector_only">Vector Search Only (LanceDB)</option>
+        </select>
+    </div>
     <button type="button" id="ask-btn" onclick="runQuery()">Ask</button>
 </div>
 
@@ -84,7 +92,7 @@ async function runQuery() {
         const startResp = await fetch('/admin/api/playground/start', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: `question=${encodeURIComponent(question)}&play_user=${encodeURIComponent(user)}`,
+            body: `question=${encodeURIComponent(question)}&play_user=${encodeURIComponent(user)}&mode=${document.getElementById('play_mode').value}`,
         });
         const startData = await startResp.json();
         queryId = startData.query_id;
