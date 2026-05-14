@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     lancedb_path: str = "data/lancedb"
     lancedb_table_name: str = "chunks"
 
+    # Admin UI
+    admin_username: str = "admin"
+    admin_password: str = "password123"
+
     # Auth
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"

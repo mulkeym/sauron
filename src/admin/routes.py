@@ -1,9 +1,11 @@
+import hashlib
 import json
+import secrets
 import tempfile
 from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from src.api.routes_ingest import get_metadata_store, get_vector_store, get_schema_registry
 from src.config import settings
@@ -13,8 +15,57 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
+# Session management — simple signed cookie
+_session_secret = secrets.token_hex(32)
+_active_sessions: set[str] = set()
+
+
+def _create_session() -> str:
+    token = secrets.token_hex(32)
+    _active_sessions.add(token)
+    return token
+
+
+def _is_authenticated(request: Request) -> bool:
+    token = request.cookies.get("sauron_session", "")
+    return token in _active_sessions
+
+
+def _require_login(request: Request):
+    """Check if request is authenticated, redirect to login if not."""
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return None
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    return templates.TemplateResponse(request, "login.html", {"error": ""})
+
+
+@router.post("/login")
+async def login_submit(request: Request, username: str = Form(""), password: str = Form("")):
+    if username == settings.admin_username and password == settings.admin_password:
+        token = _create_session()
+        response = RedirectResponse(url="/admin/", status_code=302)
+        response.set_cookie("sauron_session", token, httponly=True, samesite="lax", max_age=86400)
+        return response
+    return templates.TemplateResponse(request, "login.html", {"error": "Invalid username or password"})
+
+
+@router.get("/logout")
+async def logout(request: Request):
+    token = request.cookies.get("sauron_session", "")
+    _active_sessions.discard(token)
+    response = RedirectResponse(url="/admin/login", status_code=302)
+    response.delete_cookie("sauron_session")
+    return response
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     store = get_metadata_store()
     docs = await store.list_documents()
     categories = await store.list_categories()
@@ -43,24 +94,36 @@ async def dashboard(request: Request):
 
 @router.get("/documents", response_class=HTMLResponse)
 async def documents_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     store = get_metadata_store()
     docs = await store.list_documents()
     return templates.TemplateResponse(request, "documents.html", {"documents": docs})
 
 @router.get("/categories", response_class=HTMLResponse)
 async def categories_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     store = get_metadata_store()
     categories = await store.list_categories()
     return templates.TemplateResponse(request, "categories.html", {"categories": categories})
 
 @router.get("/proposals", response_class=HTMLResponse)
 async def proposals_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     store = get_metadata_store()
     proposals = await store.list_proposals(status="pending")
     return templates.TemplateResponse(request, "proposals.html", {"proposals": proposals})
 
 @router.get("/audit", response_class=HTMLResponse)
 async def audit_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     from src.config import settings
     entries = []
     log_path = Path(settings.audit_log_path)
@@ -293,6 +356,9 @@ async def delete_document(doc_id: str):
 
 @router.get("/playground", response_class=HTMLResponse)
 async def playground_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     return templates.TemplateResponse(request, "playground.html", {})
 
 
@@ -799,6 +865,9 @@ async def bulk_upload(
 
 @router.get("/queue", response_class=HTMLResponse)
 async def queue_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     jobs = ingest_queue.list_jobs()
     return templates.TemplateResponse(request, "queue.html", {"jobs": jobs})
 
@@ -854,6 +923,9 @@ async def queue_status():
 
 @router.get("/knowledge-graph", response_class=HTMLResponse)
 async def knowledge_graph_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     # Load full graph for initial render (admin view)
     import asyncio
     entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
@@ -1082,6 +1154,9 @@ async def knowledge_graph_details(entity_id: int = Form(0)):
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
     return templates.TemplateResponse(request, "settings.html", {"settings": settings})
 
 
