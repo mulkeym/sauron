@@ -168,6 +168,7 @@ class IngestQueue:
                 category = "uncategorized"
             else:
                 category = cat_result.category
+            job.category = category  # update job so queue UI shows it
 
         # Inherit default ACL from category if none provided
         if not job.acl_groups and category and category != "uncategorized":
@@ -241,16 +242,43 @@ class IngestQueue:
 
         # Step 6: Build knowledge graph via LightRAG
         if job.build_graph:
-            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph (LightRAG)")
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
             from src.knowledge.graph_rag import insert_document as lightrag_insert
-            await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+            import logging as _logging
+
+            # Capture LightRAG's progress logs to update the queue UI
+            class _ProgressHandler(_logging.Handler):
+                def emit(self_, record):
+                    msg = record.getMessage()
+                    # LightRAG logs "Chunk X of Y extracted N Ent + M Rel"
+                    if "Chunk " in msg and "extracted" in msg:
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
+                        # Parse entity/relationship counts
+                        import re
+                        m = re.search(r'(\d+) Ent \+ (\d+) Rel', msg)
+                        if m:
+                            job.entity_count += int(m.group(1))
+                            job.relationship_count += int(m.group(2))
+                    elif "Writing graph" in msg:
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
+
+            handler = _ProgressHandler()
+            handler.setLevel(_logging.INFO)
+            root_logger = _logging.getLogger()
+            root_logger.addHandler(handler)
+
+            try:
+                await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+            finally:
+                root_logger.removeHandler(handler)
+
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
         else:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Skipped (knowledge graph disabled)")
 
         # Done
         self.complete_job(job.job_id, doc_id=doc_id, chunk_count=len(chunks),
-                          entity_count=0, relationship_count=0)
+                          entity_count=job.entity_count, relationship_count=job.relationship_count)
 
         # Cleanup temp file
         try:
