@@ -22,14 +22,9 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     user_groups = state["user_groups"]
     schema_prompt = schema_registry.schemas_to_prompt(user_groups)
     if schema_prompt == "No database schemas available.":
-        # Fall back to vector search when no database schemas are available
-        query_vector = embed_query(question)
-        chunks = vector_store.hybrid_search(vector=query_vector, text_query=question, user_groups=user_groups, top_k=30, tier="medium")
-        return {
-            "retrieved_chunks": chunks,
-            "sql_results": [],
-            "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
-        }
+        # Fall back to sweep strategy — analytical questions need comprehensive data
+        from src.agent.strategies.sweep import retrieve_sweep
+        return await retrieve_sweep(state, vector_store=vector_store)
 
     sql = generate(
         system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
@@ -45,14 +40,9 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     try:
         rows = await execute_sql(database_url=database_url, sql=sql)
     except (ValueError, Exception) as e:
-        # Fall back to vector search if SQL fails
-        query_vector = embed_query(question)
-        chunks = vector_store.hybrid_search(vector=query_vector, text_query=question, user_groups=user_groups, top_k=30, tier="medium")
-        return {
-            "retrieved_chunks": chunks,
-            "sql_results": [],
-            "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
-        }
+        # Fall back to sweep strategy if SQL fails
+        from src.agent.strategies.sweep import retrieve_sweep
+        return await retrieve_sweep(state, vector_store=vector_store)
     return {
         "retrieved_chunks": [],
         "sql_results": rows,

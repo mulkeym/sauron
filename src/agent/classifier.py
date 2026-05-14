@@ -5,10 +5,12 @@ CLASSIFICATION_PROMPT = """You are a query classifier for a document knowledge b
 
 Query types:
 - lookup: Direct question about a specific document, policy, or fact. Example: "What does policy 4.2 say?"
-- sweep: Exhaustive search across many documents for a pattern. Example: "What questions did Mike ask in all meetings?"
-- analytical: Question requiring data from a database or spreadsheet (numbers, aggregations). Example: "What was Q3 revenue?"
+- sweep: Exhaustive search needing ALL matching items. Use when the question says "all", "every", "list", "total", or needs complete coverage. Example: "What are all the contracts?", "What was the total value of all awards?"
+- analytical: Question requiring SQL against a structured database (only if database tables exist). Example: "What was Q3 revenue from the finance database?"
 - cross_reference: Question spanning multiple source types (e.g., compare database data against a policy). Example: "Does our spending comply with policy?"
 - temporal: Question about changes over time or date-bounded searches. Example: "What changed last month?"
+
+IMPORTANT: If the question asks for "all", "every", "total", or "sum" of items from documents, use SWEEP not analytical. Only use analytical if a structured database is explicitly needed.
 
 Respond with ONLY valid JSON:
 {"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
