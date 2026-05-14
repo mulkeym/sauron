@@ -315,6 +315,59 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
     async def run_query():
         try:
             import time, html as html_mod
+            import asyncio as _asyncio
+
+            # Check query cache first
+            _playground_jobs[query_id]["step"] = "cache_check"
+            from src.retrieval.query_cache import cache_lookup, cache_store
+            from src.ingestion.embedder import embed_query
+            cache_start = time.time()
+            query_vector = await _asyncio.to_thread(embed_query, question)
+            cached = cache_lookup(query_vector, user_groups)
+            cache_time = round(time.time() - cache_start, 2)
+
+            if cached:
+                from src.retrieval.models import Citation
+                import datetime
+                cached_age = time.time() - cached.get("cached_at", 0)
+                if cached_age < 3600:
+                    age_str = f"{int(cached_age)}s ago"
+                elif cached_age < 86400:
+                    age_str = f"{int(cached_age/3600)}h ago"
+                else:
+                    age_str = f"{int(cached_age/86400)}d ago"
+
+                citations = cached.get("citations", [])
+                citations_html = ""
+                for i, c in enumerate(citations, 1):
+                    page = f' &mdash; page {c.get("page", "")}' if c.get("page") else ''
+                    citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.get("filename", "")}</span>{page}<span class="score"> &mdash; relevance: {c.get("relevance", 0):.2f}</span><div class="snippet">{c.get("snippet", "")[:300]}</div></div>'
+
+                result_html = f"""<div class="trace-panel">
+                    <div class="trace-header">
+                        <span style="color:#16a34a; font-weight:600;">Cache Hit</span>
+                        <span>Original query: <strong>{html_mod.escape(cached.get('cached_query', ''))}</strong></span>
+                        <span>Cached: <strong>{age_str}</strong></span>
+                        <span>Lookup: <strong>{cache_time}s</strong></span>
+                    </div>
+                    <div class="trace-step-wrap">
+                        <div class="trace-step">
+                            <span>&#9889; Matched cached result (similarity ≥ 92%)</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="result-card">
+                    <div class="result-meta">Groups: {', '.join(user_groups)} | Source: Cache</div>
+                    <div class="result-answer">{cached['answer']}</div>
+                    <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
+                    {citations_html or '<p>No citations.</p>'}
+                </div>"""
+
+                _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+                return
+
+            # No cache hit — proceed with full pipeline
+            _playground_jobs[query_id]["step"] = "classify"
 
             # Graph-only mode: bypass the full pipeline, use LightRAG directly
             if mode == "graph_only":
@@ -415,7 +468,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 answer = _playground_jobs[query_id]["streamed_answer"]
 
             # Build trace with expandable step details
-            step_labels = {"classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "synthesize": "Generate Answer"}
+            step_labels = {"cache_check": "Check Cache", "classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "synthesize": "Generate Answer"}
 
             def format_step_detail(step_name, output):
                 """Format step output for display."""
@@ -509,6 +562,23 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             </div>"""
 
             _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+
+            # Cache the result for future queries
+            try:
+                citation_dicts = [
+                    {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
+                     "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
+                     "relevance": c.relevance}
+                    for c in citations
+                ]
+                source_ids = list({c.doc_id for c in citations})
+                cache_store(
+                    query_text=question, query_vector=query_vector,
+                    answer=answer, citations=citation_dicts,
+                    user_groups=user_groups, source_doc_ids=source_ids,
+                )
+            except Exception:
+                pass
 
         except Exception as e:
             import traceback
