@@ -20,10 +20,15 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -
         "max_tokens": max_tokens,
     }
 
+    headers = {}
+    if settings.vllm_api_key:
+        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+
     try:
         resp = requests.post(
             f'{settings.vllm_base_url}/chat/completions',
             json=payload,
+            headers=headers,
             timeout=settings.vllm_request_timeout,
         )
         resp.raise_for_status()
@@ -92,9 +97,14 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
         "stream": True,
     }
 
+    headers = {}
+    if settings.vllm_api_key:
+        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+
     resp = requests.post(
         f'{settings.vllm_base_url}/chat/completions',
         json=payload,
+        headers=headers,
         stream=True,
         timeout=settings.vllm_request_timeout,
     )

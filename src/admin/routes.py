@@ -950,7 +950,8 @@ async def list_llm_models(vllm_base_url: str = Form("")):
     url = vllm_base_url or settings.vllm_base_url
     try:
         import requests as req
-        resp = req.get(f'{url}/models', timeout=10)
+        headers = {"Authorization": f"Bearer {settings.vllm_api_key}"} if settings.vllm_api_key else {}
+        resp = req.get(f'{url}/models', headers=headers, timeout=10)
         model_ids = [m['id'] for m in resp.json().get('data', [])]
         if not model_ids:
             return HTMLResponse('<select name="vllm_model_name" id="vllm_model_name"><option value="">No models found</option></select>')

@@ -5,9 +5,10 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # LLM
-    vllm_base_url: str = "http://localhost:8000/v1"
-    vllm_model_name: str = "google/gemma-4-31b-it"
-    vllm_request_timeout: int = 300  # seconds - increase for thinking models
+    vllm_base_url: str = "https://api.openai.com/v1"
+    vllm_model_name: str = "gpt-4.1-mini"
+    vllm_api_key: str = ""  # OpenAI API key (or leave empty for local endpoints)
+    vllm_request_timeout: int = 300  # seconds - increase for thinking/local models
 
     # Embeddings
     embedding_mode: str = "local"  # "local" (sentence-transformers, no server needed) or "api" (external endpoint)

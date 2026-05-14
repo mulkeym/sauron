@@ -34,7 +34,7 @@ async def _llm_func(
         history_messages=history_messages,
         keyword_extraction=keyword_extraction,
         base_url=settings.vllm_base_url,
-        api_key="not-needed",
+        api_key=settings.vllm_api_key or "not-needed",
         **kwargs,
     )
 
