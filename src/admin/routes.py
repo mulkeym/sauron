@@ -138,19 +138,17 @@ async def applications_page(request: Request):
 async def create_application(
     name: str = Form(""), slug: str = Form(""),
     description: str = Form(""), default_acl_groups: str = Form(""),
-    allowed_categories: str = Form(""),
 ):
     if not name.strip() or not slug.strip():
         return HTMLResponse('<span class="status-err">Name and slug are required.</span>')
 
     slug_clean = slug.strip().lower().replace(" ", "-")
     acl = [g.strip() for g in default_acl_groups.split(",") if g.strip()]
-    cats = [c.strip() for c in allowed_categories.split(",") if c.strip()]
 
     store = get_metadata_store()
     result = await store.add_application(
         name=name.strip(), slug=slug_clean, description=description.strip(),
-        default_acl_groups=acl, allowed_categories=cats,
+        default_acl_groups=acl,
     )
     if result is None:
         return HTMLResponse(f'<span class="status-err">Slug "{slug_clean}" already exists.</span>')
