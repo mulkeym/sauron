@@ -46,21 +46,27 @@
 </div>
 
 <h2 style="margin-top: 2rem; margin-bottom: 1rem;">Indexed Documents ({{ documents | length }})</h2>
+<div id="bulk-actions" style="display:none; margin-bottom:0.75rem;">
+    <button class="danger" onclick="bulkDelete()">Delete Selected (<span id="selected-count">0</span>)</button>
+    <button class="secondary" onclick="clearSelection()" style="margin-left:0.5rem;">Clear Selection</button>
+</div>
 <table id="doc-table">
     <thead><tr>
-        <th onclick="sortTable(0)" style="cursor:pointer;">Filename ⇅</th>
-        <th onclick="sortTable(1)" style="cursor:pointer;">Application ⇅</th>
-        <th onclick="sortTable(2)" style="cursor:pointer;">Type ⇅</th>
-        <th onclick="sortTable(3)" style="cursor:pointer;">Category ⇅</th>
+        <th><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
+        <th onclick="sortTable(1)" style="cursor:pointer;">Filename ⇅</th>
+        <th onclick="sortTable(2)" style="cursor:pointer;">Application ⇅</th>
+        <th onclick="sortTable(3)" style="cursor:pointer;">Type ⇅</th>
+        <th onclick="sortTable(4)" style="cursor:pointer;">Category ⇅</th>
         <th>ACL Groups</th>
-        <th onclick="sortTable(5)" style="cursor:pointer;">Chunks ⇅</th>
-        <th onclick="sortTable(6)" style="cursor:pointer;">Uploaded By ⇅</th>
-        <th onclick="sortTable(7)" style="cursor:pointer;">Added ⇅</th>
+        <th onclick="sortTable(6)" style="cursor:pointer;">Chunks ⇅</th>
+        <th onclick="sortTable(7)" style="cursor:pointer;">Uploaded By ⇅</th>
+        <th onclick="sortTable(8)" style="cursor:pointer;">Added ⇅</th>
         <th>Actions</th>
     </tr></thead>
     <tbody id="doc-table-body">
         {% for doc in documents %}
         <tr>
+            <td><input type="checkbox" class="doc-select" value="{{ doc.doc_id }}" onchange="updateBulkActions()"></td>
             <td>{{ doc.filename }}</td>
             <td>{{ doc._app_name or "—" }}</td>
             <td>{{ doc.doc_type }}</td>
@@ -85,20 +91,50 @@ function sortTable(col) {
     const tbody = table.querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
 
-    sortDir[col] = !sortDir[col]; // toggle direction
+    sortDir[col] = !sortDir[col];
     const dir = sortDir[col] ? 1 : -1;
 
     rows.sort((a, b) => {
         let aVal = a.cells[col]?.textContent.trim() || '';
         let bVal = b.cells[col]?.textContent.trim() || '';
-        // Try numeric sort for chunks column
-        if (col === 5) {
-            return (parseInt(aVal) - parseInt(bVal)) * dir;
-        }
+        if (col === 6) return (parseInt(aVal) - parseInt(bVal)) * dir;
         return aVal.localeCompare(bVal) * dir;
     });
 
     rows.forEach(row => tbody.appendChild(row));
+}
+
+function toggleAll(el) {
+    document.querySelectorAll('.doc-select').forEach(cb => cb.checked = el.checked);
+    updateBulkActions();
+}
+
+function updateBulkActions() {
+    const checked = document.querySelectorAll('.doc-select:checked');
+    const bar = document.getElementById('bulk-actions');
+    document.getElementById('selected-count').textContent = checked.length;
+    bar.style.display = checked.length > 0 ? 'block' : 'none';
+}
+
+function clearSelection() {
+    document.querySelectorAll('.doc-select').forEach(cb => cb.checked = false);
+    document.getElementById('select-all').checked = false;
+    updateBulkActions();
+}
+
+async function bulkDelete() {
+    const checked = document.querySelectorAll('.doc-select:checked');
+    if (!checked.length) return;
+    if (!confirm(`Delete ${checked.length} document(s)? This cannot be undone.`)) return;
+
+    for (const cb of checked) {
+        try {
+            await fetch(`/admin/api/documents/${cb.value}`, {method: 'DELETE'});
+            cb.closest('tr').remove();
+        } catch (e) {}
+    }
+    updateBulkActions();
+    document.getElementById('select-all').checked = false;
 }
 </script>
 {% endblock %}
