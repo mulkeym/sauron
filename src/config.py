@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     entity_merge_auto_threshold: float = 0.9  # auto-merge above this confidence
     entity_merge_review_threshold: float = 0.7  # propose for review above this
 
+    # SharePoint Integration (future)
+    sharepoint_tenant_id: str = ""
+    sharepoint_client_id: str = ""
+    sharepoint_client_secret: str = ""
+    sharepoint_site_url: str = ""  # e.g., "https://contoso.sharepoint.com/sites/docs"
+    sharepoint_sync_interval: int = 3600  # seconds between delta syncs
+    sharepoint_doc_library: str = "Shared Documents"  # default library to crawl
+
     # Audit
     audit_log_path: str = "data/audit.jsonl"
 
