@@ -742,27 +742,41 @@ async def knowledge_graph_page(request: Request):
 
 
 def _load_lightrag_graph():
-    """Load LightRAG graph data from JSON files (runs in thread)."""
-    import json as json_mod
+    """Load LightRAG graph data from GraphML file (runs in thread)."""
+    import re as re_mod
     from pathlib import Path
 
     entities = []
     relationships = []
-    try:
-        ent_file = Path("data/lightrag/kv_store_full_entities.json")
-        if ent_file.exists():
-            data = json_mod.loads(ent_file.read_text())
-            for v in data.values():
-                for name in v.get("entity_names", []):
-                    entities.append({"name": name, "type": "entity"})
+    junk = {"entity_name", "source_entity", "target_entity", "entity_type"}
 
-        rel_file = Path("data/lightrag/kv_store_full_relations.json")
-        if rel_file.exists():
-            data = json_mod.loads(rel_file.read_text())
-            for v in data.values():
-                for pair in v.get("relation_pairs", []):
-                    if len(pair) >= 2:
-                        relationships.append({"source": pair[0], "target": pair[1]})
+    try:
+        graphml = Path("data/lightrag/graph_chunk_entity_relation.graphml")
+        if not graphml.exists():
+            return entities, relationships
+
+        content = graphml.read_text()
+
+        # Parse nodes: <node id="NAME">...<data key="d1">TYPE</data>...</node>
+        for match in re_mod.finditer(
+            r'<node id="([^"]+)"[^>]*>.*?<data key="d1">(.*?)</data>',
+            content, re_mod.DOTALL
+        ):
+            name = match.group(1)
+            etype = match.group(2).strip()
+            if name.lower() not in junk and etype not in ("UNKNOWN", "entity_type"):
+                entities.append({"name": name, "type": etype})
+
+        # Parse edges: <edge source="SRC" target="TGT">...<data key="d4">DESC</data>...</edge>
+        for match in re_mod.finditer(
+            r'<edge source="([^"]+)" target="([^"]+)"[^>]*>(?:.*?<data key="d4">(.*?)</data>)?',
+            content, re_mod.DOTALL
+        ):
+            src = match.group(1)
+            tgt = match.group(2)
+            desc = (match.group(3) or "").split("<SEP>")[0].strip()[:100]
+            if src.lower() not in junk and tgt.lower() not in junk:
+                relationships.append({"source": src, "target": tgt, "label": desc})
     except Exception:
         pass
     return entities, relationships

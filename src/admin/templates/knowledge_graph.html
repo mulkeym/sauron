@@ -3,116 +3,175 @@
 {% block content %}
 <h1>Knowledge Graph</h1>
 
-<p class="section-desc">Powered by LightRAG — entities and relationships extracted automatically during document ingestion.</p>
+<p class="section-desc">
+    Powered by LightRAG — {{ entities | length }} entities, {{ relationships | length }} relationships.
+    Drag to rotate, scroll to zoom, click a node to focus.
+</p>
 
-<div id="graph-container" style="width:100%; height:500px; background:white; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-bottom:1.5rem;"></div>
+<div class="form-row" style="margin-bottom:1rem;">
+    <div class="form-group">
+        <label for="kg-filter">Filter by type</label>
+        <select id="kg-filter" onchange="filterGraph()">
+            <option value="">All types</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="kg-search">Search</label>
+        <input type="text" id="kg-search" placeholder="Entity name..." oninput="searchGraph()">
+    </div>
+</div>
 
-<div class="settings-section">
-    <h2>Entities ({{ entities | length }})</h2>
-    {% if entities %}
-    <table>
-        <thead><tr><th>Name</th></tr></thead>
+<div id="graph-container" style="width:100%; height:600px; background:#0a0a1a; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.3); margin-bottom:1.5rem;"></div>
+
+<div id="node-detail" style="display:none; margin-bottom:1.5rem;" class="settings-section">
+    <h2 id="detail-title"></h2>
+    <div id="detail-content"></div>
+</div>
+
+<details style="margin-bottom:1rem;">
+    <summary style="cursor:pointer; font-weight:600;">Entity List ({{ entities | length }})</summary>
+    <table style="margin-top:0.5rem;">
+        <thead><tr><th>Name</th><th>Type</th></tr></thead>
         <tbody>
             {% for e in entities %}
-            <tr><td>{{ e.name }}</td></tr>
+            <tr><td>{{ e.name }}</td><td>{{ e.type }}</td></tr>
             {% endfor %}
         </tbody>
     </table>
-    {% else %}
-    <p>No entities yet. Ingest documents with "Build knowledge graph" enabled.</p>
-    {% endif %}
-</div>
+</details>
 
-{% if relationships %}
-<div class="settings-section">
-    <h2>Relationships ({{ relationships | length }})</h2>
-    <table>
-        <thead><tr><th>Source</th><th>Target</th></tr></thead>
-        <tbody>
-            {% for r in relationships %}
-            <tr><td>{{ r.source }}</td><td>{{ r.target }}</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-{% endif %}
-
-<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const entities = {{ entities | tojson }};
-    const relationships = {{ relationships | tojson }};
+const TYPE_COLORS = {
+    organization: '#3b82f6',
+    person: '#ef4444',
+    contract: '#22c55e',
+    location: '#f59e0b',
+    event: '#a855f7',
+    concept: '#6b7280',
+    regulation: '#ec4899',
+    artifact: '#14b8a6',
+    date: '#78716c',
+    program: '#f97316',
+    service: '#06b6d4',
+    law: '#dc2626',
+};
 
-    if (!entities.length) return;
+const entities = {{ entities | tojson }};
+const relationships = {{ relationships | tojson }};
 
-    const elements = [];
-    const nodeSet = new Set();
+// Build graph data
+const nodeMap = new Map();
+const nodes = [];
+const links = [];
 
-    // Add entity nodes
-    entities.forEach(e => {
-        if (!nodeSet.has(e.name)) {
-            nodeSet.add(e.name);
-            elements.push({
-                data: { id: e.name, label: e.name },
-            });
-        }
-    });
-
-    // Add relationship edges
-    relationships.forEach(r => {
-        // Ensure both endpoints exist as nodes
-        if (!nodeSet.has(r.source)) {
-            nodeSet.add(r.source);
-            elements.push({ data: { id: r.source, label: r.source } });
-        }
-        if (!nodeSet.has(r.target)) {
-            nodeSet.add(r.target);
-            elements.push({ data: { id: r.target, label: r.target } });
-        }
-        elements.push({
-            data: { source: r.source, target: r.target },
-        });
-    });
-
-    cytoscape({
-        container: document.getElementById('graph-container'),
-        elements: elements,
-        style: [
-            {
-                selector: 'node',
-                style: {
-                    'label': 'data(label)',
-                    'background-color': '#2563eb',
-                    'color': '#1f2937',
-                    'text-valign': 'bottom',
-                    'text-margin-y': 6,
-                    'font-size': '11px',
-                    'width': 25,
-                    'height': 25,
-                    'text-wrap': 'ellipsis',
-                    'text-max-width': '120px',
-                }
-            },
-            {
-                selector: 'edge',
-                style: {
-                    'width': 2,
-                    'line-color': '#d1d5db',
-                    'target-arrow-color': '#9ca3af',
-                    'target-arrow-shape': 'triangle',
-                    'curve-style': 'bezier',
-                }
-            },
-        ],
-        layout: {
-            name: 'cose',
-            animate: true,
-            animationDuration: 500,
-            nodeRepulsion: 8000,
-            idealEdgeLength: 120,
-            gravity: 0.3,
-        },
-    });
+entities.forEach(e => {
+    if (!nodeMap.has(e.name)) {
+        const node = { id: e.name, type: e.type, color: TYPE_COLORS[e.type] || '#9ca3af', connections: 0 };
+        nodeMap.set(e.name, node);
+        nodes.push(node);
+    }
 });
+
+relationships.forEach(r => {
+    // Ensure both endpoints exist
+    if (!nodeMap.has(r.source)) {
+        const node = { id: r.source, type: 'unknown', color: '#9ca3af', connections: 0 };
+        nodeMap.set(r.source, node);
+        nodes.push(node);
+    }
+    if (!nodeMap.has(r.target)) {
+        const node = { id: r.target, type: 'unknown', color: '#9ca3af', connections: 0 };
+        nodeMap.set(r.target, node);
+        nodes.push(node);
+    }
+    nodeMap.get(r.source).connections++;
+    nodeMap.get(r.target).connections++;
+    links.push({ source: r.source, target: r.target, label: r.label || '' });
+});
+
+// Populate type filter
+const types = [...new Set(entities.map(e => e.type))].sort();
+const filterEl = document.getElementById('kg-filter');
+types.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = `${t} (${entities.filter(e => e.type === t).length})`;
+    filterEl.appendChild(opt);
+});
+
+// Build 3D graph
+const container = document.getElementById('graph-container');
+const graph = ForceGraph3D()(container)
+    .graphData({ nodes, links })
+    .nodeLabel(n => `<div style="background:rgba(0,0,0,0.8); color:white; padding:4px 8px; border-radius:4px; font-size:12px;">
+        <strong>${n.id}</strong><br><span style="color:${n.color}">${n.type}</span> (${n.connections} connections)
+    </div>`)
+    .nodeColor(n => n.__highlight ? '#ffffff' : n.color)
+    .nodeVal(n => Math.max(3, Math.min(20, n.connections * 2 + 3)))
+    .nodeOpacity(0.9)
+    .linkColor(() => 'rgba(255,255,255,0.15)')
+    .linkWidth(1)
+    .linkDirectionalArrowLength(3)
+    .linkDirectionalArrowRelPos(1)
+    .linkLabel(l => l.label ? `<span style="background:rgba(0,0,0,0.7); color:#ccc; padding:2px 6px; border-radius:3px; font-size:10px;">${l.label}</span>` : '')
+    .backgroundColor('#0a0a1a')
+    .onNodeClick(node => {
+        // Focus camera on clicked node
+        const distance = 200;
+        const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+        graph.cameraPosition(
+            { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+            node, 1000
+        );
+        showNodeDetail(node);
+    });
+
+// Warm up the simulation
+graph.d3Force('charge').strength(-80);
+graph.d3Force('link').distance(60);
+
+function filterGraph() {
+    const type = document.getElementById('kg-filter').value;
+    const filteredNodes = type ? nodes.filter(n => n.type === type) : nodes;
+    const filteredIds = new Set(filteredNodes.map(n => n.id));
+    const filteredLinks = type
+        ? links.filter(l => filteredIds.has(l.source.id || l.source) && filteredIds.has(l.target.id || l.target))
+        : links;
+    graph.graphData({ nodes: filteredNodes, links: filteredLinks });
+}
+
+function searchGraph() {
+    const query = document.getElementById('kg-search').value.toLowerCase();
+    nodes.forEach(n => { n.__highlight = query && n.id.toLowerCase().includes(query); });
+    graph.nodeColor(graph.nodeColor()); // trigger re-render
+}
+
+function showNodeDetail(node) {
+    const detail = document.getElementById('node-detail');
+    const title = document.getElementById('detail-title');
+    const content = document.getElementById('detail-content');
+
+    title.textContent = `${node.id} (${node.type})`;
+
+    // Find connected relationships
+    const connected = links.filter(l =>
+        (l.source.id || l.source) === node.id || (l.target.id || l.target) === node.id
+    );
+
+    let html = `<p><strong>${node.connections}</strong> connections</p>`;
+    if (connected.length > 0) {
+        html += '<table><thead><tr><th>Related Entity</th><th>Relationship</th></tr></thead><tbody>';
+        connected.forEach(l => {
+            const other = (l.source.id || l.source) === node.id
+                ? (l.target.id || l.target) : (l.source.id || l.source);
+            html += `<tr><td>${other}</td><td>${l.label || '—'}</td></tr>`;
+        });
+        html += '</tbody></table>';
+    }
+
+    content.innerHTML = html;
+    detail.style.display = 'block';
+}
 </script>
 {% endblock %}
