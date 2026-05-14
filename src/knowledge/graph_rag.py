@@ -177,8 +177,8 @@ async def query_graph(question: str, mode: str = "local") -> dict:
             elif in_relation and stripped.startswith('{'):
                 try:
                     rel = json_mod.loads(stripped)
-                    src = rel.get("source", "")
-                    tgt = rel.get("target", "")
+                    src = rel.get("entity1") or rel.get("source", "")
+                    tgt = rel.get("entity2") or rel.get("target", "")
                     desc = rel.get("description", "").split("<SEP>")[0].strip().rstrip('`')
                     if src and tgt and src not in junk and tgt not in junk:
                         lines.append(f"- {src} → {tgt}: {desc}")
