@@ -250,16 +250,27 @@ class IngestQueue:
             class _ProgressHandler(_logging.Handler):
                 def emit(self_, record):
                     msg = record.getMessage()
-                    # LightRAG logs "Chunk X of Y extracted N Ent + M Rel"
-                    if "Chunk " in msg and "extracted" in msg:
+                    import re
+
+                    if "Extracting stage" in msg:
+                        # "Extracting stage 2/3: filename.md"
                         self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
-                        # Parse entity/relationship counts
-                        import re
+                    elif "Processing" in msg and "document(s)" in msg:
+                        # "Processing 3 document(s)"
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
+                    elif "Chunk " in msg and "extracted" in msg:
+                        # "Chunk 2 of 5 extracted 28 Ent + 30 Rel chunk-abc"
+                        # Clean up: show just the useful part
+                        clean = re.sub(r'\s*chunk-\w+', '', msg)
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, clean)
                         m = re.search(r'(\d+) Ent \+ (\d+) Rel', msg)
                         if m:
                             job.entity_count += int(m.group(1))
                             job.relationship_count += int(m.group(2))
                     elif "Writing graph" in msg:
+                        # "Writing graph with 742 nodes, 723 edges"
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
+                    elif "Merging" in msg and "entit" in msg.lower():
                         self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
 
             handler = _ProgressHandler()
