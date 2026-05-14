@@ -66,8 +66,8 @@ async def ingest_document(
     doc_summary = ""
     try:
         doc_summary = llm_generate(
-            system_prompt="Summarize this document in 2-3 sentences. Focus on what it contains, who it involves, and key facts. Be specific — include names, amounts, and dates if present.",
-            user_prompt=parsed.text[:3000],
+            system_prompt="Summarize ALL items in this document in 2-4 sentences. List EVERY company, contract, or award mentioned — do not omit any. Include names, amounts, and dates.",
+            user_prompt=parsed.text[:6000],
             temperature=0.0, max_tokens=1024,
         )
         logging.getLogger(__name__).info(f"Document summary: {doc_summary[:100]}")
