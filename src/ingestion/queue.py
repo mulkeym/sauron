@@ -93,6 +93,8 @@ class IngestQueue:
             job.error = error
             job.completed_at = time.time()
 
+    max_parallel: int = 3  # max concurrent ingestion jobs
+
     async def start_worker(self, vector_store, metadata_store):
         """Start the background worker that processes the queue."""
         if self._worker_running:
@@ -105,7 +107,11 @@ class IngestQueue:
             if job.step == IngestStep.QUEUED:
                 self._queue.put_nowait(job.job_id)
 
-        asyncio.create_task(self._worker_loop(vector_store, metadata_store))
+        # Start multiple worker tasks for parallel processing
+        from src.config import settings
+        self.max_parallel = settings.max_parallel_ingestion
+        for i in range(self.max_parallel):
+            asyncio.create_task(self._worker_loop(vector_store, metadata_store))
 
     async def _worker_loop(self, vector_store, metadata_store):
         import traceback
