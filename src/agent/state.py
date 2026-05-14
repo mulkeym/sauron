@@ -24,3 +24,4 @@ class AgentState(TypedDict, total=False):
     answer: str
     citations: list[Citation]
     warnings: list[str]
+    skip_graph: bool

@@ -93,6 +93,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
     # Enrich retrieved context with LightRAG knowledge graph
     async def enrich_with_graph(state: AgentState) -> dict:
+        if state.get("skip_graph"):
+            return {}
         chunks = state.get("retrieved_chunks", [])
         if not chunks:
             return {}

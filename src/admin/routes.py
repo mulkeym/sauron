@@ -355,16 +355,13 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             sr = get_schema_registry()
             ms = get_metadata_store()
 
-            # Use the full graph; vector_only mode skips graph enrichment by passing metadata_store=None
-            graph = create_agent_graph(
-                vector_store=vs, schema_registry=sr,
-                metadata_store=None if mode == "vector_only" else ms,
-            )
+            graph = create_agent_graph(vector_store=vs, schema_registry=sr, metadata_store=ms)
 
             initial_state = AgentState(
                 question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
                 retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
                 needs_reretrieval=False, answer="", citations=[], warnings=[],
+                skip_graph=(mode == "vector_only"),
             )
 
             steps_data = []
