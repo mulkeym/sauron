@@ -149,9 +149,22 @@ class IngestQueue:
         import hashlib
         content_bytes = file_path.read_bytes()
         content_hash = hashlib.sha256(content_bytes).hexdigest()
+
+        # Check by content hash
         existing = await metadata_store.find_by_content_hash(content_hash)
         if existing:
             self.fail_job(job.job_id, f"Duplicate: identical content already ingested as '{existing.filename}' (doc_id: {existing.doc_id[:8]}...)")
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+
+        # Also check by filename (catches pre-hash duplicates)
+        all_docs = await metadata_store.list_documents(None)
+        filename_match = [d for d in all_docs if d.filename == job.filename]
+        if filename_match:
+            self.fail_job(job.job_id, f"Duplicate: a document named '{job.filename}' already exists (doc_id: {filename_match[0].doc_id[:8]}...). Delete it first to re-ingest.")
             try:
                 file_path.unlink(missing_ok=True)
             except Exception:
