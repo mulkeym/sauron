@@ -10,12 +10,15 @@ SAURON is a self-hosted agentic RAG (Retrieval-Augmented Generation) system with
 
 - **Hybrid Search** -- BM25 keyword + vector similarity with CrossEncoder reranking (LanceDB)
 - **Multi-Pass Indexing** -- Documents stored at 4 chunk granularities (1K/2K/4K/8K chars)
-- **Knowledge Graph** -- Category-aware entity/relationship extraction with SQL-based graph traversal
+- **Knowledge Graph** -- Category-aware entity/relationship extraction with LightRAG, 3D visualization, application and persona filtering
 - **Agentic Pipeline** -- LangGraph orchestration with query classification, sub-task decomposition, and strategy selection
-- **Document-Level RBAC** -- ACL group filtering enforced at the search layer
+- **Document-Level RBAC** -- ACL group filtering enforced at the search layer, per-application isolation
+- **Web Crawler** -- Multi-page crawling with Playwright fallback for bot-protected sites, auto-downloads PDFs/DOCX/PPTX
+- **Application Workspaces** -- Organize documents, connectors, and queries by project with filtering across the UI
 - **MCP Server** -- Model Context Protocol tools for OpenWebUI, Claude Code, and other AI agents
-- **Admin Dashboard** -- Document management, ingestion queue, playground, knowledge graph explorer
+- **Admin Dashboard** -- Document management, ingestion queue, playground, knowledge graph explorer, web connector management
 - **Streaming Answers** -- SSE-based token streaming in the playground
+- **OpenAI-Compatible API** -- Drop-in `/v1/chat/completions` endpoint with citations
 - **Docker Ready** -- Multi-stage build with health checks and shared data volumes
 
 ## Architecture
@@ -156,6 +159,28 @@ Parse -> Categorize -> Generate Summary -> Chunk (4 tiers) -> Embed -> Store -> 
 
 The async ingestion queue shows live progress with entity/relationship counts.
 
+## Web Crawler
+
+SAURON can crawl websites and automatically ingest their content:
+
+- **Multi-page crawling** with configurable depth (0-3 levels), URL pattern filtering, and max page limits
+- **Multiple seed URLs** per connector -- a base URL plus additional URLs, all crawled at depth 0
+- **File detection** -- automatically downloads linked PDFs, DOCX, PPTX, XLSX, and other file types
+- **Playwright fallback** -- sites behind bot protection (Akamai, Cloudflare) are fetched with a headless Chromium browser; file downloads use in-page `fetch()` to carry session cookies
+- **Content dedup** -- SHA-256 hashing prevents re-ingesting unchanged pages
+- **Live progress** -- active crawl status (pages found/ingested, current URL) shown on the Queue page
+- **Application assignment** -- crawled content is tagged with the connector's application and ACL groups
+
+## Application Workspaces
+
+Documents and connectors can be organized into **applications** (projects/workspaces):
+
+- Each application has a name, description, owner, and default ACL groups
+- Documents inherit ACL from their application's defaults
+- The **Knowledge Graph** can be filtered by application (server-side entity filtering via document tracing)
+- The **Playground** can be scoped to an application (restricts vector search to the app's documents via `doc_id IN` filtering)
+- Filtering composes with persona/ACL filtering using intersection (AND) semantics
+
 ## Document-Level RBAC
 
 Every document has an `acl_groups` field (e.g., `["finance", "executives"]`). When a user searches:
@@ -193,12 +218,14 @@ Three transport modes:
 | Page | Purpose |
 |------|---------|
 | Dashboard | KPIs: documents, categories, entities, vectors, proposals |
-| Documents | Upload, edit category/ACL, delete, inline editing |
-| Queue | Live ingestion progress with entity/relationship counts |
-| Categories | Create, edit, manage document categories |
-| Proposals | Approve/reject auto-categorization proposals |
-| Playground | Query testing with step trace, streaming answers, markdown |
-| Knowledge Graph | Browse entities, visualize relationships, merge duplicates |
+| Documents | Upload, edit category/ACL, bulk select/delete, sortable columns |
+| Applications | Create and manage project workspaces with default ACL groups |
+| Connectors | Web crawler configuration with inline editing, additional URLs, crawl-now button |
+| Queue | Live ingestion progress with entity/relationship counts and active crawl status |
+| Categories | Create, edit, manage document categories with NARA GRS mapping |
+| Proposals | Approve/reject auto-categorization and entity merge proposals |
+| Playground | Query testing with step trace, streaming answers, application and persona filters |
+| Knowledge Graph | 3D entity visualization with application, persona, and type filtering |
 | Settings | LLM/embedding endpoints, reconciliation, LanceDB config |
 | Audit Log | JSONL audit trail of all operations |
 
@@ -208,8 +235,8 @@ Three transport modes:
 
 ```bash
 # Clone and setup
-git clone https://github.com/yourusername/sauron.git
-cd sauron
+git clone https://github.com/mulkeym/rag.git
+cd rag
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -286,11 +313,15 @@ SAURON supports reasoning/thinking models (Gemma, Qwen, etc.) that use extended 
 | API Framework | FastAPI |
 | Agent Orchestration | LangGraph |
 | Vector Store | LanceDB (embedded) |
+| Knowledge Graph | LightRAG (file-based, zero infrastructure) |
 | Metadata Store | SQLite + SQLAlchemy (async) |
-| Embeddings | E5-Large-V2 / any OpenAI-compatible |
+| Embeddings | nomic-embed-text-v1 / any OpenAI-compatible |
 | LLM | Any OpenAI-compatible endpoint |
+| Web Crawling | requests + Playwright (headless Chromium fallback) |
 | MCP | FastMCP |
 | Admin UI | Jinja2 + HTMX |
+| Graph Visualization | 3D Force Graph |
+| Document Parsing | Unstructured, python-docx, openpyxl |
 | Containerization | Docker + Docker Compose |
 
 ## License
