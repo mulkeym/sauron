@@ -11,12 +11,21 @@
 <div class="form-row" style="margin-bottom:1rem;">
     <div class="form-group">
         <label for="kg-persona">View as</label>
-        <select id="kg-persona" onchange="loadGraphForPersona()">
+        <select id="kg-persona" onchange="loadFilteredGraph()">
             <option value="">Admin (All documents)</option>
             <option value="finance,executives">Mike (Finance, Executives)</option>
             <option value="it_support,devops">Bob (IT Support, DevOps)</option>
             <option value="engineering">Sarah (Engineering)</option>
             <option value="contracts,executives">Carol (Contracts, Executives)</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="kg-app">Application</label>
+        <select id="kg-app" onchange="loadFilteredGraph()">
+            <option value="">All Applications</option>
+            {% for app in applications %}
+            <option value="{{ app.id }}">{{ app.name }}</option>
+            {% endfor %}
         </select>
     </div>
     <div class="form-group">
@@ -145,9 +154,14 @@ const graph = ForceGraph3D()(container)
 graph.d3Force('charge').strength(-80);
 graph.d3Force('link').distance(60);
 
-async function loadGraphForPersona() {
+async function loadFilteredGraph() {
     const groups = document.getElementById('kg-persona').value;
-    const url = '/admin/api/knowledge-graph/filtered' + (groups ? '?groups=' + encodeURIComponent(groups) : '');
+    const appId = document.getElementById('kg-app').value;
+    const params = new URLSearchParams();
+    if (groups) params.set('groups', groups);
+    if (appId) params.set('app_id', appId);
+    const qs = params.toString();
+    const url = '/admin/api/knowledge-graph/filtered' + (qs ? '?' + qs : '');
     const resp = await fetch(url);
     const data = await resp.json();
 
