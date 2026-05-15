@@ -246,19 +246,35 @@ async def update_connector(
     return HTMLResponse(f'<span class="status-ok">Connector "{name}" updated. Reload to see changes.</span>')
 
 
+_active_crawls: dict = {}  # connector_id -> {name, status, pages_found, pages_ingested, errors, started_at}
+
+
 @router.post("/api/connectors/{connector_id}/crawl")
 async def crawl_connector_now(connector_id: int):
-    import asyncio
+    import asyncio, time
     store = get_metadata_store()
     conn = await store.get_web_connector(connector_id)
     if not conn:
         return HTMLResponse('<span class="status-err">Connector not found.</span>')
 
-    # Run crawl in background
+    if connector_id in _active_crawls and _active_crawls[connector_id]["status"] == "crawling":
+        return HTMLResponse('<span style="color:#f59e0b;">Already crawling.</span>')
+
+    _active_crawls[connector_id] = {
+        "name": conn.name, "status": "crawling",
+        "pages_found": 0, "pages_ingested": 0, "errors": [],
+        "started_at": time.time(),
+    }
+
     async def _run_crawl():
         from src.ingestion.web_crawler import crawl_connector
         await ingest_queue.start_worker(get_vector_store(), store)
-        result = await crawl_connector(conn, store, ingest_queue, get_vector_store())
+        result = await crawl_connector(
+            conn, store, ingest_queue, get_vector_store(),
+            progress_callback=lambda stats: _active_crawls[connector_id].update(stats),
+        )
+        _active_crawls[connector_id]["status"] = "complete"
+        _active_crawls[connector_id].update(result)
         logger_name = logging.getLogger(__name__)
         logger_name.info(f"Crawl complete: {result}")
 
@@ -1040,9 +1056,46 @@ async def queue_page(request: Request):
 
 @router.get("/api/queue/status")
 async def queue_status():
+    import time as _time
+
+    # Clean up completed crawls older than 5 minutes
+    stale = [cid for cid, c in _active_crawls.items()
+             if c["status"] == "complete" and _time.time() - c["started_at"] > 300]
+    for cid in stale:
+        del _active_crawls[cid]
+
+    # Active crawls section
+    crawl_html = ""
+    for cid, crawl in _active_crawls.items():
+        elapsed = int(_time.time() - crawl["started_at"])
+        if crawl["status"] == "crawling":
+            status = '<span style="color:#2563eb; font-weight:600;">Crawling</span>'
+            current = f' — {crawl.get("current_url", "")}'
+        elif crawl["status"] == "complete":
+            status = '<span class="status-ok">Complete</span>'
+            current = ""
+        else:
+            status = crawl["status"]
+            current = ""
+        crawl_html += f"""<tr>
+            <td><strong>{crawl['name']}</strong></td>
+            <td>{status}</td>
+            <td>{crawl['pages_found']} found / {crawl['pages_ingested']} ingested</td>
+            <td>{elapsed}s</td>
+        </tr>"""
+
+    if crawl_html:
+        crawl_html = f"""<h3 style="margin-bottom:0.5rem;">Active Crawls</h3>
+        <table style="margin-bottom:1.5rem;">
+            <thead><tr><th>Connector</th><th>Status</th><th>Progress</th><th>Time</th></tr></thead>
+            <tbody>{crawl_html}</tbody>
+        </table>"""
+
     jobs = ingest_queue.list_jobs()
-    if not jobs:
+    if not jobs and not crawl_html:
         return HTMLResponse('<p>No ingestion jobs.</p>')
+    if not jobs:
+        return HTMLResponse(crawl_html + '<p>No ingestion jobs.</p>')
 
     rows = ""
     for job in jobs:
@@ -1081,7 +1134,7 @@ async def queue_status():
             <td>{elapsed}</td>
         </tr>{error_row}"""
 
-    return HTMLResponse(f"""<table>
+    return HTMLResponse(crawl_html + f"""<table>
         <thead><tr><th>File</th><th>Status</th><th>Progress</th><th>Uploaded By</th><th>Category</th><th>Chunks</th><th>Entities / Rels</th><th>Time</th></tr></thead>
         <tbody>{rows}</tbody>
     </table>""")

@@ -101,7 +101,7 @@ def _extract_links(html: str, base_url: str, url_pattern: str = "") -> list[str]
     return list(links)
 
 
-async def crawl_connector(connector, metadata_store, ingest_queue, vector_store) -> dict:
+async def crawl_connector(connector, metadata_store, ingest_queue, vector_store, progress_callback=None) -> dict:
     """Crawl a web connector and ingest discovered pages/files.
 
     Returns {"pages_found": N, "pages_ingested": N, "files_downloaded": N, "errors": []}
@@ -144,6 +144,8 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store)
                 )
                 files_downloaded += 1
                 pages_found += 1
+                if progress_callback:
+                    progress_callback({"pages_found": pages_found, "pages_ingested": pages_ingested, "current_url": url})
                 continue
 
             # Fetch page
@@ -183,6 +185,8 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store)
             )
             pages_ingested += 1
             logger.info(f"Crawled: {url} → {filename} ({len(markdown)} chars)")
+            if progress_callback:
+                progress_callback({"pages_found": pages_found, "pages_ingested": pages_ingested, "current_url": url})
 
             # Follow links if within depth
             if depth < crawl_depth:
