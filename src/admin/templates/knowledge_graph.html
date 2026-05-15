@@ -275,14 +275,17 @@ function cosmosClickHandler(idx, filteredNodes, validLinks, idxMap, originalColo
     const nc = new Float32Array(filteredNodes.length * 4);
     const ns = new Float32Array(filteredNodes.length);
     for (let i = 0; i < filteredNodes.length; i++) {
-        if (neighborSet.has(i)) {
+        if (i === idx) {
+            // Clicked node — bright white, enlarged
+            nc[i*4] = 1.0; nc[i*4+1] = 1.0;
+            nc[i*4+2] = 1.0; nc[i*4+3] = 1.0;
+            ns[i] = Math.max(12, filteredNodes[i].connections * 2 + 8);
+        } else if (neighborSet.has(i)) {
             nc[i*4]   = originalColors[i*4];
             nc[i*4+1] = originalColors[i*4+1];
             nc[i*4+2] = originalColors[i*4+2];
             nc[i*4+3] = 1.0;
-            ns[i] = i === idx
-                ? Math.max(10, filteredNodes[i].connections * 2 + 5)
-                : Math.max(5, filteredNodes[i].connections * 1.5 + 3);
+            ns[i] = Math.max(5, filteredNodes[i].connections * 1.5 + 3);
         } else {
             nc[i*4]   = originalColors[i*4] * 0.3;
             nc[i*4+1] = originalColors[i*4+1] * 0.3;
