@@ -1647,37 +1647,74 @@ async def cache_stats():
 # Backup & Restore
 # ============================================================
 
+_backup_status = {"state": "idle", "message": ""}  # idle | running | done | error
+
+
 @router.post("/api/backup/create")
 async def create_backup():
     """Create a tar.gz backup of all data + .env config."""
-    import tarfile, time, shutil
+    import asyncio
 
-    redirect = None  # no auth check needed — endpoint only used from settings page
+    if _backup_status["state"] == "running":
+        return HTMLResponse('<span style="color:#f59e0b;">Backup already in progress.</span>')
 
-    backup_dir = Path("backups")
-    backup_dir.mkdir(exist_ok=True)
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_name = f"sauron-backup-{timestamp}.tar.gz"
-    backup_path = backup_dir / backup_name
+    _backup_status["state"] = "running"
+    _backup_status["message"] = "Starting..."
 
-    try:
-        with tarfile.open(str(backup_path), "w:gz") as tar:
-            # Add data directory (metadata.db, lancedb, lightrag)
+    async def _run_backup():
+        import tarfile, time as _time
+
+        backup_dir = Path("backups")
+        backup_dir.mkdir(exist_ok=True)
+        timestamp = _time.strftime("%Y%m%d-%H%M%S")
+        backup_name = f"sauron-backup-{timestamp}.tar.gz"
+        backup_path = backup_dir / backup_name
+
+        try:
             data_dir = Path("data")
-            if data_dir.exists():
-                tar.add(str(data_dir), arcname="data")
+            # Count files for progress
+            all_files = list(data_dir.rglob("*")) if data_dir.exists() else []
+            total = len(all_files) + 1  # +1 for .env
+            _backup_status["message"] = f"Compressing 0/{total} files..."
 
-            # Add .env config
-            env_file = Path(".env")
-            if env_file.exists():
-                tar.add(str(env_file), arcname=".env")
+            with tarfile.open(str(backup_path), "w:gz") as tar:
+                if data_dir.exists():
+                    count = 0
+                    for f in data_dir.rglob("*"):
+                        tar.add(str(f), arcname=str(f))
+                        count += 1
+                        if count % 100 == 0:
+                            _backup_status["message"] = f"Compressing {count}/{total} files..."
 
-        size_mb = backup_path.stat().st_size / (1024 * 1024)
-        return HTMLResponse(
-            f'<span class="status-ok">Backup created: {backup_name} ({size_mb:.1f} MB)</span>'
-        )
-    except Exception as e:
-        return HTMLResponse(f'<span class="status-err">Backup failed: {e}</span>')
+                env_file = Path(".env")
+                if env_file.exists():
+                    tar.add(str(env_file), arcname=".env")
+
+            size_mb = backup_path.stat().st_size / (1024 * 1024)
+            _backup_status["state"] = "done"
+            _backup_status["message"] = f"Backup created: {backup_name} ({size_mb:.1f} MB)"
+        except Exception as e:
+            _backup_status["state"] = "error"
+            _backup_status["message"] = f"Backup failed: {e}"
+
+    asyncio.create_task(asyncio.to_thread(lambda: asyncio.run(_run_backup())) if False else _run_backup())
+    return HTMLResponse('<span style="color:#2563eb;">Backup started...</span>')
+
+
+@router.get("/api/backup/status")
+async def backup_status():
+    """Return current backup status as HTML."""
+    state = _backup_status["state"]
+    msg = _backup_status["message"]
+    if state == "running":
+        return HTMLResponse(f'<span style="color:#2563eb; font-weight:600;">{msg}</span>')
+    elif state == "done":
+        _backup_status["state"] = "idle"
+        return HTMLResponse(f'<span class="status-ok">{msg}</span>')
+    elif state == "error":
+        _backup_status["state"] = "idle"
+        return HTMLResponse(f'<span class="status-err">{msg}</span>')
+    return HTMLResponse("")
 
 
 @router.get("/api/backup/list")

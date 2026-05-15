@@ -179,10 +179,12 @@ function generateApiKey() {
 
     <div style="margin-bottom:1rem;">
         <button type="button" hx-post="/admin/api/backup/create" hx-target="#backup-status" hx-swap="innerHTML">Create Backup</button>
-        <span id="backup-status" style="margin-left:0.5rem;"></span>
+        <span id="backup-status" style="margin-left:0.5rem;"
+              hx-get="/admin/api/backup/status" hx-trigger="every 1s" hx-swap="innerHTML">
+        </span>
     </div>
 
-    <div id="backup-list" hx-get="/admin/api/backup/list" hx-trigger="load" hx-swap="innerHTML" style="margin-bottom:1.5rem;">
+    <div id="backup-list" hx-get="/admin/api/backup/list" hx-trigger="load, every 5s" hx-swap="innerHTML" style="margin-bottom:1.5rem;">
     </div>
 
     <h3 style="margin-top:1rem; margin-bottom:0.5rem;">Restore from Backup</h3>
