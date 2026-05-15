@@ -30,3 +30,4 @@ class Citation(BaseModel):
     page: int | None = None
     snippet: str
     relevance: float
+    source_url: str = ""

@@ -29,6 +29,7 @@ class MetadataStore:
                 ("application_id", "documents", "INTEGER DEFAULT 0"),
                 ("proposed_grs", "category_proposals", 'TEXT DEFAULT ""'),
                 ("additional_urls", "web_connectors", "TEXT DEFAULT '[]'"),
+                ("source_url", "documents", 'TEXT DEFAULT ""'),
                 ("dataset_id", "documents", "INTEGER DEFAULT 0"),
                 ("dataset_id", "web_connectors", "INTEGER DEFAULT 0"),
             ]
@@ -69,10 +70,12 @@ class MetadataStore:
         category="",
         content_hash="",
         dataset_id=0,
+        source_url="",
     ):
         record = DocumentRecord(
             doc_id=doc_id,
             dataset_id=dataset_id,
+            source_url=source_url,
             filename=filename,
             doc_type=doc_type,
             content_hash=content_hash,

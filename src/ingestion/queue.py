@@ -32,6 +32,7 @@ class IngestJob:
     uploaded_by: str
     category: str = ""
     dataset_id: int = 0
+    source_url: str = ""
     auto_categorize: bool = True
     build_graph: bool = True
     step: IngestStep = IngestStep.QUEUED
@@ -53,12 +54,13 @@ class IngestQueue:
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
                 uploaded_by: str, category: str = "", dataset_id: int = 0,
+                source_url: str = "",
                 auto_categorize: bool = True, build_graph: bool = True) -> str:
         job_id = str(uuid.uuid4())[:8]
         job = IngestJob(
             job_id=job_id, filename=filename, file_path=file_path,
             acl_groups=acl_groups, uploaded_by=uploaded_by,
-            category=category, dataset_id=dataset_id,
+            category=category, dataset_id=dataset_id, source_url=source_url,
             auto_categorize=auto_categorize, build_graph=build_graph,
         )
         self._jobs[job_id] = job
@@ -262,6 +264,7 @@ class IngestQueue:
             acl_groups=job.acl_groups, chunk_count=total_chunks,
             uploaded_by=job.uploaded_by, category=category,
             content_hash=content_hash, dataset_id=job.dataset_id,
+            source_url=job.source_url,
         )
         if category and category != "uncategorized":
             existing = await metadata_store.get_category(category)

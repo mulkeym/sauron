@@ -231,7 +231,7 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
             ingest_queue.enqueue(
                 filename=filename, file_path=tmp_path,
                 acl_groups=acl_groups, uploaded_by="web-crawler",
-                category=category, dataset_id=ds_id,
+                category=category, dataset_id=ds_id, source_url=url,
                 auto_categorize=not bool(category),
                 build_graph=True,
             )
@@ -313,7 +313,7 @@ async def _download_and_ingest_file(url, acl_groups, category, ds_id, ingest_que
     ingest_queue.enqueue(
         filename=filename, file_path=tmp_path,
         acl_groups=acl_groups, uploaded_by="web-crawler",
-        category=category, dataset_id=ds_id,
+        category=category, dataset_id=ds_id, source_url=url,
         auto_categorize=not bool(category),
         build_graph=True,
     )

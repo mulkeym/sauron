@@ -832,16 +832,28 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     continue
                 if doc_id not in seen_docs or c.score > seen_docs[doc_id].score:
                     seen_docs[doc_id] = c
+            # Look up source URLs for crawled documents
+            url_map = {}
+            for doc_id in seen_docs:
+                doc_rec = await ms.get_document(doc_id)
+                if doc_rec and getattr(doc_rec, 'source_url', ''):
+                    url_map[doc_id] = doc_rec.source_url
+
             citations = [
                 Citation(doc_id=c.metadata.doc_id, filename=c.metadata.filename, doc_type=c.metadata.doc_type,
-                         chunk_index=c.metadata.chunk_index, page=c.metadata.page, snippet=c.text[:200], relevance=c.score)
+                         chunk_index=c.metadata.chunk_index, page=c.metadata.page, snippet=c.text[:200], relevance=c.score,
+                         source_url=url_map.get(c.metadata.doc_id, ""))
                 for c in seen_docs.values()
             ]
 
             citations_html = ""
             for i, c in enumerate(citations, 1):
                 page = f' &mdash; page {c.page}' if c.page else ''
-                citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.filename}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
+                if c.source_url:
+                    name_display = f'<a href="{c.source_url}" target="_blank" style="color:#3b82f6;">[{i}] {c.filename}</a>'
+                else:
+                    name_display = f'[{i}] {c.filename}'
+                citations_html += f'<div class="citation-card"><span class="filename">{name_display}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
 
             result_html = f"""{trace_html}
             <div class="result-card">
