@@ -24,10 +24,10 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="application_id">Application</label>
-                <select id="application_id" name="application_id">
+                <label for="dataset_id">Dataset</label>
+                <select id="dataset_id" name="dataset_id">
                     <option value="0">None (unassigned)</option>
-                    {% for app in applications %}
+                    {% for app in datasets %}
                     <option value="{{ app.id }}">{{ app.name }}</option>
                     {% endfor %}
                 </select>
@@ -54,7 +54,7 @@
     <thead><tr>
         <th><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
         <th onclick="sortTable(1)" style="cursor:pointer;">Filename ⇅</th>
-        <th onclick="sortTable(2)" style="cursor:pointer;">Application ⇅</th>
+        <th onclick="sortTable(2)" style="cursor:pointer;">Dataset ⇅</th>
         <th onclick="sortTable(3)" style="cursor:pointer;">Type ⇅</th>
         <th onclick="sortTable(4)" style="cursor:pointer;">Category ⇅</th>
         <th>ACL Groups</th>

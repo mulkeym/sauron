@@ -191,11 +191,11 @@ def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
     return _files_to_allowed_entities(allowed_files)
 
 
-def _get_app_allowed_entities(app_id: int) -> set[str] | None:
-    """Get entity names from documents belonging to a specific application.
-    Returns None if app_id is 0 (no filtering).
+def _get_dataset_allowed_entities(ds_id: int) -> set[str] | None:
+    """Get entity names from documents belonging to a specific dataset.
+    Returns None if ds_id is 0 (no filtering).
     """
-    if not app_id:
+    if not ds_id:
         return None
 
     import asyncio
@@ -205,7 +205,7 @@ def _get_app_allowed_entities(app_id: int) -> set[str] | None:
         store = MetadataStore()
         await store.init()
         docs = await store.list_documents()
-        return {d.filename for d in docs if d.application_id == app_id}
+        return {d.filename for d in docs if d.dataset_id == ds_id}
 
     try:
         allowed_files = asyncio.run(_fetch())

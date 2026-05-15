@@ -15,7 +15,7 @@ class DocumentRecord(Base):
     filename: Mapped[str] = mapped_column(String, nullable=False)
     doc_type: Mapped[str] = mapped_column(String, nullable=False)
     content_hash: Mapped[str] = mapped_column(String, default="")
-    application_id: Mapped[int] = mapped_column(default=0)  # 0 = unassigned
+    dataset_id: Mapped[int] = mapped_column(default=0)  # 0 = unassigned
     category: Mapped[str] = mapped_column(String, default="")
     acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     chunk_count: Mapped[int] = mapped_column(default=0)
@@ -26,8 +26,8 @@ class DocumentRecord(Base):
     )
 
 
-class Application(Base):
-    __tablename__ = "applications"
+class Dataset(Base):
+    __tablename__ = "datasets"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # URL-friendly
@@ -47,7 +47,7 @@ class WebConnector(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     base_url: Mapped[str] = mapped_column(String, nullable=False)
-    application_id: Mapped[int] = mapped_column(default=0)
+    dataset_id: Mapped[int] = mapped_column(default=0)
     acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     category: Mapped[str] = mapped_column(String, default="")
     crawl_depth: Mapped[int] = mapped_column(default=1)  # how many links deep to follow

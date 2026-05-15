@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Applications - SAURON{% endblock %}
+{% block title %}Datasets - SAURON{% endblock %}
 {% block content %}
-<h1>Applications</h1>
+<h1>Datasets</h1>
 
 <div class="settings-section">
-    <h2>Create Application</h2>
+    <h2>Create Dataset</h2>
     <p class="section-desc">Group documents, connectors, and categories by project or team.</p>
-    <form hx-post="/admin/api/applications/create" hx-target="#app-status" hx-swap="innerHTML">
+    <form hx-post="/admin/api/datasets/create" hx-target="#app-status" hx-swap="innerHTML">
         <div class="form-row">
             <div class="form-group">
                 <label for="app_name">Name</label>
@@ -25,19 +25,19 @@
         <div class="form-group">
             <label for="app_acl">Default ACL Groups (comma-separated)</label>
             <input type="text" id="app_acl" name="default_acl_groups" placeholder="contracts, executives">
-            <span style="font-size:0.8rem; color:#6b7280;">Documents in this app inherit these groups by default.</span>
+            <span style="font-size:0.8rem; color:#6b7280;">Documents in this dataset inherit these groups by default.</span>
         </div>
-        <button type="submit">Create Application</button>
+        <button type="submit">Create Dataset</button>
         <span id="app-status" style="margin-left:0.5rem;"></span>
     </form>
 </div>
 
-<h2 style="margin-top:2rem; margin-bottom:1rem;">Applications ({{ applications | length }})</h2>
-{% if applications %}
+<h2 style="margin-top:2rem; margin-bottom:1rem;">Datasets ({{ datasets | length }})</h2>
+{% if datasets %}
 <table>
     <thead><tr><th>Name</th><th>Slug</th><th>Description</th><th>Default ACL</th><th>Docs</th><th>Actions</th></tr></thead>
     <tbody>
-        {% for app in applications %}
+        {% for app in datasets %}
         <tr id="app-{{ app.id }}">
             <td><strong>{{ app.name }}</strong></td>
             <td><code>{{ app.slug }}</code></td>
@@ -45,13 +45,13 @@
             <td>{{ app.default_acl_groups | join(", ") }}</td>
             <td>{{ app.doc_count or 0 }}</td>
             <td>
-                <button class="danger small" hx-delete="/admin/api/applications/{{ app.id }}" hx-confirm="Deactivate this application?" hx-target="#app-{{ app.id }}" hx-swap="outerHTML">Deactivate</button>
+                <button class="danger small" hx-delete="/admin/api/datasets/{{ app.id }}" hx-confirm="Deactivate this dataset?" hx-target="#app-{{ app.id }}" hx-swap="outerHTML">Deactivate</button>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
 {% else %}
-<p>No applications yet. Create one above to start organizing documents.</p>
+<p>No datasets yet. Create one above to start organizing documents.</p>
 {% endif %}
 {% endblock %}

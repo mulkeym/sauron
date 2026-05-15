@@ -3,7 +3,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Application, WebConnector
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Dataset, WebConnector
 
 
 class MetadataStore:
@@ -29,12 +29,30 @@ class MetadataStore:
                 ("application_id", "documents", "INTEGER DEFAULT 0"),
                 ("proposed_grs", "category_proposals", 'TEXT DEFAULT ""'),
                 ("additional_urls", "web_connectors", "TEXT DEFAULT '[]'"),
+                ("dataset_id", "documents", "INTEGER DEFAULT 0"),
+                ("dataset_id", "web_connectors", "INTEGER DEFAULT 0"),
             ]
             for col, table, col_type in migrations:
                 try:
                     await conn.execute(text(f"SELECT {col} FROM {table} LIMIT 1"))
                 except Exception:
                     await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
+
+            # Rename applications table to datasets
+            try:
+                await conn.execute(text("SELECT 1 FROM datasets LIMIT 1"))
+            except Exception:
+                try:
+                    await conn.execute(text("ALTER TABLE applications RENAME TO datasets"))
+                except Exception:
+                    pass  # neither table exists yet — will be created by create_all
+
+            # Copy application_id values to dataset_id for existing records
+            try:
+                await conn.execute(text("UPDATE documents SET dataset_id = application_id WHERE dataset_id = 0 AND application_id != 0"))
+                await conn.execute(text("UPDATE web_connectors SET dataset_id = application_id WHERE dataset_id = 0 AND application_id != 0"))
+            except Exception:
+                pass
 
     async def add_document(
         self,
@@ -46,11 +64,11 @@ class MetadataStore:
         uploaded_by,
         category="",
         content_hash="",
-        application_id=0,
+        dataset_id=0,
     ):
         record = DocumentRecord(
             doc_id=doc_id,
-            application_id=application_id,
+            dataset_id=dataset_id,
             filename=filename,
             doc_type=doc_type,
             content_hash=content_hash,
@@ -125,38 +143,38 @@ class MetadataStore:
             result = await session.execute(select(Category))
             return list(result.scalars().all())
 
-    # --- Applications ---
+    # --- Datasets ---
 
-    async def add_application(self, name, slug, description="", owner="admin", default_acl_groups=None, allowed_categories=None):
+    async def add_dataset(self, name, slug, description="", owner="admin", default_acl_groups=None, allowed_categories=None):
         async with self.session_factory() as session:
-            existing = await session.execute(select(Application).where(Application.slug == slug))
+            existing = await session.execute(select(Dataset).where(Dataset.slug == slug))
             if existing.scalar_one_or_none():
                 return None
-            app = Application(
+            ds = Dataset(
                 name=name, slug=slug, description=description, owner=owner,
                 default_acl_groups=default_acl_groups or [],
                 allowed_categories=allowed_categories or [],
             )
-            session.add(app)
+            session.add(ds)
             await session.commit()
-            await session.refresh(app)
-            return app
+            await session.refresh(ds)
+            return ds
 
-    async def list_applications(self, active_only=True):
+    async def list_datasets(self, active_only=True):
         async with self.session_factory() as session:
-            stmt = select(Application)
+            stmt = select(Dataset)
             if active_only:
-                stmt = stmt.where(Application.active == True)
+                stmt = stmt.where(Dataset.active == True)
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
-    async def get_application(self, app_id: int):
+    async def get_dataset(self, ds_id: int):
         async with self.session_factory() as session:
-            return await session.get(Application, app_id)
+            return await session.get(Dataset, ds_id)
 
-    async def get_application_by_slug(self, slug: str):
+    async def get_dataset_by_slug(self, slug: str):
         async with self.session_factory() as session:
-            result = await session.execute(select(Application).where(Application.slug == slug))
+            result = await session.execute(select(Dataset).where(Dataset.slug == slug))
             return result.scalar_one_or_none()
 
     # --- Web Connectors ---

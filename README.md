@@ -10,11 +10,11 @@ SAURON is a self-hosted agentic RAG (Retrieval-Augmented Generation) system with
 
 - **Hybrid Search** -- BM25 keyword + vector similarity with CrossEncoder reranking (LanceDB)
 - **Multi-Pass Indexing** -- Documents stored at 4 chunk granularities (1K/2K/4K/8K chars)
-- **Knowledge Graph** -- Category-aware entity/relationship extraction with LightRAG, 3D visualization, application and persona filtering
+- **Knowledge Graph** -- Category-aware entity/relationship extraction with LightRAG, 3D visualization, dataset and persona filtering
 - **Agentic Pipeline** -- LangGraph orchestration with query classification, sub-task decomposition, and strategy selection
-- **Document-Level RBAC** -- ACL group filtering enforced at the search layer, per-application isolation
+- **Document-Level RBAC** -- ACL group filtering enforced at the search layer, per-dataset isolation
 - **Web Crawler** -- Multi-page crawling with Playwright fallback for bot-protected sites, auto-downloads PDFs/DOCX/PPTX
-- **Application Workspaces** -- Organize documents, connectors, and queries by project with filtering across the UI
+- **Dataset Workspaces** -- Organize documents, connectors, and queries by project with filtering across the UI
 - **MCP Server** -- Model Context Protocol tools for OpenWebUI, Claude Code, and other AI agents
 - **Admin Dashboard** -- Document management, ingestion queue, playground, knowledge graph explorer, web connector management
 - **Streaming Answers** -- SSE-based token streaming in the playground
@@ -173,16 +173,16 @@ SAURON can crawl websites and automatically ingest their content:
 - **Playwright fallback** -- sites behind bot protection (Akamai, Cloudflare) are fetched with a headless Chromium browser; file downloads use in-page `fetch()` to carry session cookies
 - **Content dedup** -- SHA-256 hashing prevents re-ingesting unchanged pages
 - **Live progress** -- active crawl status (pages found/ingested, current URL) shown on the Queue page
-- **Application assignment** -- crawled content is tagged with the connector's application and ACL groups
+- **Dataset assignment** -- crawled content is tagged with the connector's dataset and ACL groups
 
-## Application Workspaces
+## Dataset Workspaces
 
-Documents and connectors can be organized into **applications** (projects/workspaces):
+Documents and connectors can be organized into **datasets** (projects/workspaces):
 
-- Each application has a name, description, owner, and default ACL groups
-- Documents inherit ACL from their application's defaults
-- The **Knowledge Graph** can be filtered by application (server-side entity filtering via document tracing)
-- The **Playground** can be scoped to an application (restricts vector search to the app's documents via `doc_id IN` filtering)
+- Each dataset has a name, description, owner, and default ACL groups
+- Documents inherit ACL from their dataset's defaults
+- The **Knowledge Graph** can be filtered by dataset (server-side entity filtering via document tracing)
+- The **Playground** can be scoped to a dataset (restricts vector search to the dataset's documents via `doc_id IN` filtering)
 - Filtering composes with persona/ACL filtering using intersection (AND) semantics
 
 ## Document-Level RBAC
@@ -200,7 +200,7 @@ ACL groups can be set during upload or inherited from the document's category.
 
 A single `.tar.gz` backup file contains everything needed to transport SAURON to another host:
 
-- **metadata.db** -- all documents, categories, applications, connectors, entities, relationships
+- **metadata.db** -- all documents, categories, datasets, connectors, entities, relationships
 - **lancedb/** -- vector embeddings and search indexes
 - **lightrag/** -- knowledge graph (GraphML + JSON stores)
 - **.env** -- configuration and secrets
@@ -234,13 +234,13 @@ Three transport modes:
 |------|---------|
 | Dashboard | KPIs: documents, categories, entities, vectors, proposals |
 | Documents | Upload, edit category/ACL, bulk select/delete, sortable columns |
-| Applications | Create and manage project workspaces with default ACL groups |
+| Datasets | Create and manage project workspaces with default ACL groups |
 | Connectors | Web crawler configuration with inline editing, additional URLs, crawl-now button |
 | Queue | Live ingestion progress with entity/relationship counts and active crawl status |
 | Categories | Create, edit, manage document categories with NARA GRS mapping |
 | Proposals | Approve/reject auto-categorization and entity merge proposals |
-| Playground | Query testing with step trace, streaming answers, application and persona filters |
-| Knowledge Graph | GPU-accelerated (cosmos.gl) or 3D entity visualization with application, persona, and type filtering; click-to-highlight connections |
+| Playground | Query testing with step trace, streaming answers, dataset and persona filters |
+| Knowledge Graph | GPU-accelerated (cosmos.gl) or 3D entity visualization with dataset, persona, and type filtering; click-to-highlight connections |
 | Settings | LLM/embedding endpoints, reconciliation, LanceDB config, backup & restore |
 | Audit Log | JSONL audit trail of all operations |
 

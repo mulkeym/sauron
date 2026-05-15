@@ -15,10 +15,10 @@
         </select>
     </div>
     <div class="form-group">
-        <label for="play_app">Application</label>
+        <label for="play_app">Dataset</label>
         <select id="play_app" name="app_id">
-            <option value="">All Applications</option>
-            {% for app in applications %}
+            <option value="">All Datasets</option>
+            {% for app in datasets %}
             <option value="{{ app.id }}">{{ app.name }}</option>
             {% endfor %}
         </select>

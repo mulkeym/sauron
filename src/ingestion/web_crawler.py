@@ -136,7 +136,7 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
     download_types = connector.download_file_types or []
     acl_groups = connector.acl_groups or []
     category = connector.category or ""
-    app_id = connector.application_id
+    ds_id = connector.dataset_id
 
     visited = set()
     to_visit = [(base_url, 0)]  # (url, depth)
@@ -180,7 +180,7 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
             # Check if it's a file to download
             if _is_file_url(url, download_types):
                 await _download_and_ingest_file(
-                    url, acl_groups, category, app_id, ingest_queue, metadata_store,
+                    url, acl_groups, category, ds_id, ingest_queue, metadata_store,
                     browser_page=browser_page,
                 )
                 files_downloaded += 1
@@ -231,7 +231,7 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
             ingest_queue.enqueue(
                 filename=filename, file_path=tmp_path,
                 acl_groups=acl_groups, uploaded_by="web-crawler",
-                category=category, application_id=app_id,
+                category=category, dataset_id=ds_id,
                 auto_categorize=not bool(category),
                 build_graph=True,
             )
@@ -276,7 +276,7 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
     }
 
 
-async def _download_and_ingest_file(url, acl_groups, category, app_id, ingest_queue, metadata_store, browser_page=None):
+async def _download_and_ingest_file(url, acl_groups, category, ds_id, ingest_queue, metadata_store, browser_page=None):
     """Download a file from a URL and queue it for ingestion.
 
     If browser_page is provided, uses in-page fetch for cookie-authenticated downloads.
@@ -313,7 +313,7 @@ async def _download_and_ingest_file(url, acl_groups, category, app_id, ingest_qu
     ingest_queue.enqueue(
         filename=filename, file_path=tmp_path,
         acl_groups=acl_groups, uploaded_by="web-crawler",
-        category=category, application_id=app_id,
+        category=category, dataset_id=ds_id,
         auto_categorize=not bool(category),
         build_graph=True,
     )

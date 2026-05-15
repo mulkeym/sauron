@@ -20,10 +20,10 @@
         </select>
     </div>
     <div class="form-group">
-        <label for="kg-app">Application</label>
+        <label for="kg-app">Dataset</label>
         <select id="kg-app" onchange="loadFilteredGraph()">
-            <option value="">All Applications</option>
-            {% for app in applications %}
+            <option value="">All Datasets</option>
+            {% for app in datasets %}
             <option value="{{ app.id }}">{{ app.name }}</option>
             {% endfor %}
         </select>

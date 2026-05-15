@@ -19,10 +19,10 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="conn_app">Application</label>
-                <select id="conn_app" name="application_id">
+                <label for="conn_app">Dataset</label>
+                <select id="conn_app" name="dataset_id">
                     <option value="0">None</option>
-                    {% for app in applications %}
+                    {% for app in datasets %}
                     <option value="{{ app.id }}">{{ app.name }}</option>
                     {% endfor %}
                 </select>
@@ -108,11 +108,11 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Application</label>
-                            <select name="application_id">
-                                <option value="0" {{ 'selected' if c.application_id == 0 }}>None</option>
-                                {% for app in applications %}
-                                <option value="{{ app.id }}" {{ 'selected' if c.application_id == app.id }}>{{ app.name }}</option>
+                            <label>Dataset</label>
+                            <select name="dataset_id">
+                                <option value="0" {{ 'selected' if c.dataset_id == 0 }}>None</option>
+                                {% for app in datasets %}
+                                <option value="{{ app.id }}" {{ 'selected' if c.dataset_id == app.id }}>{{ app.name }}</option>
                                 {% endfor %}
                             </select>
                         </div>

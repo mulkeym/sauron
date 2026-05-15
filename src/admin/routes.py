@@ -100,11 +100,11 @@ async def documents_page(request: Request):
         return redirect
     store = get_metadata_store()
     docs = await store.list_documents()
-    apps = await store.list_applications()
+    apps = await store.list_datasets()
     app_map = {a.id: a.name for a in apps}
     for doc in docs:
-        doc._app_name = app_map.get(getattr(doc, 'application_id', 0), "")
-    return templates.TemplateResponse(request, "documents.html", {"documents": docs, "applications": apps})
+        doc._app_name = app_map.get(getattr(doc, 'dataset_id', 0), "")
+    return templates.TemplateResponse(request, "documents.html", {"documents": docs, "datasets": apps})
 
 @router.get("/categories", response_class=HTMLResponse)
 async def categories_page(request: Request):
@@ -124,22 +124,22 @@ async def proposals_page(request: Request):
     proposals = await store.list_proposals(status="pending")
     return templates.TemplateResponse(request, "proposals.html", {"proposals": proposals})
 
-@router.get("/applications", response_class=HTMLResponse)
-async def applications_page(request: Request):
+@router.get("/datasets", response_class=HTMLResponse)
+async def datasets_page(request: Request):
     redirect = _require_login(request)
     if redirect:
         return redirect
     store = get_metadata_store()
-    apps = await store.list_applications(active_only=False)
+    apps = await store.list_datasets(active_only=False)
     # Count docs per app
     docs = await store.list_documents(None)
     for app in apps:
-        app.doc_count = sum(1 for d in docs if getattr(d, 'application_id', 0) == app.id)
-    return templates.TemplateResponse(request, "applications.html", {"applications": apps})
+        app.doc_count = sum(1 for d in docs if getattr(d, 'dataset_id', 0) == app.id)
+    return templates.TemplateResponse(request, "datasets.html", {"datasets": apps})
 
 
-@router.post("/api/applications/create")
-async def create_application(
+@router.post("/api/datasets/create")
+async def create_dataset(
     name: str = Form(""), slug: str = Form(""),
     description: str = Form(""), default_acl_groups: str = Form(""),
 ):
@@ -150,24 +150,24 @@ async def create_application(
     acl = [g.strip() for g in default_acl_groups.split(",") if g.strip()]
 
     store = get_metadata_store()
-    result = await store.add_application(
+    result = await store.add_dataset(
         name=name.strip(), slug=slug_clean, description=description.strip(),
         default_acl_groups=acl,
     )
     if result is None:
         return HTMLResponse(f'<span class="status-err">Slug "{slug_clean}" already exists.</span>')
-    return HTMLResponse(f'<span class="status-ok">Application "{name}" created. Reload to see it.</span>')
+    return HTMLResponse(f'<span class="status-ok">Dataset "{name}" created. Reload to see it.</span>')
 
 
-@router.delete("/api/applications/{app_id}")
-async def deactivate_application(app_id: int):
+@router.delete("/api/datasets/{app_id}")
+async def deactivate_dataset(app_id: int):
     store = get_metadata_store()
-    app = await store.get_application(app_id)
+    app = await store.get_dataset(app_id)
     if app:
         from sqlalchemy import update as sql_update
-        from src.db.models import Application
+        from src.db.models import Dataset
         async with store.session_factory() as session:
-            await session.execute(sql_update(Application).where(Application.id == app_id).values(active=False))
+            await session.execute(sql_update(Dataset).where(Dataset.id == app_id).values(active=False))
             await session.commit()
     return HTMLResponse(f'<tr><td colspan="7" style="color:#6b7280;">Deactivated</td></tr>')
 
@@ -179,14 +179,14 @@ async def connectors_page(request: Request):
         return redirect
     store = get_metadata_store()
     connectors = await store.list_web_connectors(active_only=False)
-    apps = await store.list_applications()
-    return templates.TemplateResponse(request, "connectors.html", {"connectors": connectors, "applications": apps})
+    apps = await store.list_datasets()
+    return templates.TemplateResponse(request, "connectors.html", {"connectors": connectors, "datasets": apps})
 
 
 @router.post("/api/connectors/create")
 async def create_connector(
     name: str = Form(""), base_url: str = Form(""),
-    application_id: int = Form(0), category: str = Form(""),
+    dataset_id: int = Form(0), category: str = Form(""),
     acl_groups: str = Form(""), crawl_depth: int = Form(1),
     url_pattern: str = Form(""), max_pages: int = Form(100),
     additional_urls: str = Form(""),
@@ -198,15 +198,15 @@ async def create_connector(
     extra_urls = [u.strip() for u in additional_urls.split("\n") if u.strip()]
     store = get_metadata_store()
 
-    # Inherit ACL from application if not specified
-    if not groups and application_id > 0:
-        app = await store.get_application(application_id)
+    # Inherit ACL from dataset if not specified
+    if not groups and dataset_id > 0:
+        app = await store.get_dataset(dataset_id)
         if app and app.default_acl_groups:
             groups = app.default_acl_groups
 
     conn = await store.add_web_connector(
         name=name.strip(), base_url=base_url.strip(),
-        application_id=application_id, category=category.strip(),
+        dataset_id=dataset_id, category=category.strip(),
         acl_groups=groups, crawl_depth=crawl_depth,
         url_pattern=url_pattern.strip(), max_pages=max_pages,
         additional_urls=extra_urls,
@@ -218,7 +218,7 @@ async def create_connector(
 async def update_connector(
     connector_id: int,
     name: str = Form(""), base_url: str = Form(""),
-    application_id: int = Form(0), category: str = Form(""),
+    dataset_id: int = Form(0), category: str = Form(""),
     acl_groups: str = Form(""), crawl_depth: int = Form(1),
     url_pattern: str = Form(""), max_pages: int = Form(100),
     additional_urls: str = Form(""),
@@ -230,15 +230,15 @@ async def update_connector(
     extra_urls = [u.strip() for u in additional_urls.split("\n") if u.strip()]
     store = get_metadata_store()
 
-    if not groups and application_id > 0:
-        app = await store.get_application(application_id)
+    if not groups and dataset_id > 0:
+        app = await store.get_dataset(dataset_id)
         if app and app.default_acl_groups:
             groups = app.default_acl_groups
 
     await store.update_web_connector(
         connector_id,
         name=name.strip(), base_url=base_url.strip(),
-        application_id=application_id, category=category.strip(),
+        dataset_id=dataset_id, category=category.strip(),
         acl_groups=groups, crawl_depth=crawl_depth,
         url_pattern=url_pattern.strip(), max_pages=max_pages,
         additional_urls=extra_urls,
@@ -523,8 +523,8 @@ async def playground_page(request: Request):
     if redirect:
         return redirect
     store = get_metadata_store()
-    apps = await store.list_applications()
-    return templates.TemplateResponse(request, "playground.html", {"applications": apps})
+    apps = await store.list_datasets()
+    return templates.TemplateResponse(request, "playground.html", {"datasets": apps})
 
 
 _playground_jobs: dict = {}
@@ -541,12 +541,12 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
     query_id = str(uuid.uuid4())[:8]
     user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
 
-    # Look up doc_ids for the selected application
+    # Look up doc_ids for the selected dataset
     allowed_doc_ids = None
     if app_id:
         store = get_metadata_store()
         docs = await store.list_documents()
-        allowed_doc_ids = [d.doc_id for d in docs if d.application_id == app_id]
+        allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
     _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": ""}
 
@@ -1002,7 +1002,7 @@ async def bulk_upload(
     files: List[UploadFile] = File(...),
     acl_groups: str = Form(""),
     category: str = Form(""),
-    application_id: int = Form(0),
+    dataset_id: int = Form(0),
     auto_categorize: str = Form(""),
     build_graph: str = Form(""),
 ):
@@ -1010,10 +1010,10 @@ async def bulk_upload(
     do_auto_cat = auto_categorize == "true"
     do_build_graph = build_graph == "true"
 
-    # Inherit defaults from application if selected
-    if application_id > 0:
+    # Inherit defaults from dataset if selected
+    if dataset_id > 0:
         store = get_metadata_store()
-        app = await store.get_application(application_id)
+        app = await store.get_dataset(dataset_id)
         if app:
             if not groups and app.default_acl_groups:
                 groups = app.default_acl_groups
@@ -1032,7 +1032,7 @@ async def bulk_upload(
         job_id = ingest_queue.enqueue(
             filename=file.filename, file_path=tmp_path,
             acl_groups=groups, uploaded_by="admin",
-            category=category, application_id=application_id,
+            category=category, dataset_id=dataset_id,
             auto_categorize=do_auto_cat, build_graph=do_build_graph,
         )
         job_ids.append((file.filename, job_id))
@@ -1149,15 +1149,15 @@ async def knowledge_graph_page(request: Request):
     import asyncio
     store = get_metadata_store()
     entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
-    apps = await store.list_applications()
+    apps = await store.list_datasets()
     return templates.TemplateResponse(request, "knowledge_graph.html", {
-        "entities": entities, "relationships": relationships, "applications": apps,
+        "entities": entities, "relationships": relationships, "datasets": apps,
     })
 
 
 @router.get("/api/knowledge-graph/filtered")
 async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
-    """Return filtered graph data by persona ACL and/or application."""
+    """Return filtered graph data by persona ACL and/or dataset."""
     from fastapi.responses import JSONResponse
     import asyncio
 
@@ -1181,8 +1181,8 @@ async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
             allowed = acl_allowed
 
     if not no_app_filter:
-        from src.knowledge.graph_rag import _get_app_allowed_entities
-        app_allowed = await asyncio.to_thread(_get_app_allowed_entities, app_id)
+        from src.knowledge.graph_rag import _get_dataset_allowed_entities
+        app_allowed = await asyncio.to_thread(_get_dataset_allowed_entities, app_id)
         if app_allowed is not None:
             if allowed is not None:
                 allowed = allowed & app_allowed  # intersection
