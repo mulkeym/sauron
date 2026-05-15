@@ -1049,15 +1049,17 @@ async def knowledge_graph_page(request: Request):
         return redirect
     # Load full graph for initial render (admin view)
     import asyncio
+    store = get_metadata_store()
     entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
+    apps = await store.list_applications()
     return templates.TemplateResponse(request, "knowledge_graph.html", {
-        "entities": entities, "relationships": relationships,
+        "entities": entities, "relationships": relationships, "applications": apps,
     })
 
 
 @router.get("/api/knowledge-graph/filtered")
-async def knowledge_graph_filtered(groups: str = ""):
-    """Return ACL-filtered graph data for a persona."""
+async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
+    """Return filtered graph data by persona ACL and/or application."""
     from fastapi.responses import JSONResponse
     import asyncio
 
@@ -1065,12 +1067,29 @@ async def knowledge_graph_filtered(groups: str = ""):
 
     entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
 
-    if "ALL" in user_groups or not groups:
+    no_persona_filter = "ALL" in user_groups or not groups
+    no_app_filter = app_id == 0
+
+    if no_persona_filter and no_app_filter:
         return JSONResponse({"entities": entities, "relationships": relationships})
 
-    # Filter: find which entities come from documents the user can access
-    from src.knowledge.graph_rag import _get_acl_allowed_entities
-    allowed = await asyncio.to_thread(_get_acl_allowed_entities, user_groups)
+    # Compute allowed entity sets for each active filter
+    allowed = None
+
+    if not no_persona_filter:
+        from src.knowledge.graph_rag import _get_acl_allowed_entities
+        acl_allowed = await asyncio.to_thread(_get_acl_allowed_entities, user_groups)
+        if acl_allowed is not None:
+            allowed = acl_allowed
+
+    if not no_app_filter:
+        from src.knowledge.graph_rag import _get_app_allowed_entities
+        app_allowed = await asyncio.to_thread(_get_app_allowed_entities, app_id)
+        if app_allowed is not None:
+            if allowed is not None:
+                allowed = allowed & app_allowed  # intersection
+            else:
+                allowed = app_allowed
 
     if allowed is None:
         return JSONResponse({"entities": entities, "relationships": relationships})
