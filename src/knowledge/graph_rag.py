@@ -187,6 +187,66 @@ def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
     return allowed_entities
 
 
+def _get_app_allowed_entities(app_id: int) -> set[str] | None:
+    """Get entity names from documents belonging to a specific application.
+    Returns None if app_id is 0 (no filtering).
+    """
+    if not app_id:
+        return None
+
+    import asyncio
+    import json as json_mod
+    from pathlib import Path
+    from src.db.metadata import MetadataStore
+
+    # Get filenames for documents in this application
+    async def _fetch():
+        store = MetadataStore()
+        await store.init()
+        docs = await store.list_documents()
+        return {d.filename for d in docs if d.application_id == app_id}
+
+    try:
+        allowed_files = asyncio.run(_fetch())
+    except RuntimeError:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            allowed_files = pool.submit(asyncio.run, _fetch()).result()
+
+    if not allowed_files:
+        return set()
+
+    # Load chunk-to-file mapping
+    chunks_file = Path("data/lightrag/kv_store_text_chunks.json")
+    if not chunks_file.exists():
+        return set()
+
+    chunk_data = json_mod.loads(chunks_file.read_text())
+    allowed_chunks = {cid for cid, data in chunk_data.items()
+                      if data.get("file_path", "") in allowed_files}
+
+    # Load graph and find entities from allowed chunks
+    import re
+    graphml = Path("data/lightrag/graph_chunk_entity_relation.graphml")
+    if not graphml.exists():
+        return set()
+
+    content = graphml.read_text()
+    allowed_entities = set()
+
+    for match in re.finditer(
+        r'<node id="([^"]+)"[^>]*>(.*?)</node>', content, re.DOTALL
+    ):
+        name = match.group(1)
+        source_match = re.search(r'<data key="d3">(.*?)</data>', match.group(2), re.DOTALL)
+        if source_match:
+            source_chunks = source_match.group(1).replace("&lt;SEP&gt;", "<SEP>").split("<SEP>")
+            if any(c.strip() in allowed_chunks for c in source_chunks):
+                allowed_entities.add(name)
+
+    return allowed_entities
+
+
 async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None) -> dict:
     """Query the knowledge graph with ACL filtering.
 
