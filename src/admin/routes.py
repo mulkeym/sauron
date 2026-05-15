@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import secrets
 import tempfile
 from pathlib import Path
@@ -169,6 +170,65 @@ async def deactivate_application(app_id: int):
             await session.execute(sql_update(Application).where(Application.id == app_id).values(active=False))
             await session.commit()
     return HTMLResponse(f'<tr><td colspan="7" style="color:#6b7280;">Deactivated</td></tr>')
+
+
+@router.get("/connectors", response_class=HTMLResponse)
+async def connectors_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
+    store = get_metadata_store()
+    connectors = await store.list_web_connectors(active_only=False)
+    apps = await store.list_applications()
+    return templates.TemplateResponse(request, "connectors.html", {"connectors": connectors, "applications": apps})
+
+
+@router.post("/api/connectors/create")
+async def create_connector(
+    name: str = Form(""), base_url: str = Form(""),
+    application_id: int = Form(0), category: str = Form(""),
+    acl_groups: str = Form(""), crawl_depth: int = Form(1),
+    url_pattern: str = Form(""), max_pages: int = Form(100),
+):
+    if not name.strip() or not base_url.strip():
+        return HTMLResponse('<span class="status-err">Name and URL are required.</span>')
+
+    groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    store = get_metadata_store()
+
+    # Inherit ACL from application if not specified
+    if not groups and application_id > 0:
+        app = await store.get_application(application_id)
+        if app and app.default_acl_groups:
+            groups = app.default_acl_groups
+
+    conn = await store.add_web_connector(
+        name=name.strip(), base_url=base_url.strip(),
+        application_id=application_id, category=category.strip(),
+        acl_groups=groups, crawl_depth=crawl_depth,
+        url_pattern=url_pattern.strip(), max_pages=max_pages,
+    )
+    return HTMLResponse(f'<span class="status-ok">Connector "{name}" created. Reload to see it.</span>')
+
+
+@router.post("/api/connectors/{connector_id}/crawl")
+async def crawl_connector_now(connector_id: int):
+    import asyncio
+    store = get_metadata_store()
+    conn = await store.get_web_connector(connector_id)
+    if not conn:
+        return HTMLResponse('<span class="status-err">Connector not found.</span>')
+
+    # Run crawl in background
+    async def _run_crawl():
+        from src.ingestion.web_crawler import crawl_connector
+        await ingest_queue.start_worker(get_vector_store(), store)
+        result = await crawl_connector(conn, store, ingest_queue, get_vector_store())
+        logger_name = logging.getLogger(__name__)
+        logger_name.info(f"Crawl complete: {result}")
+
+    asyncio.create_task(_run_crawl())
+    return HTMLResponse('<span style="color:#2563eb;">Crawling... check Queue for progress.</span>')
 
 
 @router.get("/audit", response_class=HTMLResponse)

@@ -24,6 +24,10 @@ lancedb>=0.30.0
 # Knowledge Graph
 lightrag-hku>=1.4.0
 
+# Web Crawling
+beautifulsoup4>=4.12.0
+markdownify>=0.13.0
+
 # LLM
 openai>=1.55.0
 

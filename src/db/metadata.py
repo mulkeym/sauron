@@ -3,7 +3,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Application
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Application, WebConnector
 
 
 class MetadataStore:
@@ -157,6 +157,35 @@ class MetadataStore:
         async with self.session_factory() as session:
             result = await session.execute(select(Application).where(Application.slug == slug))
             return result.scalar_one_or_none()
+
+    # --- Web Connectors ---
+
+    async def add_web_connector(self, **kwargs):
+        async with self.session_factory() as session:
+            conn = WebConnector(**kwargs)
+            session.add(conn)
+            await session.commit()
+            await session.refresh(conn)
+            return conn
+
+    async def list_web_connectors(self, active_only=True):
+        async with self.session_factory() as session:
+            stmt = select(WebConnector)
+            if active_only:
+                stmt = stmt.where(WebConnector.active == True)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_web_connector(self, connector_id: int):
+        async with self.session_factory() as session:
+            return await session.get(WebConnector, connector_id)
+
+    async def update_web_connector(self, connector_id: int, **fields):
+        async with self.session_factory() as session:
+            await session.execute(
+                update(WebConnector).where(WebConnector.id == connector_id).values(**fields)
+            )
+            await session.commit()
 
     # --- ACL Groups ---
 

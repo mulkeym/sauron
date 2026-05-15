@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Web Connectors - SAURON{% endblock %}
+{% block content %}
+<h1>Web Connectors</h1>
+
+<div class="settings-section">
+    <h2>Add Connector</h2>
+    <p class="section-desc">Crawl a website, convert pages to markdown, and ingest into SAURON. Linked files (PDF, DOCX, etc.) are downloaded automatically.</p>
+    <form hx-post="/admin/api/connectors/create" hx-target="#connector-status" hx-swap="innerHTML">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="conn_name">Name</label>
+                <input type="text" id="conn_name" name="name" placeholder="DoD Contract Notices" required>
+            </div>
+            <div class="form-group">
+                <label for="conn_url">Base URL</label>
+                <input type="text" id="conn_url" name="base_url" placeholder="https://www.war.gov/News/Contracts/" required>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="conn_app">Application</label>
+                <select id="conn_app" name="application_id">
+                    <option value="0">None</option>
+                    {% for app in applications %}
+                    <option value="{{ app.id }}">{{ app.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="conn_category">Category</label>
+                <input type="text" id="conn_category" name="category" placeholder="Leave blank to auto-categorize">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="conn_acl">ACL Groups (comma-separated)</label>
+                <input type="text" id="conn_acl" name="acl_groups" placeholder="contracts, executives">
+            </div>
+            <div class="form-group">
+                <label for="conn_depth">Crawl Depth</label>
+                <select id="conn_depth" name="crawl_depth">
+                    <option value="0">0 — this page only</option>
+                    <option value="1" selected>1 — follow links one level</option>
+                    <option value="2">2 — two levels deep</option>
+                    <option value="3">3 — three levels deep</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="conn_pattern">URL Pattern (regex, optional)</label>
+                <input type="text" id="conn_pattern" name="url_pattern" placeholder="/Contract/Article/.*">
+                <span style="font-size:0.8rem; color:#6b7280;">Only follow links matching this pattern. Leave blank to follow all same-domain links.</span>
+            </div>
+            <div class="form-group">
+                <label for="conn_max">Max Pages</label>
+                <input type="number" id="conn_max" name="max_pages" value="100">
+            </div>
+        </div>
+        <button type="submit">Create Connector</button>
+        <span id="connector-status" style="margin-left:0.5rem;"></span>
+    </form>
+</div>
+
+<h2 style="margin-top:2rem; margin-bottom:1rem;">Connectors ({{ connectors | length }})</h2>
+{% if connectors %}
+<table>
+    <thead><tr><th>Name</th><th>Base URL</th><th>Depth</th><th>Pages</th><th>Last Crawl</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+        {% for c in connectors %}
+        <tr id="conn-{{ c.id }}">
+            <td><strong>{{ c.name }}</strong></td>
+            <td style="font-size:0.85rem; max-width:300px; overflow:hidden; text-overflow:ellipsis;">{{ c.base_url }}</td>
+            <td>{{ c.crawl_depth }}</td>
+            <td>{{ c.pages_ingested }}/{{ c.pages_found }}</td>
+            <td>{{ c.last_crawl.strftime('%Y-%m-%d %H:%M') if c.last_crawl else 'Never' }}</td>
+            <td>
+                {% if c.active %}
+                <span class="status-ok">Active</span>
+                {% else %}
+                <span style="color:#6b7280;">Inactive</span>
+                {% endif %}
+            </td>
+            <td>
+                <button class="small" hx-post="/admin/api/connectors/{{ c.id }}/crawl" hx-target="#crawl-status-{{ c.id }}" hx-swap="innerHTML">Crawl Now</button>
+                <span id="crawl-status-{{ c.id }}" style="margin-left:0.25rem;"></span>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No connectors yet. Create one above to start crawling websites.</p>
+{% endif %}
+{% endblock %}

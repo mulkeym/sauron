@@ -42,6 +42,29 @@ class Application(Base):
     )
 
 
+class WebConnector(Base):
+    __tablename__ = "web_connectors"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    base_url: Mapped[str] = mapped_column(String, nullable=False)
+    application_id: Mapped[int] = mapped_column(default=0)
+    acl_groups: Mapped[list] = mapped_column(JSON, default=list)
+    category: Mapped[str] = mapped_column(String, default="")
+    crawl_depth: Mapped[int] = mapped_column(default=1)  # how many links deep to follow
+    url_pattern: Mapped[str] = mapped_column(String, default="")  # only follow matching URLs
+    download_file_types: Mapped[list] = mapped_column(JSON, default=list)  # [".pdf", ".docx"]
+    max_pages: Mapped[int] = mapped_column(default=100)
+    respect_robots: Mapped[bool] = mapped_column(default=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    last_crawl: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    pages_found: Mapped[int] = mapped_column(default=0)
+    pages_ingested: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class AclGroup(Base):
     __tablename__ = "acl_groups"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
