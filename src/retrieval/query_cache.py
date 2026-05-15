@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Query result cache — stores previous answers for semantic reuse.
 
 Cached results are matched by embedding similarity (not exact query match),

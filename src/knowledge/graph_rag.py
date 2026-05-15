@@ -1,3 +1,4 @@
+from __future__ import annotations
 """LightRAG adapter — uses LightRAG's built-in OpenAI adapter for best format compliance."""
 import asyncio
 import logging

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from src.generation.llm_client import generate, parse_json_response
