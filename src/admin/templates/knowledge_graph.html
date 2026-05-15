@@ -5,7 +5,7 @@
 
 <p class="section-desc">
     Powered by LightRAG — {{ entities | length }} entities, {{ relationships | length }} relationships.
-    Drag to rotate, scroll to zoom, click a node to focus.
+    Drag to pan, scroll to zoom, click a node to inspect.
 </p>
 
 <div class="form-row" style="margin-bottom:1rem;">
@@ -38,9 +38,19 @@
         <label for="kg-search">Search</label>
         <input type="text" id="kg-search" placeholder="Entity name..." oninput="searchGraph()">
     </div>
+    <div class="form-group">
+        <label for="kg-renderer">Renderer</label>
+        <select id="kg-renderer" onchange="switchRenderer()">
+            <option value="cosmos">Cosmos (GPU)</option>
+            <option value="3d">3D Force Graph</option>
+        </select>
+    </div>
 </div>
 
-<div id="graph-container" style="width:90vw; height:650px; margin-left:calc(-45vw + 50%); background:#0a0a1a; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.4); overflow:hidden; margin-bottom:1.5rem;"></div>
+<div id="graph-container" style="width:90vw; height:650px; margin-left:calc(-45vw + 50%); background:#0a0a1a; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.4); overflow:hidden; margin-bottom:1.5rem; position:relative;"></div>
+
+<!-- Tooltip overlay for cosmos renderer -->
+<div id="cosmos-tooltip" style="display:none; position:fixed; background:rgba(0,0,0,0.85); color:white; padding:6px 10px; border-radius:4px; font-size:12px; pointer-events:none; z-index:1000;"></div>
 
 <div id="node-detail" style="display:none; margin-bottom:1.5rem;" class="settings-section">
     <h2 id="detail-title"></h2>
@@ -59,7 +69,9 @@
     </table>
 </details>
 
+<!-- Both renderers loaded; only one active at a time -->
 <script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
+<script src="//cdn.jsdelivr.net/npm/@cosmos.gl/graph@2.6.4/dist/index.min.js"></script>
 <script>
 const TYPE_COLORS = {
     organization: '#3b82f6',
@@ -76,101 +88,31 @@ const TYPE_COLORS = {
     law: '#dc2626',
 };
 
+// Hex color string to [r,g,b,a] float array for Cosmos
+function hexToRGBA(hex) {
+    const r = parseInt(hex.slice(1,3), 16) / 255;
+    const g = parseInt(hex.slice(3,5), 16) / 255;
+    const b = parseInt(hex.slice(5,7), 16) / 255;
+    return [r, g, b, 1.0];
+}
+
 const entities = {{ entities | tojson }};
 const relationships = {{ relationships | tojson }};
 
-// Build graph data
+// Shared graph data (rebuilt by buildGraphData)
 const nodeMap = new Map();
-const nodes = [];
-const links = [];
+let nodes = [];
+let links = [];
+let activeRenderer = 'cosmos';  // 'cosmos' or '3d'
+let cosmosGraph = null;
+let forceGraph = null;
 
-entities.forEach(e => {
-    if (!nodeMap.has(e.name)) {
-        const node = { id: e.name, type: e.type, color: TYPE_COLORS[e.type] || '#9ca3af', connections: 0 };
-        nodeMap.set(e.name, node);
-        nodes.push(node);
-    }
-});
-
-relationships.forEach(r => {
-    // Ensure both endpoints exist
-    if (!nodeMap.has(r.source)) {
-        const node = { id: r.source, type: 'unknown', color: '#9ca3af', connections: 0 };
-        nodeMap.set(r.source, node);
-        nodes.push(node);
-    }
-    if (!nodeMap.has(r.target)) {
-        const node = { id: r.target, type: 'unknown', color: '#9ca3af', connections: 0 };
-        nodeMap.set(r.target, node);
-        nodes.push(node);
-    }
-    nodeMap.get(r.source).connections++;
-    nodeMap.get(r.target).connections++;
-    links.push({ source: r.source, target: r.target, label: r.label || '' });
-});
-
-// Populate type filter
-const types = [...new Set(entities.map(e => e.type))].sort();
-const filterEl = document.getElementById('kg-filter');
-types.forEach(t => {
-    const opt = document.createElement('option');
-    opt.value = t;
-    opt.textContent = `${t} (${entities.filter(e => e.type === t).length})`;
-    filterEl.appendChild(opt);
-});
-
-// Build 3D graph
-const container = document.getElementById('graph-container');
-const graph = ForceGraph3D()(container)
-    .graphData({ nodes, links })
-    .nodeLabel(n => `<div style="background:rgba(0,0,0,0.8); color:white; padding:4px 8px; border-radius:4px; font-size:12px;">
-        <strong>${n.id}</strong><br><span style="color:${n.color}">${n.type}</span> (${n.connections} connections)
-    </div>`)
-    .nodeColor(n => n.__highlight ? '#ffffff' : n.color)
-    .nodeVal(n => Math.max(3, Math.min(20, n.connections * 2 + 3)))
-    .nodeOpacity(0.9)
-    .linkColor(() => 'rgba(150,180,255,0.7)')
-    .linkWidth(3)
-    .linkDirectionalArrowLength(4)
-    .linkDirectionalArrowRelPos(1)
-    .linkDirectionalParticles(1)
-    .linkDirectionalParticleWidth(1.5)
-    .linkDirectionalParticleSpeed(0.005)
-    .linkDirectionalParticleColor(() => 'rgba(180,200,255,0.6)')
-    .linkLabel(l => l.label ? `<span style="background:rgba(0,0,0,0.7); color:#ccc; padding:2px 6px; border-radius:3px; font-size:10px;">${l.label}</span>` : '')
-    .backgroundColor('#0a0a1a')
-    .onNodeClick(node => {
-        // Focus camera on clicked node
-        const distance = 200;
-        const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
-        graph.cameraPosition(
-            { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
-            node, 1000
-        );
-        showNodeDetail(node);
-    });
-
-// Warm up the simulation
-graph.d3Force('charge').strength(-80);
-graph.d3Force('link').distance(60);
-
-async function loadFilteredGraph() {
-    const groups = document.getElementById('kg-persona').value;
-    const appId = document.getElementById('kg-app').value;
-    const params = new URLSearchParams();
-    if (groups) params.set('groups', groups);
-    if (appId) params.set('app_id', appId);
-    const qs = params.toString();
-    const url = '/admin/api/knowledge-graph/filtered' + (qs ? '?' + qs : '');
-    const resp = await fetch(url);
-    const data = await resp.json();
-
-    // Rebuild nodes and links from filtered data
-    nodes.length = 0;
-    links.length = 0;
+function buildGraphData(ents, rels) {
     nodeMap.clear();
+    nodes = [];
+    links = [];
 
-    data.entities.forEach(e => {
+    ents.forEach(e => {
         if (!nodeMap.has(e.name)) {
             const node = { id: e.name, type: e.type, color: TYPE_COLORS[e.type] || '#9ca3af', connections: 0 };
             nodeMap.set(e.name, node);
@@ -178,7 +120,7 @@ async function loadFilteredGraph() {
         }
     });
 
-    data.relationships.forEach(r => {
+    rels.forEach(r => {
         if (!nodeMap.has(r.source)) {
             const node = { id: r.source, type: 'unknown', color: '#9ca3af', connections: 0 };
             nodeMap.set(r.source, node);
@@ -194,18 +136,202 @@ async function loadFilteredGraph() {
         links.push({ source: r.source, target: r.target, label: r.label || '' });
     });
 
-    graph.graphData({ nodes, links });
-
     // Update type filter
     const filterEl = document.getElementById('kg-filter');
     filterEl.innerHTML = '<option value="">All types</option>';
-    const newTypes = [...new Set(data.entities.map(e => e.type))].sort();
-    newTypes.forEach(t => {
+    const types = [...new Set(ents.map(e => e.type))].sort();
+    types.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t;
-        opt.textContent = `${t} (${data.entities.filter(e => e.type === t).length})`;
+        opt.textContent = `${t} (${ents.filter(e => e.type === t).length})`;
         filterEl.appendChild(opt);
     });
+}
+
+// ============================================================
+// Cosmos.gl Renderer
+// ============================================================
+function initCosmos(filteredNodes, filteredLinks) {
+    const container = document.getElementById('graph-container');
+    container.innerHTML = '';
+
+    // Build index map: node id -> array index
+    const idxMap = new Map();
+    filteredNodes.forEach((n, i) => idxMap.set(n.id, i));
+
+    // Build positions (random initial)
+    const positions = new Float32Array(filteredNodes.length * 2);
+    for (let i = 0; i < filteredNodes.length; i++) {
+        positions[i * 2]     = (Math.random() - 0.5) * 2048;
+        positions[i * 2 + 1] = (Math.random() - 0.5) * 2048;
+    }
+
+    // Build link index pairs
+    const validLinks = filteredLinks.filter(l => {
+        const si = idxMap.get(l.source.id || l.source);
+        const ti = idxMap.get(l.target.id || l.target);
+        return si !== undefined && ti !== undefined;
+    });
+    const linkPairs = new Float32Array(validLinks.length * 2);
+    validLinks.forEach((l, i) => {
+        linkPairs[i * 2]     = idxMap.get(l.source.id || l.source);
+        linkPairs[i * 2 + 1] = idxMap.get(l.target.id || l.target);
+    });
+
+    // Build per-node colors
+    const pointColors = new Float32Array(filteredNodes.length * 4);
+    filteredNodes.forEach((n, i) => {
+        const rgba = hexToRGBA(n.color);
+        pointColors[i * 4]     = rgba[0];
+        pointColors[i * 4 + 1] = rgba[1];
+        pointColors[i * 4 + 2] = rgba[2];
+        pointColors[i * 4 + 3] = rgba[3];
+    });
+
+    // Build per-node sizes based on connections
+    const pointSizes = new Float32Array(filteredNodes.length);
+    filteredNodes.forEach((n, i) => {
+        pointSizes[i] = Math.max(3, Math.min(15, n.connections * 1.5 + 3));
+    });
+
+    const config = {
+        backgroundColor: '#0a0a1a',
+        spaceSize: 4096,
+        pointSizeScale: 1.0,
+        linkWidth: 1.5,
+        linkColor: [0.59, 0.71, 1.0, 0.5],
+        curvedLinks: true,
+        simulationFriction: 0.85,
+        simulationGravity: 0.25,
+        simulationRepulsion: 1.0,
+        simulationLinkSpring: 0.3,
+        fitViewOnInit: true,
+        fitViewDelay: 500,
+        renderLinks: true,
+        onClick: (idx) => {
+            if (idx !== undefined && idx !== null && idx >= 0 && idx < filteredNodes.length) {
+                showNodeDetail(filteredNodes[idx]);
+                // Highlight by focusing
+                cosmosGraph.setConfig({ focusedPointIndex: idx });
+            }
+        },
+        onPointMouseOver: (idx) => {
+            if (idx === undefined || idx === null || idx < 0) return;
+            const n = filteredNodes[idx];
+            const tooltip = document.getElementById('cosmos-tooltip');
+            tooltip.innerHTML = `<strong>${n.id}</strong><br><span style="color:${n.color}">${n.type}</span> (${n.connections} connections)`;
+            tooltip.style.display = 'block';
+        },
+        onPointMouseOut: () => {
+            document.getElementById('cosmos-tooltip').style.display = 'none';
+        },
+    };
+
+    cosmosGraph = new Cosmos.Graph(container, config);
+    cosmosGraph.setPointPositions(positions);
+    cosmosGraph.setPointColors(pointColors);
+    cosmosGraph.setPointSizes(pointSizes);
+    cosmosGraph.setLinks(linkPairs);
+    cosmosGraph.render();
+
+    // Track mouse for tooltip position
+    container.addEventListener('mousemove', (e) => {
+        const tooltip = document.getElementById('cosmos-tooltip');
+        if (tooltip.style.display === 'block') {
+            tooltip.style.left = (e.clientX + 12) + 'px';
+            tooltip.style.top = (e.clientY - 10) + 'px';
+        }
+    });
+}
+
+function destroyCosmos() {
+    if (cosmosGraph) {
+        cosmosGraph.destroy();
+        cosmosGraph = null;
+    }
+}
+
+// ============================================================
+// 3D Force Graph Renderer
+// ============================================================
+function initForceGraph(filteredNodes, filteredLinks) {
+    const container = document.getElementById('graph-container');
+    container.innerHTML = '';
+
+    forceGraph = ForceGraph3D()(container)
+        .graphData({ nodes: filteredNodes, links: filteredLinks })
+        .nodeLabel(n => `<div style="background:rgba(0,0,0,0.8); color:white; padding:4px 8px; border-radius:4px; font-size:12px;">
+            <strong>${n.id}</strong><br><span style="color:${n.color}">${n.type}</span> (${n.connections} connections)
+        </div>`)
+        .nodeColor(n => n.__highlight ? '#ffffff' : n.color)
+        .nodeVal(n => Math.max(3, Math.min(20, n.connections * 2 + 3)))
+        .nodeOpacity(0.9)
+        .linkColor(() => 'rgba(150,180,255,0.7)')
+        .linkWidth(3)
+        .linkDirectionalArrowLength(4)
+        .linkDirectionalArrowRelPos(1)
+        .linkDirectionalParticles(1)
+        .linkDirectionalParticleWidth(1.5)
+        .linkDirectionalParticleSpeed(0.005)
+        .linkDirectionalParticleColor(() => 'rgba(180,200,255,0.6)')
+        .linkLabel(l => l.label ? `<span style="background:rgba(0,0,0,0.7); color:#ccc; padding:2px 6px; border-radius:3px; font-size:10px;">${l.label}</span>` : '')
+        .backgroundColor('#0a0a1a')
+        .onNodeClick(node => {
+            const distance = 200;
+            const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+            forceGraph.cameraPosition(
+                { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                node, 1000
+            );
+            showNodeDetail(node);
+        });
+
+    forceGraph.d3Force('charge').strength(-80);
+    forceGraph.d3Force('link').distance(60);
+}
+
+function destroyForceGraph() {
+    if (forceGraph) {
+        forceGraph._destructor && forceGraph._destructor();
+        forceGraph = null;
+    }
+}
+
+// ============================================================
+// Shared controls
+// ============================================================
+function renderGraph(filteredNodes, filteredLinks) {
+    filteredNodes = filteredNodes || nodes;
+    filteredLinks = filteredLinks || links;
+
+    if (activeRenderer === 'cosmos') {
+        destroyForceGraph();
+        initCosmos(filteredNodes, filteredLinks);
+    } else {
+        destroyCosmos();
+        initForceGraph(filteredNodes, filteredLinks);
+    }
+}
+
+function switchRenderer() {
+    const sel = document.getElementById('kg-renderer').value;
+    activeRenderer = sel;
+    renderGraph();
+}
+
+async function loadFilteredGraph() {
+    const groups = document.getElementById('kg-persona').value;
+    const appId = document.getElementById('kg-app').value;
+    const params = new URLSearchParams();
+    if (groups) params.set('groups', groups);
+    if (appId) params.set('app_id', appId);
+    const qs = params.toString();
+    const url = '/admin/api/knowledge-graph/filtered' + (qs ? '?' + qs : '');
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    buildGraphData(data.entities, data.relationships);
+    renderGraph();
 }
 
 function filterGraph() {
@@ -215,25 +341,22 @@ function filterGraph() {
     const filteredLinks = type
         ? links.filter(l => filteredIds.has(l.source.id || l.source) && filteredIds.has(l.target.id || l.target))
         : links;
-    graph.graphData({ nodes: filteredNodes, links: filteredLinks });
+    renderGraph(filteredNodes, filteredLinks);
 }
 
 function searchGraph() {
     const query = document.getElementById('kg-search').value.toLowerCase();
     if (!query) {
-        // Reset — show all nodes
-        graph.graphData({ nodes, links });
+        renderGraph();
         return;
     }
 
-    // Find matching nodes and their direct neighbors
     const matchIds = new Set();
     const neighborIds = new Set();
     nodes.forEach(n => {
         if (n.id.toLowerCase().includes(query)) matchIds.add(n.id);
     });
 
-    // Include neighbors of matched nodes
     links.forEach(l => {
         const src = l.source.id || l.source;
         const tgt = l.target.id || l.target;
@@ -251,9 +374,7 @@ function searchGraph() {
         visibleIds.has(l.source.id || l.source) && visibleIds.has(l.target.id || l.target)
     );
 
-    graph.graphData({ nodes: filteredNodes, links: filteredLinks });
-    graph.nodeColor(n => n.__match ? '#ffffff' : (TYPE_COLORS[n.type] || '#9ca3af'));
-    graph.nodeVal(n => n.__match ? 15 : Math.max(3, Math.min(20, (n.connections || 0) * 2 + 3)));
+    renderGraph(filteredNodes, filteredLinks);
 }
 
 function showNodeDetail(node) {
@@ -263,7 +384,6 @@ function showNodeDetail(node) {
 
     title.textContent = `${node.id} (${node.type})`;
 
-    // Find connected relationships
     const connected = links.filter(l =>
         (l.source.id || l.source) === node.id || (l.target.id || l.target) === node.id
     );
@@ -282,5 +402,9 @@ function showNodeDetail(node) {
     content.innerHTML = html;
     detail.style.display = 'block';
 }
+
+// Initial render
+buildGraphData(entities, relationships);
+renderGraph();
 </script>
 {% endblock %}
