@@ -1672,15 +1672,30 @@ async def create_backup():
 
         try:
             data_dir = Path("data")
+
+            # Skip temp/unnecessary files
+            skip_dirs = {"_transactions"}
+            skip_names = {".DS_Store"}
+            skip_suffixes = {".wal", ".shm", "-journal", ".tmp"}
+
+            def should_skip(p):
+                if p.name in skip_names:
+                    return True
+                if any(p.name.endswith(s) for s in skip_suffixes):
+                    return True
+                if any(part in skip_dirs for part in p.parts):
+                    return True
+                return False
+
             # Count files for progress
-            all_files = list(data_dir.rglob("*")) if data_dir.exists() else []
+            all_files = [f for f in data_dir.rglob("*") if not should_skip(f)] if data_dir.exists() else []
             total = len(all_files) + 1  # +1 for .env
             _backup_status["message"] = f"Compressing 0/{total} files..."
 
             with tarfile.open(str(backup_path), "w:gz") as tar:
                 if data_dir.exists():
                     count = 0
-                    for f in data_dir.rglob("*"):
+                    for f in all_files:
                         tar.add(str(f), arcname=str(f))
                         count += 1
                         if count % 100 == 0:
