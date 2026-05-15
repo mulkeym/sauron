@@ -83,13 +83,80 @@
                 {% endif %}
             </td>
             <td>
+                <button class="small" onclick="toggleEdit({{ c.id }})">Edit</button>
                 <button class="small" hx-post="/admin/api/connectors/{{ c.id }}/crawl" hx-target="#crawl-status-{{ c.id }}" hx-swap="innerHTML">Crawl Now</button>
                 <span id="crawl-status-{{ c.id }}" style="margin-left:0.25rem;"></span>
+            </td>
+        </tr>
+        <tr id="edit-{{ c.id }}" style="display:none;">
+            <td colspan="7" style="background:#f9fafb; padding:1rem;">
+                <form hx-post="/admin/api/connectors/{{ c.id }}/update" hx-target="#edit-status-{{ c.id }}" hx-swap="innerHTML">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" name="name" value="{{ c.name }}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Base URL</label>
+                            <input type="text" name="base_url" value="{{ c.base_url }}" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Application</label>
+                            <select name="application_id">
+                                <option value="0" {{ 'selected' if c.application_id == 0 }}>None</option>
+                                {% for app in applications %}
+                                <option value="{{ app.id }}" {{ 'selected' if c.application_id == app.id }}>{{ app.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Category</label>
+                            <input type="text" name="category" value="{{ c.category }}">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>ACL Groups (comma-separated)</label>
+                            <input type="text" name="acl_groups" value="{{ c.acl_groups | join(', ') }}">
+                        </div>
+                        <div class="form-group">
+                            <label>Crawl Depth</label>
+                            <select name="crawl_depth">
+                                <option value="0" {{ 'selected' if c.crawl_depth == 0 }}>0 — this page only</option>
+                                <option value="1" {{ 'selected' if c.crawl_depth == 1 }}>1 — follow links one level</option>
+                                <option value="2" {{ 'selected' if c.crawl_depth == 2 }}>2 — two levels deep</option>
+                                <option value="3" {{ 'selected' if c.crawl_depth == 3 }}>3 — three levels deep</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>URL Pattern (regex, optional)</label>
+                            <input type="text" name="url_pattern" value="{{ c.url_pattern }}">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Pages</label>
+                            <input type="number" name="max_pages" value="{{ c.max_pages }}">
+                        </div>
+                    </div>
+                    <button type="submit">Save Changes</button>
+                    <button type="button" class="small" onclick="toggleEdit({{ c.id }})" style="margin-left:0.5rem;">Cancel</button>
+                    <span id="edit-status-{{ c.id }}" style="margin-left:0.5rem;"></span>
+                </form>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+
+<script>
+function toggleEdit(id) {
+    const row = document.getElementById('edit-' + id);
+    row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+</script>
 {% else %}
 <p>No connectors yet. Create one above to start crawling websites.</p>
 {% endif %}

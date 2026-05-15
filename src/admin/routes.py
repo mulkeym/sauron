@@ -211,6 +211,35 @@ async def create_connector(
     return HTMLResponse(f'<span class="status-ok">Connector "{name}" created. Reload to see it.</span>')
 
 
+@router.post("/api/connectors/{connector_id}/update")
+async def update_connector(
+    connector_id: int,
+    name: str = Form(""), base_url: str = Form(""),
+    application_id: int = Form(0), category: str = Form(""),
+    acl_groups: str = Form(""), crawl_depth: int = Form(1),
+    url_pattern: str = Form(""), max_pages: int = Form(100),
+):
+    if not name.strip() or not base_url.strip():
+        return HTMLResponse('<span class="status-err">Name and URL are required.</span>')
+
+    groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    store = get_metadata_store()
+
+    if not groups and application_id > 0:
+        app = await store.get_application(application_id)
+        if app and app.default_acl_groups:
+            groups = app.default_acl_groups
+
+    await store.update_web_connector(
+        connector_id,
+        name=name.strip(), base_url=base_url.strip(),
+        application_id=application_id, category=category.strip(),
+        acl_groups=groups, crawl_depth=crawl_depth,
+        url_pattern=url_pattern.strip(), max_pages=max_pages,
+    )
+    return HTMLResponse(f'<span class="status-ok">Connector "{name}" updated. Reload to see changes.</span>')
+
+
 @router.post("/api/connectors/{connector_id}/crawl")
 async def crawl_connector_now(connector_id: int):
     import asyncio
