@@ -43,6 +43,7 @@ async def retrieve_map_reduce(
     """Map-reduce: extract from each doc individually, then combine."""
     question = state["question"]
     user_groups = state["user_groups"]
+    doc_ids = state.get("allowed_doc_ids")
 
     # Step 1: Find relevant documents (same as sweep discovery)
     query_vector = await asyncio.to_thread(embed_query, question)
@@ -57,7 +58,7 @@ async def retrieve_map_reduce(
     else:
         initial_results = vector_store.hybrid_search(
             vector=query_vector, text_query=question,
-            user_groups=user_groups, top_k=top_k, tier="xlarge",
+            user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
         )
         relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
         logger.info(f"Map-reduce: found {len(relevant_doc_ids)} relevant documents")

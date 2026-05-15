@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import logging
 import re
@@ -16,6 +17,7 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     """
     question = state["question"]
     user_groups = state["user_groups"]
+    doc_ids = state.get("allowed_doc_ids")
 
     query_vector = await asyncio.to_thread(embed_query, question)
 
@@ -30,7 +32,7 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
         # General sweep: find relevant documents via search
         initial_results = vector_store.hybrid_search(
             vector=query_vector, text_query=question,
-            user_groups=user_groups, top_k=top_k, tier="xlarge",
+            user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
         )
         relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
         logger.info(f"Sweep: found {len(relevant_doc_ids)} relevant documents from xlarge search")

@@ -25,3 +25,4 @@ class AgentState(TypedDict, total=False):
     citations: list[Citation]
     warnings: list[str]
     skip_graph: bool
+    allowed_doc_ids: list[str]  # restrict retrieval to these doc_ids (app filter)

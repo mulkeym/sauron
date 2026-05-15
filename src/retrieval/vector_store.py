@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import uuid
 
@@ -106,14 +107,17 @@ class VectorStore:
         quoted = ", ".join(f"'{g}'" for g in user_groups)
         return f"array_has_any(acl_groups, make_array({quoted}))"
 
-    def _build_filter(self, user_groups: list[str], tier: str | None = None) -> str | None:
-        """Build combined ACL + tier filter."""
+    def _build_filter(self, user_groups: list[str], tier: str | None = None, doc_ids: list[str] | None = None) -> str | None:
+        """Build combined ACL + tier + doc_id filter."""
         parts = []
         acl = self._build_acl_filter(user_groups)
         if acl:
             parts.append(acl)
         if tier:
             parts.append(f"chunk_size_tier = '{tier}'")
+        if doc_ids:
+            quoted = ", ".join(f"'{d}'" for d in doc_ids)
+            parts.append(f"doc_id IN ({quoted})")
         return " AND ".join(parts) if parts else None
 
     def _results_to_chunks(self, results: list[dict]) -> list[RetrievedChunk]:
@@ -152,19 +156,19 @@ class VectorStore:
             records.append(record)
         self.table.add(records)
 
-    def search(self, vector: list[float], user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
+    def search(self, vector: list[float], user_groups: list[str], top_k: int = 10, tier: str | None = None, doc_ids: list[str] | None = None) -> list[RetrievedChunk]:
         """Semantic-only vector search."""
         query = self.table.search(vector).limit(top_k)
-        combined = self._build_filter(user_groups, tier)
+        combined = self._build_filter(user_groups, tier, doc_ids)
         if combined:
             query = query.where(combined)
         return self._results_to_chunks(query.to_list())
 
-    def hybrid_search(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
+    def hybrid_search(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None, doc_ids: list[str] | None = None) -> list[RetrievedChunk]:
         """Hybrid search: vector + BM25 FTS with RRF fusion."""
         from lancedb.rerankers import RRFReranker
 
-        combined = self._build_filter(user_groups, tier)
+        combined = self._build_filter(user_groups, tier, doc_ids)
         try:
             query = (
                 self.table.search(query_type="hybrid")
@@ -178,11 +182,11 @@ class VectorStore:
             return self._results_to_chunks(query.to_list())
         except Exception as e:
             logger.warning(f"Hybrid search failed, falling back to semantic: {e}")
-            return self.search(vector, user_groups, top_k, tier)
+            return self.search(vector, user_groups, top_k, tier, doc_ids)
 
-    def hybrid_search_reranked(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None) -> list[RetrievedChunk]:
+    def hybrid_search_reranked(self, vector: list[float], text_query: str, user_groups: list[str], top_k: int = 10, tier: str | None = None, doc_ids: list[str] | None = None) -> list[RetrievedChunk]:
         """Hybrid search with CrossEncoder reranking for highest quality."""
-        combined = self._build_filter(user_groups, tier)
+        combined = self._build_filter(user_groups, tier, doc_ids)
         try:
             reranker = self._get_cross_encoder()
             query = (
@@ -197,7 +201,7 @@ class VectorStore:
             return self._results_to_chunks(query.to_list())
         except Exception as e:
             logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
-            return self.hybrid_search(vector, text_query, user_groups, top_k, tier)
+            return self.hybrid_search(vector, text_query, user_groups, top_k, tier, doc_ids)
 
     def get_chunks_by_doc(self, doc_id: str, limit: int = 200, tier: str | None = None) -> list[RetrievedChunk]:
         """Retrieve chunks for a document, optionally filtered by tier."""

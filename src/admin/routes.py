@@ -471,14 +471,16 @@ async def playground_page(request: Request):
     redirect = _require_login(request)
     if redirect:
         return redirect
-    return templates.TemplateResponse(request, "playground.html", {})
+    store = get_metadata_store()
+    apps = await store.list_applications()
+    return templates.TemplateResponse(request, "playground.html", {"applications": apps})
 
 
 _playground_jobs: dict = {}
 
 
 @router.post("/api/playground/start")
-async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full")):
+async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full"), app_id: int = Form(0)):
     import uuid, asyncio
     from fastapi.responses import JSONResponse
 
@@ -487,6 +489,13 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
 
     query_id = str(uuid.uuid4())[:8]
     user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
+
+    # Look up doc_ids for the selected application
+    allowed_doc_ids = None
+    if app_id:
+        store = get_metadata_store()
+        docs = await store.list_documents()
+        allowed_doc_ids = [d.doc_id for d in docs if d.application_id == app_id]
 
     _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": ""}
 
@@ -639,6 +648,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
                 needs_reretrieval=False, answer="", citations=[], warnings=[],
                 skip_graph=(mode == "vector_only"),
+                **({"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids else {}),
             )
 
             steps_data = [{"step": "cache_check", "time": cache_time, "output": {"result": "miss"}}]

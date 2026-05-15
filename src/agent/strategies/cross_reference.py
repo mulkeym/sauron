@@ -13,6 +13,7 @@ async def retrieve_cross_reference(
 ) -> dict:
     question = state["question"]
     user_groups = state["user_groups"]
+    doc_ids = state.get("allowed_doc_ids")
     sub_tasks = state.get("sub_tasks", [question])
 
     # Embed all sub-tasks in one batch (model isn't thread-safe for concurrent calls)
@@ -23,7 +24,7 @@ async def retrieve_cross_reference(
     async def search_task(task, vector):
         return vector_store.hybrid_search_reranked(
             vector=vector, text_query=task,
-            user_groups=user_groups, top_k=30, tier="medium",
+            user_groups=user_groups, top_k=30, tier="medium", doc_ids=doc_ids,
         )
 
     all_results = await asyncio.gather(
