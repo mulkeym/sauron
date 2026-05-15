@@ -34,9 +34,12 @@ def _is_file_url(url: str, extra_types: list[str] = None) -> bool:
 
 
 def _clean_url(url: str) -> str:
-    """Remove fragments and trailing slashes for dedup."""
+    """Remove fragments and trailing slashes for dedup. Preserves query params."""
     parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+    clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+    if parsed.query:
+        clean += f"?{parsed.query}"
+    return clean
 
 
 _BROWSER_HEADERS = {
@@ -46,33 +49,24 @@ _BROWSER_HEADERS = {
 }
 
 
-def _fetch_page(url: str, timeout: int = 30) -> tuple[str, str]:
-    """Fetch a URL. Falls back to headless browser if requests gets 403."""
-    resp = requests.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
-    if resp.status_code == 403:
-        logger.info(f"Got 403 for {url}, retrying with headless browser")
-        return _fetch_page_browser(url, timeout)
-    resp.raise_for_status()
-    return resp.text, resp.headers.get("content-type", "")
+def _fetch_file_via_browser_page(page, url: str) -> bytes:
+    """Download a file using in-page fetch() to carry session cookies."""
+    import base64
+    result = page.evaluate("""async (url) => {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const buf = await resp.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }""", url)
+    if result is None:
+        return b""
+    return base64.b64decode(result)
 
-
-def _fetch_page_browser(url: str, timeout: int = 30) -> tuple[str, str]:
-    """Fetch a page using Playwright headless browser for JS-protected sites."""
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, args=["--headless=new"])
-        ctx = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-        )
-        page = ctx.new_page()
-        page.set_default_timeout(timeout * 1000)
-        resp = page.goto(url, wait_until="networkidle")
-        content = page.content()
-        content_type = resp.headers.get("content-type", "text/html") if resp else "text/html"
-        browser.close()
-    return content, content_type
 
 
 def _html_to_markdown(html: str, url: str = "") -> str:
@@ -154,8 +148,27 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
     pages_ingested = 0
     files_downloaded = 0
     errors = []
+    browser_page = None  # persistent browser page for 403-protected sites
 
-    while to_visit and pages_found < max_pages:
+    def _get_browser_page():
+        """Lazily start a browser session and return the page."""
+        nonlocal browser_page
+        if browser_page is None:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(headless=False, args=["--headless=new"])
+            ctx = browser.new_context(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+            )
+            browser_page = ctx.new_page()
+            # Store references for cleanup
+            browser_page._pw_browser = browser
+            browser_page._pw = pw
+        return browser_page
+
+    try:
+      while to_visit and pages_found < max_pages:
         url, depth = to_visit.pop(0)
         clean = _clean_url(url)
 
@@ -167,7 +180,8 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
             # Check if it's a file to download
             if _is_file_url(url, download_types):
                 await _download_and_ingest_file(
-                    url, acl_groups, category, app_id, ingest_queue, metadata_store
+                    url, acl_groups, category, app_id, ingest_queue, metadata_store,
+                    browser_page=browser_page,
                 )
                 files_downloaded += 1
                 pages_found += 1
@@ -175,8 +189,19 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
                     progress_callback({"pages_found": pages_found, "pages_ingested": pages_ingested, "current_url": url})
                 continue
 
-            # Fetch page
-            html, content_type = await asyncio.to_thread(_fetch_page, url)
+            # Fetch page — try requests first, fall back to browser on 403
+            resp = await asyncio.to_thread(requests.get, url, timeout=30, headers=_BROWSER_HEADERS)
+            if resp.status_code == 403:
+                logger.info(f"Got 403 for {url}, using headless browser")
+                page = await asyncio.to_thread(_get_browser_page)
+                await asyncio.to_thread(page.goto, url, **{"wait_until": "networkidle"})
+                html = await asyncio.to_thread(page.content)
+                content_type = "text/html"
+            else:
+                resp.raise_for_status()
+                html = resp.text
+                content_type = resp.headers.get("content-type", "")
+
             if "text/html" not in content_type and "text/plain" not in content_type:
                 continue
 
@@ -226,6 +251,15 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
             errors.append(f"{url}: {str(e)}")
             logger.warning(f"Crawl error: {url}: {e}")
 
+    finally:
+        # Clean up browser if it was started
+        if browser_page is not None:
+            try:
+                browser_page._pw_browser.close()
+                browser_page._pw.stop()
+            except Exception:
+                pass
+
     # Update connector stats
     await metadata_store.update_web_connector(
         connector.id,
@@ -242,32 +276,28 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
     }
 
 
-async def _download_and_ingest_file(url, acl_groups, category, app_id, ingest_queue, metadata_store):
-    """Download a file from a URL and queue it for ingestion."""
+async def _download_and_ingest_file(url, acl_groups, category, app_id, ingest_queue, metadata_store, browser_page=None):
+    """Download a file from a URL and queue it for ingestion.
+
+    If browser_page is provided, uses in-page fetch for cookie-authenticated downloads.
+    """
+    content = None
     resp = requests.get(url, timeout=60, headers=_BROWSER_HEADERS)
-    if resp.status_code == 403:
-        logger.info(f"Got 403 downloading {url}, retrying with headless browser")
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False, args=["--headless=new"])
-            page = browser.new_page()
-            with page.expect_download() as dl_info:
-                page.goto(url)
-            download = dl_info.value
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(urlparse(url).path).suffix or ".bin")
-            download.save_as(tmp.name)
-            tmp.close()
-            content = Path(tmp.name).read_bytes()
-            browser.close()
-        # wrap in a fake response-like for the hash check below
-        class _Resp:
-            def __init__(self, c): self.content = c
-        resp = _Resp(content)
+    if resp.status_code == 403 and browser_page:
+        logger.info(f"Got 403 downloading {url}, using browser session cookies")
+        content = await asyncio.to_thread(_fetch_file_via_browser_page, browser_page, url)
+        if not content:
+            logger.warning(f"Browser download returned empty for {url}")
+            return
+    elif resp.status_code == 403:
+        logger.warning(f"Got 403 downloading {url} and no browser session available")
+        return
     else:
         resp.raise_for_status()
+        content = resp.content
 
     # Check content hash
-    content_hash = hashlib.sha256(resp.content).hexdigest()
+    content_hash = hashlib.sha256(content).hexdigest()
     existing = await metadata_store.find_by_content_hash(content_hash)
     if existing:
         logger.debug(f"Skipping file {url} — already ingested")
@@ -277,7 +307,7 @@ async def _download_and_ingest_file(url, acl_groups, category, app_id, ingest_qu
     suffix = Path(filename).suffix or ".bin"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
-        f.write(resp.content)
+        f.write(content)
         tmp_path = f.name
 
     ingest_queue.enqueue(
