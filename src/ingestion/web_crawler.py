@@ -39,13 +39,40 @@ def _clean_url(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
+
 def _fetch_page(url: str, timeout: int = 30) -> tuple[str, str]:
-    """Fetch a URL and return (html_content, content_type)."""
-    resp = requests.get(url, timeout=timeout, headers={
-        "User-Agent": "SAURON/1.0 (Enterprise RAG Crawler)",
-    })
+    """Fetch a URL. Falls back to headless browser if requests gets 403."""
+    resp = requests.get(url, timeout=timeout, headers=_BROWSER_HEADERS)
+    if resp.status_code == 403:
+        logger.info(f"Got 403 for {url}, retrying with headless browser")
+        return _fetch_page_browser(url, timeout)
     resp.raise_for_status()
     return resp.text, resp.headers.get("content-type", "")
+
+
+def _fetch_page_browser(url: str, timeout: int = 30) -> tuple[str, str]:
+    """Fetch a page using Playwright headless browser for JS-protected sites."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, args=["--headless=new"])
+        ctx = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+        )
+        page = ctx.new_page()
+        page.set_default_timeout(timeout * 1000)
+        resp = page.goto(url, wait_until="networkidle")
+        content = page.content()
+        content_type = resp.headers.get("content-type", "text/html") if resp else "text/html"
+        browser.close()
+    return content, content_type
 
 
 def _html_to_markdown(html: str, url: str = "") -> str:
@@ -217,10 +244,27 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
 
 async def _download_and_ingest_file(url, acl_groups, category, app_id, ingest_queue, metadata_store):
     """Download a file from a URL and queue it for ingestion."""
-    resp = requests.get(url, timeout=60, headers={
-        "User-Agent": "SAURON/1.0 (Enterprise RAG Crawler)",
-    })
-    resp.raise_for_status()
+    resp = requests.get(url, timeout=60, headers=_BROWSER_HEADERS)
+    if resp.status_code == 403:
+        logger.info(f"Got 403 downloading {url}, retrying with headless browser")
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False, args=["--headless=new"])
+            page = browser.new_page()
+            with page.expect_download() as dl_info:
+                page.goto(url)
+            download = dl_info.value
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(urlparse(url).path).suffix or ".bin")
+            download.save_as(tmp.name)
+            tmp.close()
+            content = Path(tmp.name).read_bytes()
+            browser.close()
+        # wrap in a fake response-like for the hash check below
+        class _Resp:
+            def __init__(self, c): self.content = c
+        resp = _Resp(content)
+    else:
+        resp.raise_for_status()
 
     # Check content hash
     content_hash = hashlib.sha256(resp.content).hexdigest()
