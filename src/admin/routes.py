@@ -189,11 +189,13 @@ async def create_connector(
     application_id: int = Form(0), category: str = Form(""),
     acl_groups: str = Form(""), crawl_depth: int = Form(1),
     url_pattern: str = Form(""), max_pages: int = Form(100),
+    additional_urls: str = Form(""),
 ):
     if not name.strip() or not base_url.strip():
         return HTMLResponse('<span class="status-err">Name and URL are required.</span>')
 
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    extra_urls = [u.strip() for u in additional_urls.split("\n") if u.strip()]
     store = get_metadata_store()
 
     # Inherit ACL from application if not specified
@@ -207,6 +209,7 @@ async def create_connector(
         application_id=application_id, category=category.strip(),
         acl_groups=groups, crawl_depth=crawl_depth,
         url_pattern=url_pattern.strip(), max_pages=max_pages,
+        additional_urls=extra_urls,
     )
     return HTMLResponse(f'<span class="status-ok">Connector "{name}" created. Reload to see it.</span>')
 
@@ -218,11 +221,13 @@ async def update_connector(
     application_id: int = Form(0), category: str = Form(""),
     acl_groups: str = Form(""), crawl_depth: int = Form(1),
     url_pattern: str = Form(""), max_pages: int = Form(100),
+    additional_urls: str = Form(""),
 ):
     if not name.strip() or not base_url.strip():
         return HTMLResponse('<span class="status-err">Name and URL are required.</span>')
 
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    extra_urls = [u.strip() for u in additional_urls.split("\n") if u.strip()]
     store = get_metadata_store()
 
     if not groups and application_id > 0:
@@ -236,6 +241,7 @@ async def update_connector(
         application_id=application_id, category=category.strip(),
         acl_groups=groups, crawl_depth=crawl_depth,
         url_pattern=url_pattern.strip(), max_pages=max_pages,
+        additional_urls=extra_urls,
     )
     return HTMLResponse(f'<span class="status-ok">Connector "{name}" updated. Reload to see changes.</span>')
 

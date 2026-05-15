@@ -58,6 +58,11 @@
                 <input type="number" id="conn_max" name="max_pages" value="100">
             </div>
         </div>
+        <div class="form-group">
+            <label for="conn_extra_urls">Additional URLs (one per line)</label>
+            <textarea id="conn_extra_urls" name="additional_urls" rows="3" placeholder="https://example.com/page1&#10;https://example.com/page2" style="width:100%; max-width:700px; padding:0.5rem 0.75rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.9rem; font-family:inherit;"></textarea>
+            <span style="font-size:0.8rem; color:#6b7280;">Extra seed URLs to crawl alongside the base URL.</span>
+        </div>
         <button type="submit">Create Connector</button>
         <span id="connector-status" style="margin-left:0.5rem;"></span>
     </form>
@@ -71,7 +76,7 @@
         {% for c in connectors %}
         <tr id="conn-{{ c.id }}">
             <td><strong>{{ c.name }}</strong></td>
-            <td style="font-size:0.85rem; max-width:300px; overflow:hidden; text-overflow:ellipsis;">{{ c.base_url }}</td>
+            <td style="font-size:0.85rem; max-width:300px; overflow:hidden; text-overflow:ellipsis;">{{ c.base_url }}{% if c.additional_urls %} <span style="color:#6b7280;">(+{{ c.additional_urls | length }})</span>{% endif %}</td>
             <td>{{ c.crawl_depth }}</td>
             <td>{{ c.pages_ingested }}/{{ c.pages_found }}</td>
             <td>{{ c.last_crawl.strftime('%Y-%m-%d %H:%M') if c.last_crawl else 'Never' }}</td>
@@ -140,6 +145,10 @@
                             <label>Max Pages</label>
                             <input type="number" name="max_pages" value="{{ c.max_pages }}">
                         </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Additional URLs (one per line)</label>
+                        <textarea name="additional_urls" rows="3" style="width:100%; max-width:700px; padding:0.5rem 0.75rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.9rem; font-family:inherit;">{{ (c.additional_urls or []) | join('\n') }}</textarea>
                     </div>
                     <button type="submit">Save Changes</button>
                     <button type="button" class="small" onclick="toggleEdit({{ c.id }})" style="margin-left:0.5rem;">Cancel</button>

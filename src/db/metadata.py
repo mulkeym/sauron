@@ -28,6 +28,7 @@ class MetadataStore:
                 ("content_hash", "documents", 'TEXT DEFAULT ""'),
                 ("application_id", "documents", "INTEGER DEFAULT 0"),
                 ("proposed_grs", "category_proposals", 'TEXT DEFAULT ""'),
+                ("additional_urls", "web_connectors", "TEXT DEFAULT '[]'"),
             ]
             for col, table, col_type in migrations:
                 try:

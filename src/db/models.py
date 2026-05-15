@@ -53,6 +53,7 @@ class WebConnector(Base):
     crawl_depth: Mapped[int] = mapped_column(default=1)  # how many links deep to follow
     url_pattern: Mapped[str] = mapped_column(String, default="")  # only follow matching URLs
     download_file_types: Mapped[list] = mapped_column(JSON, default=list)  # [".pdf", ".docx"]
+    additional_urls: Mapped[list] = mapped_column(JSON, default=list)  # extra seed URLs
     max_pages: Mapped[int] = mapped_column(default=100)
     respect_robots: Mapped[bool] = mapped_column(default=True)
     active: Mapped[bool] = mapped_column(default=True)

@@ -119,6 +119,10 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store)
 
     visited = set()
     to_visit = [(base_url, 0)]  # (url, depth)
+    for extra in (connector.additional_urls or []):
+        extra = extra.strip()
+        if extra:
+            to_visit.append((extra.rstrip("/"), 0))
     pages_found = 0
     pages_ingested = 0
     files_downloaded = 0
