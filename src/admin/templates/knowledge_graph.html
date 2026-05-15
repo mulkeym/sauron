@@ -208,7 +208,8 @@ function initCosmos(filteredNodes, filteredLinks) {
         fitViewOnInit: true,
         fitViewDelay: 500,
         renderLinks: true,
-        onClick: (idx) => {
+        onClick: (idx, event) => {
+            console.log('Cosmos onClick:', idx, typeof idx);
             cosmosClickHandler(idx, filteredNodes, validLinks, idxMap, pointColors, pointSizes);
         },
         onPointMouseOver: (idx) => {
@@ -249,6 +250,7 @@ function cosmosResetColors(originalColors, originalSizes, validLinks) {
         defLink[i*4+2] = 1.0; defLink[i*4+3] = 0.5;
     }
     cosmosGraph.setLinkColors(defLink);
+    cosmosGraph.render();
 }
 
 function cosmosClickHandler(idx, filteredNodes, validLinks, idxMap, originalColors, originalSizes) {
@@ -307,10 +309,10 @@ function cosmosClickHandler(idx, filteredNodes, validLinks, idxMap, originalColo
         }
     }
 
-    // Apply all at once — no setConfig calls
     cosmosGraph.setPointColors(nc);
     cosmosGraph.setPointSizes(ns);
     cosmosGraph.setLinkColors(lc);
+    cosmosGraph.render();
 }
 
 function destroyCosmos() {
