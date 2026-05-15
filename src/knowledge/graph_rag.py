@@ -142,21 +142,12 @@ def _get_allowed_filenames(user_groups: list[str]) -> set[str] | None:
             return pool.submit(asyncio.run, _fetch()).result()
 
 
-def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
-    """Get entity names the user can see based on source document ACLs.
-    Returns None if user has ALL access.
-    """
-    if "ALL" in user_groups:
-        return None
-
+def _files_to_allowed_entities(allowed_files: set[str]) -> set[str]:
+    """Trace filenames through LightRAG chunks to find entity names."""
     import json as json_mod
+    import re
     from pathlib import Path
 
-    allowed_files = _get_allowed_filenames(user_groups)
-    if allowed_files is None:
-        return None
-
-    # Load chunk-to-file mapping
     chunks_file = Path("data/lightrag/kv_store_text_chunks.json")
     if not chunks_file.exists():
         return set()
@@ -165,8 +156,6 @@ def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
     allowed_chunks = {cid for cid, data in chunk_data.items()
                       if data.get("file_path", "") in allowed_files}
 
-    # Load graph and find entities from allowed chunks
-    import re
     graphml = Path("data/lightrag/graph_chunk_entity_relation.graphml")
     if not graphml.exists():
         return set()
@@ -187,6 +176,20 @@ def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
     return allowed_entities
 
 
+def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
+    """Get entity names the user can see based on source document ACLs.
+    Returns None if user has ALL access.
+    """
+    if "ALL" in user_groups:
+        return None
+
+    allowed_files = _get_allowed_filenames(user_groups)
+    if allowed_files is None:
+        return None
+
+    return _files_to_allowed_entities(allowed_files)
+
+
 def _get_app_allowed_entities(app_id: int) -> set[str] | None:
     """Get entity names from documents belonging to a specific application.
     Returns None if app_id is 0 (no filtering).
@@ -195,11 +198,8 @@ def _get_app_allowed_entities(app_id: int) -> set[str] | None:
         return None
 
     import asyncio
-    import json as json_mod
-    from pathlib import Path
     from src.db.metadata import MetadataStore
 
-    # Get filenames for documents in this application
     async def _fetch():
         store = MetadataStore()
         await store.init()
@@ -216,35 +216,7 @@ def _get_app_allowed_entities(app_id: int) -> set[str] | None:
     if not allowed_files:
         return set()
 
-    # Load chunk-to-file mapping
-    chunks_file = Path("data/lightrag/kv_store_text_chunks.json")
-    if not chunks_file.exists():
-        return set()
-
-    chunk_data = json_mod.loads(chunks_file.read_text())
-    allowed_chunks = {cid for cid, data in chunk_data.items()
-                      if data.get("file_path", "") in allowed_files}
-
-    # Load graph and find entities from allowed chunks
-    import re
-    graphml = Path("data/lightrag/graph_chunk_entity_relation.graphml")
-    if not graphml.exists():
-        return set()
-
-    content = graphml.read_text()
-    allowed_entities = set()
-
-    for match in re.finditer(
-        r'<node id="([^"]+)"[^>]*>(.*?)</node>', content, re.DOTALL
-    ):
-        name = match.group(1)
-        source_match = re.search(r'<data key="d3">(.*?)</data>', match.group(2), re.DOTALL)
-        if source_match:
-            source_chunks = source_match.group(1).replace("&lt;SEP&gt;", "<SEP>").split("<SEP>")
-            if any(c.strip() in allowed_chunks for c in source_chunks):
-                allowed_entities.add(name)
-
-    return allowed_entities
+    return _files_to_allowed_entities(allowed_files)
 
 
 async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None) -> dict:
