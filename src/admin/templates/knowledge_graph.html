@@ -208,11 +208,39 @@ function initCosmos(filteredNodes, filteredLinks) {
         fitViewOnInit: true,
         fitViewDelay: 500,
         renderLinks: true,
+        pointGreyoutOpacity: 0.15,
+        linkGreyoutOpacity: 0.05,
         onClick: (idx) => {
             if (idx !== undefined && idx !== null && idx >= 0 && idx < filteredNodes.length) {
                 showNodeDetail(filteredNodes[idx]);
-                // Highlight by focusing
-                cosmosGraph.setConfig({ focusedPointIndex: idx });
+
+                // Find connected node indices and link indices
+                const neighborIndices = new Set();
+                const connectedLinkIndices = [];
+                neighborIndices.add(idx);
+                validLinks.forEach((l, li) => {
+                    const si = idxMap.get(l.source.id || l.source);
+                    const ti = idxMap.get(l.target.id || l.target);
+                    if (si === idx || ti === idx) {
+                        neighborIndices.add(si);
+                        neighborIndices.add(ti);
+                        connectedLinkIndices.push(li);
+                    }
+                });
+
+                // Highlight clicked node + neighbors, and their links
+                cosmosGraph.setConfig({
+                    focusedPointIndex: idx,
+                    highlightedPointIndices: [...neighborIndices],
+                    highlightedLinkIndices: connectedLinkIndices,
+                });
+            } else {
+                // Click on empty space — clear highlights
+                cosmosGraph.setConfig({
+                    focusedPointIndex: undefined,
+                    highlightedPointIndices: [],
+                    highlightedLinkIndices: [],
+                });
             }
         },
         onPointMouseOver: (idx) => {
