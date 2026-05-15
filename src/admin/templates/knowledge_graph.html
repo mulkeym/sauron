@@ -71,7 +71,7 @@
 
 <!-- Both renderers loaded; only one active at a time -->
 <script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
-<script src="//cdn.jsdelivr.net/npm/@cosmos.gl/graph@2.6.4/dist/index.min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/@cosmos.gl/graph@3.0.0-beta.9/dist/index.min.js"></script>
 <script>
 const TYPE_COLORS = {
     organization: '#3b82f6',
@@ -214,25 +214,14 @@ function initCosmos(filteredNodes, filteredLinks) {
             if (idx !== undefined && idx !== null && idx >= 0 && idx < filteredNodes.length) {
                 showNodeDetail(filteredNodes[idx]);
 
-                // Find connected node indices and link indices
-                const neighborIndices = new Set();
-                const connectedLinkIndices = [];
-                neighborIndices.add(idx);
-                validLinks.forEach((l, li) => {
-                    const si = idxMap.get(l.source.id || l.source);
-                    const ti = idxMap.get(l.target.id || l.target);
-                    if (si === idx || ti === idx) {
-                        neighborIndices.add(si);
-                        neighborIndices.add(ti);
-                        connectedLinkIndices.push(li);
-                    }
-                });
+                // Use cosmos.gl v3 built-in methods to find connections
+                const connectedPoints = cosmosGraph.getConnectedPointIndices(idx) || [];
+                const connectedLinks = cosmosGraph.getConnectedLinkIndices(idx) || [];
 
-                // Highlight clicked node + neighbors, and their links
                 cosmosGraph.setConfig({
                     focusedPointIndex: idx,
-                    highlightedPointIndices: [...neighborIndices],
-                    highlightedLinkIndices: connectedLinkIndices,
+                    highlightedPointIndices: [idx, ...connectedPoints],
+                    highlightedLinkIndices: connectedLinks,
                 });
             } else {
                 // Click on empty space — clear highlights
