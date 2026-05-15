@@ -250,8 +250,8 @@ Three transport modes:
 
 ```bash
 # Clone and setup
-git clone https://github.com/mulkeym/rag.git
-cd rag
+git clone https://github.com/mulkeym/sauron.git
+cd sauron
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
