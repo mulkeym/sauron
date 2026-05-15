@@ -209,22 +209,7 @@ function initCosmos(filteredNodes, filteredLinks) {
         fitViewDelay: 500,
         renderLinks: true,
         onClick: (idx) => {
-            if (idx !== undefined && idx !== null && idx >= 0 && idx < filteredNodes.length) {
-                showNodeDetail(filteredNodes[idx]);
-                highlightConnections(idx, filteredNodes, validLinks, idxMap, pointColors);
-            } else {
-                // Click on empty space — restore original colors
-                cosmosGraph.setPointColors(pointColors);
-                cosmosGraph.setPointSizes(pointSizes);
-                cosmosGraph.setConfig({ focusedPointIndex: undefined });
-                // Restore link colors
-                const defaultLinkColors = new Float32Array(validLinks.length * 4);
-                for (let i = 0; i < validLinks.length; i++) {
-                    defaultLinkColors[i*4] = 0.59; defaultLinkColors[i*4+1] = 0.71;
-                    defaultLinkColors[i*4+2] = 1.0; defaultLinkColors[i*4+3] = 0.5;
-                }
-                cosmosGraph.setLinkColors(defaultLinkColors);
-            }
+            cosmosClickHandler(idx, filteredNodes, validLinks, idxMap, pointColors, pointSizes);
         },
         onPointMouseOver: (idx) => {
             if (idx === undefined || idx === null || idx < 0) return;
@@ -255,12 +240,30 @@ function initCosmos(filteredNodes, filteredLinks) {
     });
 }
 
-function highlightConnections(idx, filteredNodes, validLinks, idxMap, originalColors) {
-    // Find which node indices and link indices are connected to idx
-    const neighborSet = new Set();
-    const connectedLinkSet = new Set();
-    neighborSet.add(idx);
+function cosmosResetColors(originalColors, originalSizes, validLinks) {
+    cosmosGraph.setPointColors(originalColors);
+    cosmosGraph.setPointSizes(originalSizes);
+    const defLink = new Float32Array(validLinks.length * 4);
+    for (let i = 0; i < validLinks.length; i++) {
+        defLink[i*4] = 0.59; defLink[i*4+1] = 0.71;
+        defLink[i*4+2] = 1.0; defLink[i*4+3] = 0.5;
+    }
+    cosmosGraph.setLinkColors(defLink);
+}
 
+function cosmosClickHandler(idx, filteredNodes, validLinks, idxMap, originalColors, originalSizes) {
+    // Always reset first so clicks on new nodes work
+    cosmosResetColors(originalColors, originalSizes, validLinks);
+
+    if (idx === undefined || idx === null || idx < 0 || idx >= filteredNodes.length) {
+        return;
+    }
+
+    showNodeDetail(filteredNodes[idx]);
+
+    // Find connected nodes and links
+    const neighborSet = new Set([idx]);
+    const connectedLinkSet = new Set();
     validLinks.forEach((l, li) => {
         const si = idxMap.get(l.source.id || l.source);
         const ti = idxMap.get(l.target.id || l.target);
@@ -268,44 +271,43 @@ function highlightConnections(idx, filteredNodes, validLinks, idxMap, originalCo
         if (ti === idx) { neighborSet.add(si); connectedLinkSet.add(li); }
     });
 
-    // Dim all nodes, brighten connected ones
-    const newColors = new Float32Array(filteredNodes.length * 4);
-    const newSizes = new Float32Array(filteredNodes.length);
+    // Dim non-connected nodes
+    const nc = new Float32Array(filteredNodes.length * 4);
+    const ns = new Float32Array(filteredNodes.length);
     for (let i = 0; i < filteredNodes.length; i++) {
         if (neighborSet.has(i)) {
-            // Keep original color, enlarge slightly
-            newColors[i*4]   = originalColors[i*4];
-            newColors[i*4+1] = originalColors[i*4+1];
-            newColors[i*4+2] = originalColors[i*4+2];
-            newColors[i*4+3] = 1.0;
-            newSizes[i] = i === idx
-                ? Math.max(8, filteredNodes[i].connections * 2 + 5)
+            nc[i*4]   = originalColors[i*4];
+            nc[i*4+1] = originalColors[i*4+1];
+            nc[i*4+2] = originalColors[i*4+2];
+            nc[i*4+3] = 1.0;
+            ns[i] = i === idx
+                ? Math.max(10, filteredNodes[i].connections * 2 + 5)
                 : Math.max(5, filteredNodes[i].connections * 1.5 + 3);
         } else {
-            // Dim: low opacity
-            newColors[i*4]   = originalColors[i*4] * 0.3;
-            newColors[i*4+1] = originalColors[i*4+1] * 0.3;
-            newColors[i*4+2] = originalColors[i*4+2] * 0.3;
-            newColors[i*4+3] = 0.12;
-            newSizes[i] = 2;
+            nc[i*4]   = originalColors[i*4] * 0.3;
+            nc[i*4+1] = originalColors[i*4+1] * 0.3;
+            nc[i*4+2] = originalColors[i*4+2] * 0.3;
+            nc[i*4+3] = 0.1;
+            ns[i] = 2;
         }
     }
-    cosmosGraph.setPointColors(newColors);
-    cosmosGraph.setPointSizes(newSizes);
-    cosmosGraph.setConfig({ focusedPointIndex: idx });
 
-    // Bright white links for connected, near-invisible for the rest
-    const linkColors = new Float32Array(validLinks.length * 4);
+    // Bright links for connected, near-invisible for the rest
+    const lc = new Float32Array(validLinks.length * 4);
     for (let i = 0; i < validLinks.length; i++) {
         if (connectedLinkSet.has(i)) {
-            linkColors[i*4] = 1.0; linkColors[i*4+1] = 1.0;
-            linkColors[i*4+2] = 1.0; linkColors[i*4+3] = 0.9;
+            lc[i*4] = 1.0; lc[i*4+1] = 1.0;
+            lc[i*4+2] = 1.0; lc[i*4+3] = 0.85;
         } else {
-            linkColors[i*4] = 0.3; linkColors[i*4+1] = 0.3;
-            linkColors[i*4+2] = 0.5; linkColors[i*4+3] = 0.04;
+            lc[i*4] = 0.2; lc[i*4+1] = 0.2;
+            lc[i*4+2] = 0.3; lc[i*4+3] = 0.03;
         }
     }
-    cosmosGraph.setLinkColors(linkColors);
+
+    // Apply all at once — no setConfig calls
+    cosmosGraph.setPointColors(nc);
+    cosmosGraph.setPointSizes(ns);
+    cosmosGraph.setLinkColors(lc);
 }
 
 function destroyCosmos() {
