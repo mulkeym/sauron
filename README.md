@@ -143,6 +143,10 @@ Entities are deduplicated at ingestion time with 3-tier matching (exact, case-in
 
 Graph traversal uses SQL queries against the entity/relationship tables, not graph databases.
 
+The knowledge graph explorer offers two renderers selectable via a dropdown:
+- **Cosmos (GPU)** -- GPU-accelerated 2D force graph via cosmos.gl, handles thousands of nodes smoothly. Click a node to highlight its connections (neighbors glow, connected links turn white, everything else dims).
+- **3D Force Graph** -- WebGL 3D visualization with particle effects, camera rotation, and link animations.
+
 ## Ingestion Pipeline
 
 ```
@@ -192,6 +196,17 @@ Every document has an `acl_groups` field (e.g., `["finance", "executives"]`). Wh
 
 ACL groups can be set during upload or inherited from the document's category.
 
+## Backup & Restore
+
+A single `.tar.gz` backup file contains everything needed to transport SAURON to another host:
+
+- **metadata.db** -- all documents, categories, applications, connectors, entities, relationships
+- **lancedb/** -- vector embeddings and search indexes
+- **lightrag/** -- knowledge graph (GraphML + JSON stores)
+- **.env** -- configuration and secrets
+
+Create and download backups from the **Settings** page. Restore by uploading a backup file -- current data is saved to `data.pre-restore/` before overwriting. Temp files (`_transactions/`, SQLite WAL, `.DS_Store`) are excluded to keep backups lean.
+
 ## MCP Server
 
 SAURON exposes tools via the Model Context Protocol for integration with OpenWebUI, Claude Code, and other AI agents:
@@ -225,8 +240,8 @@ Three transport modes:
 | Categories | Create, edit, manage document categories with NARA GRS mapping |
 | Proposals | Approve/reject auto-categorization and entity merge proposals |
 | Playground | Query testing with step trace, streaming answers, application and persona filters |
-| Knowledge Graph | 3D entity visualization with application, persona, and type filtering |
-| Settings | LLM/embedding endpoints, reconciliation, LanceDB config |
+| Knowledge Graph | GPU-accelerated (cosmos.gl) or 3D entity visualization with application, persona, and type filtering; click-to-highlight connections |
+| Settings | LLM/embedding endpoints, reconciliation, LanceDB config, backup & restore |
 | Audit Log | JSONL audit trail of all operations |
 
 ## Quick Start
