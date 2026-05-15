@@ -38,14 +38,18 @@ class MetadataStore:
                 except Exception:
                     await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
 
-            # Rename applications table to datasets
+            # Migrate data from old applications table to datasets
             try:
-                await conn.execute(text("SELECT 1 FROM datasets LIMIT 1"))
+                count = (await conn.execute(text("SELECT count(*) FROM applications"))).scalar()
+                if count and count > 0:
+                    ds_count = (await conn.execute(text("SELECT count(*) FROM datasets"))).scalar()
+                    if ds_count == 0:
+                        await conn.execute(text(
+                            "INSERT INTO datasets (id, name, slug, description, owner, default_acl_groups, allowed_categories, active, created_at) "
+                            "SELECT id, name, slug, description, owner, default_acl_groups, allowed_categories, active, created_at FROM applications"
+                        ))
             except Exception:
-                try:
-                    await conn.execute(text("ALTER TABLE applications RENAME TO datasets"))
-                except Exception:
-                    pass  # neither table exists yet — will be created by create_all
+                pass  # applications table may not exist on fresh installs
 
             # Copy application_id values to dataset_id for existing records
             try:
