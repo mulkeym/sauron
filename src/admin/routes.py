@@ -1641,3 +1641,147 @@ async def cache_stats():
     from src.retrieval.query_cache import cache_stats
     stats = cache_stats()
     return HTMLResponse(f'{stats["entries"]} cached results')
+
+
+# ============================================================
+# Backup & Restore
+# ============================================================
+
+@router.post("/api/backup/create")
+async def create_backup():
+    """Create a tar.gz backup of all data + .env config."""
+    import tarfile, time, shutil
+
+    redirect = None  # no auth check needed — endpoint only used from settings page
+
+    backup_dir = Path("backups")
+    backup_dir.mkdir(exist_ok=True)
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_name = f"sauron-backup-{timestamp}.tar.gz"
+    backup_path = backup_dir / backup_name
+
+    try:
+        with tarfile.open(str(backup_path), "w:gz") as tar:
+            # Add data directory (metadata.db, lancedb, lightrag)
+            data_dir = Path("data")
+            if data_dir.exists():
+                tar.add(str(data_dir), arcname="data")
+
+            # Add .env config
+            env_file = Path(".env")
+            if env_file.exists():
+                tar.add(str(env_file), arcname=".env")
+
+        size_mb = backup_path.stat().st_size / (1024 * 1024)
+        return HTMLResponse(
+            f'<span class="status-ok">Backup created: {backup_name} ({size_mb:.1f} MB)</span>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<span class="status-err">Backup failed: {e}</span>')
+
+
+@router.get("/api/backup/list")
+async def list_backups():
+    """List available backups."""
+    backup_dir = Path("backups")
+    if not backup_dir.exists():
+        return HTMLResponse("<p>No backups yet.</p>")
+
+    backups = sorted(backup_dir.glob("sauron-backup-*.tar.gz"), reverse=True)
+    if not backups:
+        return HTMLResponse("<p>No backups yet.</p>")
+
+    rows = ""
+    for b in backups:
+        size_mb = b.stat().st_size / (1024 * 1024)
+        name = b.name
+        rows += f"""<tr>
+            <td>{name}</td>
+            <td>{size_mb:.1f} MB</td>
+            <td>
+                <a href="/admin/api/backup/download/{name}" class="small" style="text-decoration:none;">Download</a>
+                <button class="small" hx-post="/admin/api/backup/delete/{name}" hx-target="#backup-list" hx-swap="innerHTML" hx-confirm="Delete {name}?" style="margin-left:0.25rem;">Delete</button>
+            </td>
+        </tr>"""
+
+    return HTMLResponse(f"""<table>
+        <thead><tr><th>Backup</th><th>Size</th><th>Actions</th></tr></thead>
+        <tbody>{rows}</tbody>
+    </table>""")
+
+
+@router.get("/api/backup/download/{filename}")
+async def download_backup(filename: str):
+    """Download a backup file."""
+    from fastapi.responses import FileResponse
+    import re
+
+    # Sanitize filename
+    if not re.match(r'^sauron-backup-[\d-]+\.tar\.gz$', filename):
+        return HTMLResponse('<span class="status-err">Invalid filename.</span>', status_code=400)
+
+    backup_path = Path("backups") / filename
+    if not backup_path.exists():
+        return HTMLResponse('<span class="status-err">Backup not found.</span>', status_code=404)
+
+    return FileResponse(
+        str(backup_path),
+        media_type="application/gzip",
+        filename=filename,
+    )
+
+
+@router.post("/api/backup/delete/{filename}")
+async def delete_backup(filename: str):
+    """Delete a backup file."""
+    import re
+
+    if not re.match(r'^sauron-backup-[\d-]+\.tar\.gz$', filename):
+        return HTMLResponse('<span class="status-err">Invalid filename.</span>', status_code=400)
+
+    backup_path = Path("backups") / filename
+    if backup_path.exists():
+        backup_path.unlink()
+
+    # Return updated list
+    return await list_backups()
+
+
+@router.post("/api/backup/restore")
+async def restore_backup(backup_file: UploadFile = File(...)):
+    """Restore from an uploaded backup tar.gz file."""
+    import tarfile, shutil, io
+
+    try:
+        contents = await backup_file.read()
+        tar_bytes = io.BytesIO(contents)
+
+        with tarfile.open(fileobj=tar_bytes, mode="r:gz") as tar:
+            # Validate: must contain data/ directory
+            members = tar.getnames()
+            if not any(m.startswith("data/") or m == "data" for m in members):
+                return HTMLResponse('<span class="status-err">Invalid backup: no data/ directory found.</span>')
+
+            # Safety: reject paths that escape the current directory
+            for m in members:
+                if m.startswith("/") or ".." in m:
+                    return HTMLResponse(f'<span class="status-err">Invalid backup: unsafe path {m}</span>')
+
+            # Back up current data before overwriting
+            data_dir = Path("data")
+            data_bak = Path("data.pre-restore")
+            if data_dir.exists():
+                if data_bak.exists():
+                    shutil.rmtree(str(data_bak))
+                shutil.copytree(str(data_dir), str(data_bak))
+
+            # Extract
+            tar.extractall(".")
+
+        size_mb = len(contents) / (1024 * 1024)
+        return HTMLResponse(
+            f'<span class="status-ok">Restored from {backup_file.filename} ({size_mb:.1f} MB). '
+            f'Previous data saved to data.pre-restore/. Restart the server to apply.</span>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<span class="status-err">Restore failed: {e}</span>')

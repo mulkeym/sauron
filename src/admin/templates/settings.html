@@ -172,4 +172,29 @@ function generateApiKey() {
           hx-get="/admin/api/settings/cache-stats" hx-trigger="load" hx-swap="innerHTML">
     </span>
 </div>
+
+<div class="settings-section" style="margin-top:1.5rem;">
+    <h2>Backup & Restore</h2>
+    <p class="section-desc">Create a single backup file containing all data (metadata DB, vector store, knowledge graph) and configuration (.env). Download to transport to another host.</p>
+
+    <div style="margin-bottom:1rem;">
+        <button type="button" hx-post="/admin/api/backup/create" hx-target="#backup-status" hx-swap="innerHTML">Create Backup</button>
+        <span id="backup-status" style="margin-left:0.5rem;"></span>
+    </div>
+
+    <div id="backup-list" hx-get="/admin/api/backup/list" hx-trigger="load" hx-swap="innerHTML" style="margin-bottom:1.5rem;">
+    </div>
+
+    <h3 style="margin-top:1rem; margin-bottom:0.5rem;">Restore from Backup</h3>
+    <p class="section-desc">Upload a backup file to restore. Current data is saved to data.pre-restore/ before overwriting. Server restart required after restore.</p>
+    <form hx-post="/admin/api/backup/restore" hx-target="#restore-status" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+        <div class="form-row">
+            <div class="form-group">
+                <input type="file" name="backup_file" accept=".gz,.tar.gz" required>
+            </div>
+        </div>
+        <button type="submit" hx-confirm="This will overwrite all current data. Continue?">Restore</button>
+        <span id="restore-status" style="margin-left:0.5rem;"></span>
+    </form>
+</div>
 {% endblock %}
