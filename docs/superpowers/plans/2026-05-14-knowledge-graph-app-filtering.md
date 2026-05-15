@@ -1,16 +1,16 @@
-# Knowledge Graph Application Filtering Implementation Plan
+# Knowledge Graph Dataset Filtering Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add application-based filtering to the knowledge graph so users can view only entities from a specific application's documents, composable with the existing persona/ACL filter via intersection.
+**Goal:** Add dataset-based filtering to the knowledge graph so users can view only entities from a specific dataset's documents, composable with the existing persona/ACL filter via intersection.
 
-**Architecture:** Extend the existing `/api/knowledge-graph/filtered` endpoint with an `app_id` parameter. A new `_get_app_allowed_entities()` function in `graph_rag.py` traces Application → Documents → Chunks → Entities using the same pattern as the existing ACL filter. The template gets an application dropdown that feeds into a unified `loadFilteredGraph()` JS function.
+**Architecture:** Extend the existing `/api/knowledge-graph/filtered` endpoint with a `ds_id` parameter. A new `_get_dataset_allowed_entities()` function in `graph_rag.py` traces Dataset → Documents → Chunks → Entities using the same pattern as the existing ACL filter. The template gets a dataset dropdown that feeds into a unified `loadFilteredGraph()` JS function.
 
 **Tech Stack:** Python/FastAPI, SQLAlchemy, LightRAG GraphML, 3D Force Graph (JS)
 
 ---
 
-### Task 1: Add `_get_app_allowed_entities()` to graph_rag.py
+### Task 1: Add `_get_dataset_allowed_entities()` to graph_rag.py
 
 **Files:**
 - Modify: `src/knowledge/graph_rag.py:120-187`
@@ -21,11 +21,11 @@
 Add to `tests/test_admin/test_routes.py`:
 
 ```python
-def test_knowledge_graph_filtered_by_app(client):
-    """Filtering by app_id returns only entities from that app's documents."""
+def test_knowledge_graph_filtered_by_dataset(client):
+    """Filtering by ds_id returns only entities from that dataset's documents."""
     with patch("src.admin.routes.get_metadata_store") as mock_get:
         store = AsyncMock()
-        store.list_applications.return_value = []
+        store.list_datasets.return_value = []
         mock_get.return_value = store
 
         with patch("src.admin.routes._load_lightrag_graph") as mock_graph:
@@ -33,9 +33,9 @@ def test_knowledge_graph_filtered_by_app(client):
                 [{"name": "Acme Corp", "type": "organization"}, {"name": "Bob Smith", "type": "person"}],
                 [{"source": "Acme Corp", "target": "Bob Smith", "label": "employs"}],
             )
-            with patch("src.knowledge.graph_rag._get_app_allowed_entities") as mock_app_filter:
-                mock_app_filter.return_value = {"Acme Corp"}
-                resp = client.get("/admin/api/knowledge-graph/filtered?app_id=1")
+            with patch("src.knowledge.graph_rag._get_dataset_allowed_entities") as mock_dataset_filter:
+                mock_dataset_filter.return_value = {"Acme Corp"}
+                resp = client.get("/admin/api/knowledge-graph/filtered?ds_id=1")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -44,8 +44,8 @@ def test_knowledge_graph_filtered_by_app(client):
     assert len(data["relationships"]) == 0  # Bob filtered out, so edge is removed
 
 
-def test_knowledge_graph_filtered_by_app_and_persona(client):
-    """When both app_id and groups are set, result is the intersection."""
+def test_knowledge_graph_filtered_by_dataset_and_persona(client):
+    """When both ds_id and groups are set, result is the intersection."""
     with patch("src.admin.routes.get_metadata_store") as mock_get:
         store = AsyncMock()
         mock_get.return_value = store
@@ -59,11 +59,11 @@ def test_knowledge_graph_filtered_by_app_and_persona(client):
                 ],
                 [],
             )
-            with patch("src.knowledge.graph_rag._get_app_allowed_entities") as mock_app:
-                mock_app.return_value = {"Acme Corp", "Bob Smith"}  # app has these two
+            with patch("src.knowledge.graph_rag._get_dataset_allowed_entities") as mock_dataset:
+                mock_dataset.return_value = {"Acme Corp", "Bob Smith"}  # dataset has these two
                 with patch("src.knowledge.graph_rag._get_acl_allowed_entities") as mock_acl:
                     mock_acl.return_value = {"Acme Corp", "Secret Project"}  # persona sees these two
-                    resp = client.get("/admin/api/knowledge-graph/filtered?app_id=1&groups=finance")
+                    resp = client.get("/admin/api/knowledge-graph/filtered?ds_id=1&groups=finance")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -74,20 +74,20 @@ def test_knowledge_graph_filtered_by_app_and_persona(client):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/test_admin/test_routes.py::test_knowledge_graph_filtered_by_app tests/test_admin/test_routes.py::test_knowledge_graph_filtered_by_app_and_persona -v`
+Run: `pytest tests/test_admin/test_routes.py::test_knowledge_graph_filtered_by_dataset tests/test_admin/test_routes.py::test_knowledge_graph_filtered_by_dataset_and_persona -v`
 
-Expected: FAIL — `_get_app_allowed_entities` does not exist yet, and the endpoint doesn't accept `app_id`.
+Expected: FAIL — `_get_dataset_allowed_entities` does not exist yet, and the endpoint doesn't accept `ds_id`.
 
-- [ ] **Step 3: Add `_get_app_allowed_entities()` function**
+- [ ] **Step 3: Add `_get_dataset_allowed_entities()` function**
 
 Add after `_get_acl_allowed_entities()` in `src/knowledge/graph_rag.py` (after line 187):
 
 ```python
-def _get_app_allowed_entities(app_id: int) -> set[str] | None:
-    """Get entity names from documents belonging to a specific application.
-    Returns None if app_id is 0 (no filtering).
+def _get_dataset_allowed_entities(ds_id: int) -> set[str] | None:
+    """Get entity names from documents belonging to a specific dataset.
+    Returns None if ds_id is 0 (no filtering).
     """
-    if not app_id:
+    if not ds_id:
         return None
 
     import asyncio
@@ -95,12 +95,12 @@ def _get_app_allowed_entities(app_id: int) -> set[str] | None:
     from pathlib import Path
     from src.db.metadata import MetadataStore
 
-    # Get filenames for documents in this application
+    # Get filenames for documents in this dataset
     async def _fetch():
         store = MetadataStore()
         await store.init()
         docs = await store.list_documents()
-        return {d.filename for d in docs if d.application_id == app_id}
+        return {d.filename for d in docs if d.dataset_id == ds_id}
 
     try:
         allowed_files = asyncio.run(_fetch())
@@ -147,12 +147,12 @@ def _get_app_allowed_entities(app_id: int) -> set[str] | None:
 
 ```bash
 git add src/knowledge/graph_rag.py
-git commit -m "feat: add _get_app_allowed_entities for application-based graph filtering"
+git commit -m "feat: add _get_dataset_allowed_entities for dataset-based graph filtering"
 ```
 
 ---
 
-### Task 2: Extend the `/filtered` endpoint with `app_id` parameter
+### Task 2: Extend the `/filtered` endpoint with `ds_id` parameter
 
 **Files:**
 - Modify: `src/admin/routes.py:1060-1085`
@@ -163,8 +163,8 @@ Replace the `knowledge_graph_filtered` function in `src/admin/routes.py` (lines 
 
 ```python
 @router.get("/api/knowledge-graph/filtered")
-async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
-    """Return filtered graph data by persona ACL and/or application."""
+async def knowledge_graph_filtered(groups: str = "", ds_id: int = 0):
+    """Return filtered graph data by persona ACL and/or dataset."""
     from fastapi.responses import JSONResponse
     import asyncio
 
@@ -173,9 +173,9 @@ async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
     entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
 
     no_persona_filter = "ALL" in user_groups or not groups
-    no_app_filter = app_id == 0
+    no_dataset_filter = ds_id == 0
 
-    if no_persona_filter and no_app_filter:
+    if no_persona_filter and no_dataset_filter:
         return JSONResponse({"entities": entities, "relationships": relationships})
 
     # Compute allowed entity sets for each active filter
@@ -187,14 +187,14 @@ async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
         if acl_allowed is not None:
             allowed = acl_allowed
 
-    if not no_app_filter:
-        from src.knowledge.graph_rag import _get_app_allowed_entities
-        app_allowed = await asyncio.to_thread(_get_app_allowed_entities, app_id)
-        if app_allowed is not None:
+    if not no_dataset_filter:
+        from src.knowledge.graph_rag import _get_dataset_allowed_entities
+        dataset_allowed = await asyncio.to_thread(_get_dataset_allowed_entities, ds_id)
+        if dataset_allowed is not None:
             if allowed is not None:
-                allowed = allowed & app_allowed  # intersection
+                allowed = allowed & dataset_allowed  # intersection
             else:
-                allowed = app_allowed
+                allowed = dataset_allowed
 
     if allowed is None:
         return JSONResponse({"entities": entities, "relationships": relationships})
@@ -217,27 +217,27 @@ Expected: All tests PASS including the two new ones.
 
 ```bash
 git add src/admin/routes.py
-git commit -m "feat: extend /filtered endpoint with app_id parameter for application filtering"
+git commit -m "feat: extend /filtered endpoint with ds_id parameter for dataset filtering"
 ```
 
 ---
 
-### Task 3: Add application dropdown and unified filter function to template
+### Task 3: Add dataset dropdown and unified filter function to template
 
 **Files:**
 - Modify: `src/admin/templates/knowledge_graph.html`
 
-- [ ] **Step 1: Add the application dropdown**
+- [ ] **Step 1: Add the dataset dropdown**
 
-In `knowledge_graph.html`, insert a new `<div class="form-group">` for the application filter between the persona selector (line 20 `</select></div>`) and the type filter (line 22 `<div class="form-group">`). The new block:
+In `knowledge_graph.html`, insert a new `<div class="form-group">` for the dataset filter between the persona selector (line 20 `</select></div>`) and the type filter (line 22 `<div class="form-group">`). The new block:
 
 ```html
     <div class="form-group">
-        <label for="kg-app">Application</label>
-        <select id="kg-app" onchange="loadFilteredGraph()">
-            <option value="">All Applications</option>
-            {% for app in applications %}
-            <option value="{{ app.id }}">{{ app.name }}</option>
+        <label for="kg-dataset">Dataset</label>
+        <select id="kg-dataset" onchange="loadFilteredGraph()">
+            <option value="">All Datasets</option>
+            {% for ds in datasets %}
+            <option value="{{ ds.id }}">{{ ds.name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -256,10 +256,10 @@ Replace the `loadGraphForPersona` function (lines 148-195) with:
 ```javascript
 async function loadFilteredGraph() {
     const groups = document.getElementById('kg-persona').value;
-    const appId = document.getElementById('kg-app').value;
+    const dsId = document.getElementById('kg-dataset').value;
     const params = new URLSearchParams();
     if (groups) params.set('groups', groups);
-    if (appId) params.set('app_id', appId);
+    if (dsId) params.set('ds_id', dsId);
     const qs = params.toString();
     const url = '/admin/api/knowledge-graph/filtered' + (qs ? '?' + qs : '');
     const resp = await fetch(url);
@@ -318,14 +318,14 @@ Expected: All tests PASS.
 - [ ] **Step 4: Manual verification**
 
 Start the app and navigate to `/admin/knowledge-graph`. Verify:
-1. The "Application" dropdown appears between "View as" and "Filter by type"
-2. Selecting an application reloads the graph with only entities from that app's documents
-3. Selecting both an application and a persona shows only the intersection
+1. The "Dataset" dropdown appears between "View as" and "Filter by type"
+2. Selecting a dataset reloads the graph with only entities from that dataset's documents
+3. Selecting both a dataset and a persona shows only the intersection
 4. Resetting both to "All" shows the full graph
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/admin/templates/knowledge_graph.html
-git commit -m "feat: add application dropdown to knowledge graph with unified filter function"
+git commit -m "feat: add dataset dropdown to knowledge graph with unified filter function"
 ```
