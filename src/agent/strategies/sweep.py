@@ -10,7 +10,7 @@ from src.retrieval.vector_store import VectorStore
 logger = logging.getLogger(__name__)
 
 
-async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 50) -> dict:
+async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: int = 100) -> dict:
     """Exhaustive sweep: find relevant documents, then retrieve all their chunks.
 
     For date-specific queries, also filters by filename to narrow down results.

@@ -38,7 +38,7 @@ Extractions:
 async def retrieve_map_reduce(
     state: AgentState,
     vector_store: VectorStore,
-    top_k: int = 50,
+    top_k: int = 100,
 ) -> dict:
     """Map-reduce: extract from each doc individually, then combine."""
     question = state["question"]
@@ -61,7 +61,11 @@ async def retrieve_map_reduce(
             user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
         )
         relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
-        logger.info(f"Map-reduce: found {len(relevant_doc_ids)} relevant documents")
+        # Log which documents were discovered
+        doc_filenames = {c.metadata.doc_id: c.metadata.filename for c in initial_results}
+        logger.info(f"Map-reduce: found {len(relevant_doc_ids)} relevant documents from {len(initial_results)} xlarge chunks")
+        for did in relevant_doc_ids:
+            logger.info(f"  - {doc_filenames.get(did, did)}")
 
     # Step 2: MAP — extract relevant data from each document in parallel
     async def map_document(doc_id: str) -> dict:
@@ -74,9 +78,10 @@ async def retrieve_map_reduce(
         filename = chunks[0].metadata.filename
         content = "\n\n".join(c.text for c in chunks)
 
-        # Truncate if too long for a single LLM call
-        if len(content) > 12000:
-            content = content[:12000] + "\n... [truncated]"
+        # Truncate if too long for a single LLM call (256K context target)
+        max_content = 200000
+        if len(content) > max_content:
+            content = content[:max_content] + "\n... [truncated]"
 
         try:
             extraction = await asyncio.to_thread(
@@ -111,6 +116,9 @@ async def retrieve_map_reduce(
     # Filter out empty extractions
     valid_extractions = [r for r in map_results if r["extraction"]]
     logger.info(f"Map-reduce: {len(valid_extractions)}/{len(map_results)} documents had relevant data")
+    for r in map_results:
+        status = "RELEVANT" if r["extraction"] else "NO_DATA"
+        logger.info(f"  [{status}] {r['filename']}")
 
     if not valid_extractions:
         return {

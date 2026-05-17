@@ -37,7 +37,22 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         if query_type == QueryType.LOOKUP:
             result = retrieve_lookup(retry_state, vector_store=vector_store)
         elif query_type == QueryType.SWEEP:
-            result = await retrieve_map_reduce(retry_state, vector_store=vector_store)
+            # Run both sweep (raw chunks) and map-reduce (per-doc extraction), merge results
+            import asyncio as _asyncio
+            sweep_result, mr_result = await _asyncio.gather(
+                retrieve_sweep(retry_state, vector_store=vector_store),
+                retrieve_map_reduce(retry_state, vector_store=vector_store),
+            )
+            # Merge: map-reduce synthetic chunk + sweep raw chunks (deduplicated)
+            merged_chunks = mr_result.get("retrieved_chunks", [])
+            seen_keys = {(c.metadata.doc_id, c.metadata.chunk_index) for c in merged_chunks}
+            for c in sweep_result.get("retrieved_chunks", []):
+                key = (c.metadata.doc_id, c.metadata.chunk_index)
+                if key not in seen_keys:
+                    merged_chunks.append(c)
+                    seen_keys.add(key)
+            retrieve_logger.info(f"Sweep+MapReduce merged: {len(merged_chunks)} total chunks")
+            result = {"retrieved_chunks": merged_chunks, "retrieval_attempts": retry_state.get("retrieval_attempts", 0) + 1}
         elif query_type == QueryType.ANALYTICAL:
             result = await retrieve_analytical(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.CROSS_REFERENCE:
