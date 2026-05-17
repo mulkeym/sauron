@@ -514,6 +514,13 @@ async def delete_document(doc_id: str):
     # Remove vector chunks from LanceDB
     vector_store = get_vector_store()
     vector_store.delete_by_doc_id(doc_id)
+    # Remove from LightRAG knowledge graph
+    try:
+        from src.knowledge.graph_rag import get_lightrag
+        rag = await get_lightrag()
+        await rag.adelete_by_doc_id(doc_id)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"LightRAG delete failed for {doc_id}: {e}")
     return HTMLResponse("")
 
 
@@ -1653,6 +1660,21 @@ async def cache_stats():
     from src.retrieval.query_cache import cache_stats
     stats = cache_stats()
     return HTMLResponse(f'{stats["entries"]} cached results')
+
+
+@router.post("/api/settings/purge-knowledge-graph")
+async def purge_knowledge_graph():
+    """Delete all LightRAG knowledge graph data and reinitialize."""
+    import shutil
+    lightrag_dir = Path("data/lightrag")
+    if lightrag_dir.exists():
+        shutil.rmtree(str(lightrag_dir))
+        lightrag_dir.mkdir(exist_ok=True)
+    # Reset the LightRAG singleton so it reinitializes on next use
+    from src.knowledge import graph_rag
+    graph_rag._rag_instance = None
+    graph_rag._initialized = False
+    return HTMLResponse('<span class="status-ok">Knowledge graph purged. It will rebuild as documents are re-ingested.</span>')
 
 
 # ============================================================

@@ -174,6 +174,13 @@ function generateApiKey() {
 </div>
 
 <div class="settings-section" style="margin-top:1.5rem;">
+    <h2>Knowledge Graph</h2>
+    <p class="section-desc">Purge the entire LightRAG knowledge graph (entities, relationships, embeddings). The graph will rebuild automatically as documents are re-ingested. Use this if you've deleted documents and want to clean up orphaned graph nodes.</p>
+    <button type="button" hx-post="/admin/api/settings/purge-knowledge-graph" hx-target="#kg-status" hx-swap="innerHTML" hx-confirm="This will delete ALL knowledge graph data. Continue?">Purge Knowledge Graph</button>
+    <span id="kg-status" style="margin-left:0.5rem;"></span>
+</div>
+
+<div class="settings-section" style="margin-top:1.5rem;">
     <h2>Backup & Restore</h2>
     <p class="section-desc">Create a single backup file containing all data (metadata DB, vector store, knowledge graph) and configuration (.env). Download to transport to another host.</p>
 
