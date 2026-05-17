@@ -555,7 +555,51 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         docs = await store.list_documents()
         allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
-    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": ""}
+    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": ""}
+
+    def _format_live_step(node_name, node_output, current_state):
+        """Generate live step detail HTML for the polling UI."""
+        import html as _h
+        output = dict(node_output) if isinstance(node_output, dict) else {}
+
+        if node_name == "classify":
+            qt = output.get("query_type", "")
+            subs = output.get("sub_tasks", [])
+            detail = f"<strong>Strategy:</strong> {qt}"
+            if subs:
+                detail += "<br><strong>Sub-tasks:</strong> " + ", ".join(subs[:5])
+            return detail
+        elif node_name == "retrieve":
+            rc = output.get("retrieved_chunks", [])
+            detail = f"<strong>Chunks retrieved:</strong> {len(rc)}"
+            if rc:
+                # Show source documents
+                seen = set()
+                docs_list = []
+                for c in rc:
+                    fn = c.metadata.filename if hasattr(c, 'metadata') else ''
+                    if fn and fn not in seen and fn != "map_reduce_synthesis":
+                        seen.add(fn)
+                        docs_list.append(fn)
+                if docs_list:
+                    detail += f"<br><strong>Documents ({len(docs_list)}):</strong> " + ", ".join(docs_list[:15])
+                    if len(docs_list) > 15:
+                        detail += f" ... +{len(docs_list)-15} more"
+                # Show map-reduce synthesis if present
+                mr_chunks = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == "map_reduce_synthesis"]
+                if mr_chunks:
+                    mr_text = mr_chunks[0].text[:2000]
+                    detail += f"<br><br><strong>Map-Reduce Extraction:</strong><pre style='font-size:0.8rem; white-space:pre-wrap; max-height:300px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;'>{_h.escape(mr_text)}</pre>"
+            return detail
+        elif node_name == "enrich":
+            rc = output.get("retrieved_chunks", [])
+            kg = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == 'knowledge_graph']
+            if kg:
+                return f"<strong>Knowledge graph context added</strong> ({len(kg[0].text)} chars)"
+            return "<em>No graph enrichment</em>"
+        elif node_name == "synthesize":
+            return "<strong>Generating answer...</strong>"
+        return ""
 
     async def run_query():
         try:
@@ -721,6 +765,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     if prev_node:
                         steps_data.append({"step": prev_node, "time": round(now - step_start, 2), "output": prev_output})
                     _playground_jobs[query_id]["step"] = node_name
+                    _playground_jobs[query_id]["step_detail"] = _format_live_step(node_name, node_output, final_state)
                     prev_node = node_name
                     prev_output = dict(node_output) if isinstance(node_output, dict) else {}
                     step_start = now
@@ -787,10 +832,15 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                             fn = c.metadata.filename if hasattr(c, 'metadata') else str(c.get('metadata', {}).get('filename', ''))
                             score = c.score if hasattr(c, 'score') else ''
                             key = fn
-                            if key not in seen:
+                            if key not in seen and fn != "map_reduce_synthesis":
                                 seen.add(key)
                                 detail += f"<li>{fn} (relevance: {score:.2f})</li>" if score else f"<li>{fn}</li>"
                         detail += "</ul>"
+                        # Show map-reduce synthesis content
+                        mr_chunks = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == "map_reduce_synthesis"]
+                        if mr_chunks:
+                            mr_text = mr_chunks[0].text[:3000]
+                            detail += f'<details style="margin-top:0.5rem;"><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_chunks[0].text)} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:400px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{html_mod.escape(mr_text)}</pre></details>'
                     return detail
                 elif step_name == "enrich":
                     rc = output.get("retrieved_chunks", [])

@@ -50,7 +50,7 @@ const STEPS = [
     {id: "synthesize", label: "Generate Answer", num: 5},
 ];
 
-function buildProgressHTML(currentStep, elapsed) {
+function buildProgressHTML(currentStep, elapsed, stepDetail) {
     let html = '<div class="trace-panel"><div class="trace-steps">';
     for (const step of STEPS) {
         let icon, cls;
@@ -68,6 +68,9 @@ function buildProgressHTML(currentStep, elapsed) {
             <span>${icon} Step ${step.num} of 5: ${step.label}</span>
             ${step.id === currentStep ? '<span class="trace-time">' + elapsed + 's</span>' : ''}
         </div>`;
+        if (step.id === currentStep && stepDetail) {
+            html += `<div class="trace-detail expanded" style="padding:0.5rem 1rem; font-size:0.85rem; border-left:3px solid #1e40af; margin-bottom:0.25rem;">${stepDetail}</div>`;
+        }
     }
     html += '</div></div>';
     return html;
@@ -91,7 +94,7 @@ async function runQuery() {
     btn.textContent = 'Working...';
     results.innerHTML = '';
     progress.style.display = 'block';
-    progress.innerHTML = buildProgressHTML('classify', '0');
+    progress.innerHTML = buildProgressHTML('classify', '0', '');
 
     // Start the query and poll for status
     const startTime = Date.now();
@@ -120,7 +123,7 @@ async function runQuery() {
             if (status.step === 'streaming' && !streaming) {
                 // Start streaming the answer via SSE
                 streaming = true;
-                progress.innerHTML = buildProgressHTML('synthesize', elapsed);
+                progress.innerHTML = buildProgressHTML('synthesize', elapsed, status.step_detail || '');
                 results.innerHTML = `<div class="result-card"><div class="result-meta">Groups: ${user}</div><div class="result-answer" id="stream-output"><span class="streaming-cursor">▊</span></div></div>`;
 
                 const evtSource = new EventSource(`/admin/api/playground/stream/${queryId}`);
@@ -189,7 +192,7 @@ async function runQuery() {
                 progress.style.display = 'none';
                 results.innerHTML = `<div class="status-err">${status.error}</div>`;
             } else if (!streaming) {
-                progress.innerHTML = buildProgressHTML(status.step, elapsed);
+                progress.innerHTML = buildProgressHTML(status.step, elapsed, status.step_detail || '');
             }
         }
     } catch (e) {
