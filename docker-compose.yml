@@ -2,6 +2,8 @@ services:
   # SAURON API + Admin UI
   api:
     build: .
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     environment:
@@ -23,6 +25,8 @@ services:
   # MCP Server (SSE transport for direct MCP clients)
   mcp:
     build: .
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["python", "-m", "src.mcp.run"]
     ports:
       - "8090:8090"
@@ -46,6 +50,8 @@ services:
   # MCP-to-OpenAPI proxy (for OpenWebUI and REST clients)
   mcpo:
     build: .
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     entrypoint: ["mcpo", "--port", "8091", "--", "python", "-m", "src.mcp.run_stdio"]
     ports:
       - "8091:8091"
