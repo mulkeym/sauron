@@ -280,10 +280,17 @@ class IngestQueue:
             import logging as _logging
 
             # Capture LightRAG's progress logs to update the queue UI
+            _app_logger = _logging.getLogger(__name__)
+
             class _ProgressHandler(_logging.Handler):
                 def emit(self_, record):
                     msg = record.getMessage()
+                    level = record.levelno
                     import re
+
+                    # Log warnings/errors from LightRAG to our own logger
+                    if level >= _logging.WARNING:
+                        _app_logger.warning(f"[KG:{job.filename}] {msg}")
 
                     if "Extracting stage" in msg:
                         # "Extracting stage 2/3: filename.md"
@@ -305,6 +312,8 @@ class IngestQueue:
                         self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
                     elif "Merging" in msg and "entit" in msg.lower():
                         self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
+                    elif "format error" in msg or "extraction error" in msg or "extraction failed" in msg:
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, f"Warning: {msg[:120]}")
 
             handler = _ProgressHandler()
             handler.setLevel(_logging.INFO)
