@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     vllm_model_name: str = "gpt-4.1-mini"
     vllm_api_key: str = ""  # OpenAI API key (or leave empty for local endpoints)
     vllm_request_timeout: int = 300  # seconds - increase for thinking/local models
+    ssl_verify: bool = True  # set to False for self-signed certs
 
     # Embeddings
     embedding_mode: str = "local"  # "local" (sentence-transformers, no server needed) or "api" (external endpoint)

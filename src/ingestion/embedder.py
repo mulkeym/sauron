@@ -33,6 +33,7 @@ def _embed_via_api(texts: list[str]) -> list[list[float]]:
             f'{settings.embedding_api_url}/embeddings',
             json={"model": settings.embedding_model_name, "input": texts},
             timeout=120,
+            verify=settings.ssl_verify,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -48,6 +49,7 @@ def _embed_via_api(texts: list[str]) -> list[list[float]]:
             f'{settings.embedding_api_url}/embeddings',
             json={"model": settings.embedding_model_name, "input": text},
             timeout=60,
+            verify=settings.ssl_verify,
         )
         resp.raise_for_status()
         embeddings.append(resp.json()['data'][0]['embedding'])

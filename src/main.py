@@ -7,6 +7,18 @@ from src.api.routes_ingest import router as ingest_router, get_metadata_store
 from src.api.routes_query import router as query_router
 from src.admin.routes import router as admin_router
 from src.api.routes_openai_compat import router as openai_compat_router
+from src.config import settings
+
+# Disable SSL verification globally when ssl_verify=False (self-signed certs)
+if not settings.ssl_verify:
+    import os
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    os.environ["CURL_CA_BUNDLE"] = ""
+    os.environ["REQUESTS_CA_BUNDLE"] = ""
+    # For httpx (used by OpenAI SDK / LightRAG)
+    os.environ["SSL_CERT_FILE"] = ""
+    os.environ["HTTPX_SSL_VERIFY"] = "0"
 
 ADMIN_STATIC = Path(__file__).parent / "admin" / "static"
 

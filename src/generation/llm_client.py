@@ -30,6 +30,7 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -
             json=payload,
             headers=headers,
             timeout=settings.vllm_request_timeout,
+            verify=settings.ssl_verify,
         )
         resp.raise_for_status()
         response = resp.json()
@@ -107,6 +108,7 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
         headers=headers,
         stream=True,
         timeout=settings.vllm_request_timeout,
+        verify=settings.ssl_verify,
     )
     resp.raise_for_status()
 
