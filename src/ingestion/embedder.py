@@ -71,7 +71,10 @@ def _get_local_model():
         import torch
         cores = os.cpu_count() or 4
         torch.set_num_threads(cores)
-        torch.set_num_interop_threads(cores)
+        try:
+            torch.set_num_interop_threads(cores)
+        except RuntimeError:
+            pass  # already set or parallel work started
         logger.info(f"CPU threading: {cores} cores")
 
     logger.info(f"Loading local embedding model: {settings.embedding_model_name} on {device}")
