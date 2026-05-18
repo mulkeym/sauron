@@ -11,21 +11,16 @@ from src.config import settings
 
 # Disable SSL verification globally when ssl_verify=False (self-signed certs)
 if not settings.ssl_verify:
-    import os
-    import ssl
     import urllib3
     import requests as _requests
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    os.environ["CURL_CA_BUNDLE"] = ""
-    os.environ["REQUESTS_CA_BUNDLE"] = ""
-    os.environ["SSL_CERT_FILE"] = ""
     # Monkey-patch requests to default verify=False
     _orig_request = _requests.Session.request
     def _patched_request(self, *args, **kwargs):
         kwargs.setdefault("verify", False)
         return _orig_request(self, *args, **kwargs)
     _requests.Session.request = _patched_request
-    # For httpx (used by OpenAI SDK / LightRAG)
+    # Monkey-patch httpx (used by OpenAI SDK / LightRAG)
     try:
         import httpx
         _orig_httpx_client_init = httpx.Client.__init__
