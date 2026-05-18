@@ -1573,7 +1573,7 @@ async def list_llm_models(vllm_base_url: str = Form(""), vllm_api_key: str = For
     try:
         import requests as req
         headers = {"Authorization": f"Bearer {key}"} if key else {}
-        resp = req.get(f'{url}/models', headers=headers, timeout=10)
+        resp = req.get(f'{url}/models', headers=headers, timeout=10, verify=settings.ssl_verify)
         model_ids = [m['id'] for m in resp.json().get('data', [])]
         if not model_ids:
             return HTMLResponse('<select name="vllm_model_name" id="vllm_model_name"><option value="">No models found</option></select>')
@@ -1588,7 +1588,7 @@ async def list_embedding_models(embedding_api_url: str = Form("")):
     url = embedding_api_url or settings.embedding_api_url
     try:
         import requests as req
-        resp = req.get(f'{url}/models', timeout=10)
+        resp = req.get(f'{url}/models', timeout=10, verify=settings.ssl_verify)
         model_ids = [m['id'] for m in resp.json().get('data', [])]
         if not model_ids:
             return HTMLResponse('<select name="embedding_model_name" id="embedding_model_name"><option value="">No models found</option></select>')
@@ -1667,7 +1667,7 @@ async def test_llm_connection(vllm_base_url: str = Form(""), vllm_api_key: str =
     try:
         import requests as req
         headers = {"Authorization": f"Bearer {key}"} if key else {}
-        resp = req.get(f'{url}/models', headers=headers, timeout=10)
+        resp = req.get(f'{url}/models', headers=headers, timeout=10, verify=settings.ssl_verify)
         model_ids = [m['id'] for m in resp.json().get('data', [])[:3]]
         return HTMLResponse(f'<span class="status-ok">Connected to {url}. Models: {", ".join(model_ids)}</span>')
     except Exception as e:
@@ -1686,7 +1686,7 @@ async def test_embedding_connection(
     try:
         if mode == "api":
             import requests as req
-            resp = req.post(f'{url}/embeddings', json={"model": model_name, "input": ["test"]}, timeout=10)
+            resp = req.post(f'{url}/embeddings', json={"model": model_name, "input": ["test"]}, timeout=10, verify=settings.ssl_verify)
             dim = len(resp.json()['data'][0]['embedding'])
             return HTMLResponse(f'<span class="status-ok">Connected to {url}. Model: {model_name}, Dimension: {dim}</span>')
         else:
