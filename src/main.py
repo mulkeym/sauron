@@ -12,13 +12,34 @@ from src.config import settings
 # Disable SSL verification globally when ssl_verify=False (self-signed certs)
 if not settings.ssl_verify:
     import os
+    import ssl
     import urllib3
+    import requests as _requests
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     os.environ["CURL_CA_BUNDLE"] = ""
     os.environ["REQUESTS_CA_BUNDLE"] = ""
-    # For httpx (used by OpenAI SDK / LightRAG)
     os.environ["SSL_CERT_FILE"] = ""
-    os.environ["HTTPX_SSL_VERIFY"] = "0"
+    # Monkey-patch requests to default verify=False
+    _orig_request = _requests.Session.request
+    def _patched_request(self, *args, **kwargs):
+        kwargs.setdefault("verify", False)
+        return _orig_request(self, *args, **kwargs)
+    _requests.Session.request = _patched_request
+    # For httpx (used by OpenAI SDK / LightRAG)
+    try:
+        import httpx
+        _orig_httpx_client_init = httpx.Client.__init__
+        _orig_httpx_async_init = httpx.AsyncClient.__init__
+        def _patched_httpx_init(self, *args, **kwargs):
+            kwargs.setdefault("verify", False)
+            return _orig_httpx_client_init(self, *args, **kwargs)
+        def _patched_httpx_async_init(self, *args, **kwargs):
+            kwargs.setdefault("verify", False)
+            return _orig_httpx_async_init(self, *args, **kwargs)
+        httpx.Client.__init__ = _patched_httpx_init
+        httpx.AsyncClient.__init__ = _patched_httpx_async_init
+    except ImportError:
+        pass
 
 ADMIN_STATIC = Path(__file__).parent / "admin" / "static"
 
