@@ -588,14 +588,15 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 # Show map-reduce synthesis if present
                 mr_chunks = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == "map_reduce_synthesis"]
                 if mr_chunks:
-                    mr_text = mr_chunks[0].text[:2000]
-                    detail += f"<br><br><strong>Map-Reduce Extraction:</strong><pre style='font-size:0.8rem; white-space:pre-wrap; max-height:300px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;'>{_h.escape(mr_text)}</pre>"
+                    mr_text = mr_chunks[0].text
+                    detail += f'<br><br><details open><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{_h.escape(mr_text)}</pre></details>'
             return detail
         elif node_name == "enrich":
             rc = output.get("retrieved_chunks", [])
             kg = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == 'knowledge_graph']
             if kg:
-                return f"<strong>Knowledge graph context added</strong> ({len(kg[0].text)} chars)"
+                kg_text = kg[0].text
+                return f'<details open><summary style="cursor:pointer; font-weight:600;">Knowledge Graph Context ({len(kg_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{_h.escape(kg_text)}</pre></details>'
             return "<em>No graph enrichment</em>"
         elif node_name == "synthesize":
             return "<strong>Generating answer...</strong>"
@@ -839,8 +840,8 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                         # Show map-reduce synthesis content
                         mr_chunks = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == "map_reduce_synthesis"]
                         if mr_chunks:
-                            mr_text = mr_chunks[0].text[:3000]
-                            detail += f'<details style="margin-top:0.5rem;"><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_chunks[0].text)} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:400px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{html_mod.escape(mr_text)}</pre></details>'
+                            mr_text = mr_chunks[0].text
+                            detail += f'<details style="margin-top:0.5rem;"><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{html_mod.escape(mr_text)}</pre></details>'
                     return detail
                 elif step_name == "enrich":
                     rc = output.get("retrieved_chunks", [])

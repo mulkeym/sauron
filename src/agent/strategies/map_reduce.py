@@ -93,7 +93,7 @@ async def retrieve_map_reduce(
                     content=content,
                 ),
                 temperature=0.0,
-                max_tokens=2048,
+                max_tokens=8192,
             )
 
             if "NO_RELEVANT_DATA" in extraction:
