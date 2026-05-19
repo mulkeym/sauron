@@ -73,6 +73,7 @@ async def get_lightrag() -> LightRAG:
         llm_model_func=_llm_func,
         llm_model_name=settings.vllm_model_name,
         llm_model_max_async=settings.llm_concurrency,
+        max_parallel_insert=max(1, settings.llm_concurrency // 2),
 
         embedding_func=EmbeddingFunc(
             embedding_dim=embed_dim,
@@ -101,6 +102,17 @@ async def get_lightrag() -> LightRAG:
     _initialized = True
     logger.info("LightRAG initialized successfully")
     return _rag_instance
+
+
+async def get_graph_counts() -> tuple[int, int]:
+    """Return (node_count, edge_count) from the knowledge graph."""
+    try:
+        rag = await get_lightrag()
+        nodes = await rag.chunk_entity_relation_graph.get_all_nodes()
+        edges = await rag.chunk_entity_relation_graph.get_all_edges()
+        return len(nodes), len(edges)
+    except Exception:
+        return 0, 0
 
 
 async def insert_document(text: str, doc_id: str = "", filename: str = "") -> str:

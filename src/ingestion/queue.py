@@ -53,7 +53,7 @@ class IngestQueue:
         self._jobs: dict[str, IngestJob] = {}
         self._queue: asyncio.Queue | None = None
         self._worker_running = False
-        self._kg_lock: asyncio.Lock | None = None  # serializes entity extraction across workers
+        # No KG lock needed — LightRAG handles parallel insertion internally via max_parallel_insert
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
                 uploaded_by: str, category: str = "", dataset_id: int = 0,
@@ -107,7 +107,6 @@ class IngestQueue:
         if self._worker_running:
             return
         self._queue = asyncio.Queue()
-        self._kg_lock = asyncio.Lock()
         self._worker_running = True
 
         # Re-queue any jobs that were queued before worker started
@@ -296,54 +295,23 @@ class IngestQueue:
                 )
 
         # Step 6: Build knowledge graph via LightRAG
-        # Serialized with a lock — LightRAG uses shared graph storage and a shared
-        # logger, so parallel extraction corrupts counters and can corrupt data.
+        # LightRAG handles parallel insertion internally via max_parallel_insert.
+        # We measure entity/relationship counts by graph delta (before/after).
         if job.build_graph:
-            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Waiting for knowledge graph lock...")
-            from src.knowledge.graph_rag import insert_document as lightrag_insert
-            import logging as _logging
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
+            from src.knowledge.graph_rag import insert_document as lightrag_insert, get_graph_counts
 
-            async with self._kg_lock:
-                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
+            # Snapshot graph counts before insertion
+            nodes_before, edges_before = await get_graph_counts()
 
-                _app_logger = _logging.getLogger(__name__)
+            await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
 
-                class _ProgressHandler(_logging.Handler):
-                    def emit(self_, record):
-                        msg = record.getMessage()
-                        level = record.levelno
-                        import re
-
-                        if level >= _logging.WARNING:
-                            _app_logger.warning(f"[KG:{job.filename}] {msg}")
-
-                        if "Extracting stage" in msg:
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
-                        elif "Processing" in msg and "document(s)" in msg:
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
-                        elif "Chunk " in msg and "extracted" in msg:
-                            clean = re.sub(r'\s*chunk-\w+', '', msg)
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, clean)
-                            m = re.search(r'(\d+) Ent \+ (\d+) Rel', msg)
-                            if m:
-                                job.entity_count += int(m.group(1))
-                                job.relationship_count += int(m.group(2))
-                        elif "Writing graph" in msg:
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
-                        elif "Merging" in msg and "entit" in msg.lower():
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, msg)
-                        elif "format error" in msg or "extraction error" in msg or "extraction failed" in msg:
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, f"Warning: {msg[:120]}")
-
-                handler = _ProgressHandler()
-                handler.setLevel(_logging.INFO)
-                lightrag_logger = _logging.getLogger("lightrag")
-                lightrag_logger.addHandler(handler)
-
-                try:
-                    await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
-                finally:
-                    lightrag_logger.removeHandler(handler)
+            # Measure what was added
+            nodes_after, edges_after = await get_graph_counts()
+            job.entity_count = max(0, nodes_after - nodes_before)
+            job.relationship_count = max(0, edges_after - edges_before)
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
 
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
         else:
