@@ -29,13 +29,19 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
         relevant_doc_ids = date_filter_docs
         logger.info(f"Sweep: date filter matched {len(relevant_doc_ids)} documents")
     else:
-        # General sweep: find relevant documents via search
-        initial_results = vector_store.hybrid_search(
-            vector=query_vector, text_query=question,
-            user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+        # Search summary embeddings first, fall back to xlarge
+        initial_results = vector_store.search(
+            vector=query_vector, user_groups=user_groups,
+            top_k=top_k, tier="summary", doc_ids=doc_ids,
         )
+        if not initial_results:
+            initial_results = vector_store.hybrid_search(
+                vector=query_vector, text_query=question,
+                user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+            )
+            logger.info("Sweep: no summary embeddings, falling back to xlarge")
         relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
-        logger.info(f"Sweep: found {len(relevant_doc_ids)} relevant documents from xlarge search")
+        logger.info(f"Sweep: found {len(relevant_doc_ids)} relevant documents from summary search")
 
     # Step 2: Retrieve large-tier chunks from relevant documents in parallel
     async def get_doc(doc_id):

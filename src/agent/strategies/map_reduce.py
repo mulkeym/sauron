@@ -56,14 +56,59 @@ async def retrieve_map_reduce(
         relevant_doc_ids = date_filter_docs
         logger.info(f"Map-reduce: date filter matched {len(relevant_doc_ids)} documents")
     else:
-        initial_results = vector_store.hybrid_search(
-            vector=query_vector, text_query=question,
-            user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+        # Phase 1: Search summary embeddings for fast document discovery
+        summary_results = vector_store.search(
+            vector=query_vector, user_groups=user_groups,
+            top_k=top_k, tier="summary", doc_ids=doc_ids,
         )
-        relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
-        # Log which documents were discovered
-        doc_filenames = {c.metadata.doc_id: c.metadata.filename for c in initial_results}
-        logger.info(f"Map-reduce: found {len(relevant_doc_ids)} relevant documents from {len(initial_results)} xlarge chunks")
+        # Fallback to xlarge if no summary embeddings exist yet
+        if not summary_results:
+            summary_results = vector_store.hybrid_search(
+                vector=query_vector, text_query=question,
+                user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+            )
+            logger.info("Map-reduce: no summary embeddings found, falling back to xlarge search")
+
+        candidate_doc_ids = list({c.metadata.doc_id for c in summary_results})
+        doc_filenames = {c.metadata.doc_id: c.metadata.filename for c in summary_results}
+        doc_scores = {c.metadata.doc_id: c.score for c in summary_results}
+        logger.info(f"Map-reduce: {len(candidate_doc_ids)} candidate docs from summary/xlarge search")
+
+        # Phase 2: Filter using metadata keyword matching
+        metadata_store = None
+        try:
+            from src.api.routes_ingest import get_metadata_store
+            metadata_store = get_metadata_store()
+        except Exception:
+            pass
+
+        relevant_doc_ids = candidate_doc_ids  # default: no filtering if metadata unavailable
+        if metadata_store:
+            q_lower = question.lower()
+            scored_docs = []
+            for did in candidate_doc_ids:
+                doc_rec = await metadata_store.get_document(did)
+                meta = getattr(doc_rec, 'metadata_tags', {}) or {} if doc_rec else {}
+                if not meta:
+                    scored_docs.append((did, doc_scores.get(did, 0)))
+                    continue
+                # Score: count how many metadata values match query terms
+                meta_score = 0
+                for field, values in meta.items():
+                    if field == "summary" or not isinstance(values, list):
+                        continue
+                    for val in values:
+                        if val and val.lower() in q_lower:
+                            meta_score += 2
+                        elif val and any(word in q_lower for word in val.lower().split() if len(word) > 3):
+                            meta_score += 1
+                combined = doc_scores.get(did, 0) + (meta_score * 0.1)
+                scored_docs.append((did, combined))
+
+            scored_docs.sort(key=lambda x: x[1], reverse=True)
+            relevant_doc_ids = [did for did, _ in scored_docs[:30]]
+
+        logger.info(f"Map-reduce: {len(relevant_doc_ids)} docs after metadata filtering (from {len(candidate_doc_ids)} candidates)")
         for did in relevant_doc_ids:
             logger.info(f"  - {doc_filenames.get(did, did)}")
 
