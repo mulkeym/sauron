@@ -10,7 +10,9 @@ Query types:
 - cross_reference: Question spanning multiple source types (e.g., compare database data against a policy). Example: "Does our spending comply with policy?"
 - temporal: Question about changes over time or date-bounded searches. Example: "What changed last month?"
 
-IMPORTANT: If the question asks for "all", "every", "total", or "sum" of items from documents, use SWEEP not analytical. Only use analytical if a structured database is explicitly needed.
+IMPORTANT:
+- If the question asks for "all", "every", "total", or "sum" of items from documents, use SWEEP not analytical. Only use analytical if a structured database is explicitly needed.
+- If the question asks about a specific DATE (e.g. "on Jan 30th", "on February 5"), use SWEEP — the system has date-based document filtering for sweep queries.
 
 Respond with ONLY valid JSON:
 {"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
