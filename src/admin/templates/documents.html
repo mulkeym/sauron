@@ -67,7 +67,7 @@
         {% for doc in documents %}
         <tr>
             <td><input type="checkbox" class="doc-select" value="{{ doc.doc_id }}" onchange="updateBulkActions()"></td>
-            <td>{{ doc.filename }}</td>
+            <td>{{ doc.filename }}{% if doc.source_url %} <a href="{{ doc.source_url }}" target="_blank" style="font-size:0.75rem; color:#3b82f6;">🔗</a>{% endif %}</td>
             <td>{{ doc._app_name or "—" }}</td>
             <td>{{ doc.doc_type }}</td>
             <td>{{ doc.category or "uncategorized" }}</td>
@@ -76,8 +76,32 @@
             <td>{{ doc.uploaded_by }}</td>
             <td>{{ doc.created_at.strftime('%Y-%m-%d %H:%M') if doc.created_at else '—' }}</td>
             <td>
+                <button class="small" onclick="toggleMeta('meta-{{ loop.index }}')">Metadata</button>
                 <button class="small" hx-get="/admin/api/documents/{{ doc.doc_id }}/edit" hx-target="closest tr" hx-swap="outerHTML">Edit</button>
                 <button class="danger small" hx-delete="/admin/api/documents/{{ doc.doc_id }}" hx-confirm="Delete this document?" hx-target="closest tr" hx-swap="outerHTML">Delete</button>
+            </td>
+        </tr>
+        <tr id="meta-{{ loop.index }}" style="display:none;">
+            <td colspan="10" style="background:#f9fafb; padding:0.75rem;">
+                {% set meta = doc.metadata_tags or {} %}
+                {% if meta and meta.get('summary') %}
+                <div style="margin-bottom:0.5rem;">
+                    <strong>Summary:</strong> {{ meta.get('summary', '') }}
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem; font-size:0.85rem;">
+                    {% for field in ['entities', 'people', 'organizations', 'locations', 'dates', 'amounts', 'identifiers', 'topics', 'procedures', 'action_items', 'key_facts'] %}
+                    {% set vals = meta.get(field, []) %}
+                    {% if vals %}
+                    <div>
+                        <strong>{{ field | replace('_', ' ') | title }}:</strong>
+                        {{ vals | join(', ') }}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% else %}
+                <span style="color:#6b7280;">No metadata extracted. Use Settings → Backfill Document Metadata.</span>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}
@@ -85,6 +109,11 @@
 </table>
 
 <script>
+function toggleMeta(id) {
+    const row = document.getElementById(id);
+    row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
 let sortDir = {};
 function sortTable(col) {
     const table = document.getElementById('doc-table');
