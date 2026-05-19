@@ -167,6 +167,11 @@ function generateApiKey() {
                 <input type="number" id="llm_max_context" name="llm_max_context" value="{{ settings.llm_max_context }}" min="10000" max="2000000" step="10000" style="max-width:140px;">
                 <span style="font-size:0.8rem; color:#6b7280;">Max chars sent to LLM. 200K ≈ 50K tokens (256K context). Reduce for smaller models.</span>
             </div>
+            <div class="form-group">
+                <label for="llm_max_output_tokens">LLM Max Output Tokens</label>
+                <input type="number" id="llm_max_output_tokens" name="llm_max_output_tokens" value="{{ settings.llm_max_output_tokens }}" min="1024" max="131072" step="1024" style="max-width:140px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Max tokens the LLM can generate per response. 32K for exhaustive listings.</span>
+            </div>
         </div>
     </div>
 

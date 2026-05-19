@@ -131,14 +131,10 @@ def synthesize_answer(state: AgentState) -> dict:
     context = "\n\n".join(context_parts)
     logger.info(f"Synthesizer context: {len(context):,} chars from {len(context_parts)} parts")
 
-    # Scale output tokens based on context size — more context = more items to report
-    output_tokens = min(max(4096, len(context) // 4), 16384)
-    logger.info(f"Synthesizer output tokens: {output_tokens}")
-
     answer = generate(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=USER_PROMPT_TEMPLATE.format(context=context, question=question),
-        max_tokens=output_tokens,
+        max_tokens=_cfg.llm_max_output_tokens,
     )
 
     # Strip thinking model reasoning artifacts that leak into the answer

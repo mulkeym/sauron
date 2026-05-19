@@ -1529,6 +1529,7 @@ async def save_settings(
     max_parallel_ingestion: int = Form(3),
     llm_concurrency: int = Form(4),
     llm_max_context: int = Form(200000),
+    llm_max_output_tokens: int = Form(32768),
     metadata_extraction_enabled: bool = Form(True),
     metadata_max_doc_length: int = Form(200000),
 ):
@@ -1550,6 +1551,7 @@ async def save_settings(
     settings.max_parallel_ingestion = max_parallel_ingestion
     settings.llm_concurrency = llm_concurrency
     settings.llm_max_context = llm_max_context
+    settings.llm_max_output_tokens = llm_max_output_tokens
     settings.metadata_extraction_enabled = metadata_extraction_enabled
     settings.metadata_max_doc_length = metadata_max_doc_length
 
@@ -1574,6 +1576,7 @@ async def save_settings(
     env_lines["MAX_PARALLEL_INGESTION"] = str(settings.max_parallel_ingestion)
     env_lines["LLM_CONCURRENCY"] = str(settings.llm_concurrency)
     env_lines["LLM_MAX_CONTEXT"] = str(settings.llm_max_context)
+    env_lines["LLM_MAX_OUTPUT_TOKENS"] = str(settings.llm_max_output_tokens)
     env_lines["METADATA_EXTRACTION_ENABLED"] = str(settings.metadata_extraction_enabled).lower()
     env_lines["METADATA_MAX_DOC_LENGTH"] = str(settings.metadata_max_doc_length)
 

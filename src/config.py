@@ -57,6 +57,7 @@ class Settings(BaseSettings):
 
     # LLM context limits (adjust based on your model's context window)
     llm_max_context: int = 200000  # max chars sent to LLM for synthesis (~50K tokens for 256K context models)
+    llm_max_output_tokens: int = 32768  # max tokens the LLM can generate in a response
 
     # Chunking
     chunk_size: int = 1024
