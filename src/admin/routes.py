@@ -1528,6 +1528,7 @@ async def save_settings(
     entity_merge_review_threshold: float = Form(0.7),
     max_parallel_ingestion: int = Form(3),
     llm_concurrency: int = Form(4),
+    llm_max_context: int = Form(200000),
     metadata_extraction_enabled: bool = Form(True),
     metadata_max_doc_length: int = Form(200000),
 ):
@@ -1548,6 +1549,7 @@ async def save_settings(
     settings.entity_merge_review_threshold = entity_merge_review_threshold
     settings.max_parallel_ingestion = max_parallel_ingestion
     settings.llm_concurrency = llm_concurrency
+    settings.llm_max_context = llm_max_context
     settings.metadata_extraction_enabled = metadata_extraction_enabled
     settings.metadata_max_doc_length = metadata_max_doc_length
 
@@ -1571,6 +1573,7 @@ async def save_settings(
     env_lines["ENTITY_MERGE_REVIEW_THRESHOLD"] = str(settings.entity_merge_review_threshold)
     env_lines["MAX_PARALLEL_INGESTION"] = str(settings.max_parallel_ingestion)
     env_lines["LLM_CONCURRENCY"] = str(settings.llm_concurrency)
+    env_lines["LLM_MAX_CONTEXT"] = str(settings.llm_max_context)
     env_lines["METADATA_EXTRACTION_ENABLED"] = str(settings.metadata_extraction_enabled).lower()
     env_lines["METADATA_MAX_DOC_LENGTH"] = str(settings.metadata_max_doc_length)
 

@@ -155,8 +155,9 @@ async def retrieve_map_reduce(
         filename = chunks[0].metadata.filename
         content = "\n\n".join(c.text for c in chunks)
 
-        # Truncate if too long for a single LLM call (256K context target)
-        max_content = 200000
+        # Truncate if too long for a single LLM call
+        from src.config import settings as _cfg
+        max_content = _cfg.llm_max_context
         if len(content) > max_content:
             content = content[:max_content] + "\n... [truncated]"
 
@@ -205,7 +206,8 @@ async def retrieve_map_reduce(
         }
 
     # Step 3: REDUCE — hierarchical reduce if extractions are too large
-    MAX_REDUCE_CHARS = 120000  # max chars per reduce batch (~30K tokens)
+    from src.config import settings as _cfg
+    MAX_REDUCE_CHARS = int(_cfg.llm_max_context * 0.6)  # 60% of context for reduce batches
 
     extraction_text = "\n\n".join(
         f"[{r['filename']}]:\n{r['extraction']}"

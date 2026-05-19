@@ -93,7 +93,8 @@ def synthesize_answer(state: AgentState) -> dict:
     chunks = _filter_relevant_chunks(chunks, question)
 
     # Build context — prioritize map-reduce synthesis (already distilled) over raw chunks
-    MAX_CONTEXT_CHARS = 200000  # ~50K tokens — room for prompt + response in 256K context
+    from src.config import settings as _cfg
+    MAX_CONTEXT_CHARS = _cfg.llm_max_context
     context_parts = []
     total_chars = 0
 

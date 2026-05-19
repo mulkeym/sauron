@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     metadata_extraction_enabled: bool = True  # disable to skip metadata step
     metadata_max_doc_length: int = 200000  # chars sent to LLM for extraction
 
+    # LLM context limits (adjust based on your model's context window)
+    llm_max_context: int = 200000  # max chars sent to LLM for synthesis (~50K tokens for 256K context models)
+
     # Chunking
     chunk_size: int = 1024
     chunk_overlap: int = 100
