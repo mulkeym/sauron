@@ -24,7 +24,9 @@ USER_PROMPT_TEMPLATE = """Context:
 
 Question: {question}
 
-Provide a clean, organized answer based on ALL the context above. Include every relevant detail. Cite sources by filename (e.g. 2026-01-08_4373866.md). Do NOT include your reasoning process — only the final answer."""
+Provide a clean, organized answer based on ALL the context above.
+CRITICAL: Include EVERY item from the context. Do NOT summarize, skip, or omit ANY entries. If 50 contracts are in the context, list all 50. If you run out of space, prioritize listing items over adding descriptions.
+Cite sources by filename (e.g. 2026-01-08_4373866.md). Do NOT include your reasoning process — only the final answer."""
 
 def _strip_reasoning_artifacts(text: str) -> str:
     """Remove thinking model reasoning that leaked into the answer."""
@@ -129,10 +131,14 @@ def synthesize_answer(state: AgentState) -> dict:
     context = "\n\n".join(context_parts)
     logger.info(f"Synthesizer context: {len(context):,} chars from {len(context_parts)} parts")
 
+    # Scale output tokens based on context size — more context = more items to report
+    output_tokens = min(max(4096, len(context) // 4), 16384)
+    logger.info(f"Synthesizer output tokens: {output_tokens}")
+
     answer = generate(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=USER_PROMPT_TEMPLATE.format(context=context, question=question),
-        max_tokens=4096,
+        max_tokens=output_tokens,
     )
 
     # Strip thinking model reasoning artifacts that leak into the answer
