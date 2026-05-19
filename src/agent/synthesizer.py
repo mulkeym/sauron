@@ -96,15 +96,33 @@ def synthesize_answer(state: AgentState) -> dict:
     # Filter out irrelevant chunks before synthesis
     chunks = _filter_relevant_chunks(chunks, question)
 
+    # Build context with a size cap to avoid LLM timeouts
+    MAX_CONTEXT_CHARS = 150000  # ~37K tokens — leaves room for prompt + response in 256K context
     context_parts = []
-    for i, chunk in enumerate(chunks, 1):
+    total_chars = 0
+
+    # Prioritize: map-reduce synthesis and KG context first, then raw chunks by score
+    priority_chunks = [c for c in chunks if c.metadata.doc_id in ("map-reduce", "knowledge-graph", "metadata-context")]
+    regular_chunks = sorted(
+        [c for c in chunks if c.metadata.doc_id not in ("map-reduce", "knowledge-graph", "metadata-context")],
+        key=lambda c: c.score, reverse=True,
+    )
+
+    for chunk in priority_chunks + regular_chunks:
         source = f"Source: {chunk.metadata.filename}"
         if chunk.metadata.page is not None:
             source += f", page {chunk.metadata.page}"
-        context_parts.append(f"{source}\n{chunk.text}")
+        part = f"{source}\n{chunk.text}"
+        if total_chars + len(part) > MAX_CONTEXT_CHARS:
+            logger.info(f"Context cap reached at {total_chars:,} chars, dropping remaining {len(regular_chunks) + len(priority_chunks) - len(context_parts)} chunks")
+            break
+        context_parts.append(part)
+        total_chars += len(part)
+
     if sql_results:
         context_parts.append(f"[Database query results]:\n{json.dumps(sql_results, indent=2)}")
     context = "\n\n".join(context_parts)
+    logger.info(f"Synthesizer context: {len(context):,} chars from {len(context_parts)} parts")
 
     answer = generate(
         system_prompt=SYSTEM_PROMPT,
