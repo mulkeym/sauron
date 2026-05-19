@@ -25,7 +25,8 @@ USER_PROMPT_TEMPLATE = """Context:
 Question: {question}
 
 Provide a clean, organized answer based on ALL the context above.
-CRITICAL: Include EVERY item from the context. Do NOT summarize, skip, or omit ANY entries. If 50 contracts are in the context, list all 50. If you run out of space, prioritize listing items over adding descriptions.
+CRITICAL: Include EVERY unique item from the context. Do NOT summarize, skip, or omit ANY entries. If 50 contracts are in the context, list all 50. If you run out of space, prioritize listing items over adding descriptions.
+DEDUPLICATION: The same item may appear in multiple context sources. Deduplicate by contract number, entity name, or other identifier. If two sources mention the same contract, list it ONCE with the most complete details and cite both sources.
 Cite sources by filename (e.g. 2026-01-08_4373866.md). Do NOT include your reasoning process — only the final answer."""
 
 def _strip_reasoning_artifacts(text: str) -> str:
