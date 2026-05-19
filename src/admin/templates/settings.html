@@ -165,6 +165,24 @@ function generateApiKey() {
         </div>
     </div>
 
+    <div style="margin-top:1rem;">
+        <h3 style="margin-bottom:0.5rem;">Metadata Extraction</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="metadata_extraction_enabled">Enable Metadata Extraction</label>
+                <select id="metadata_extraction_enabled" name="metadata_extraction_enabled">
+                    <option value="true" {{ 'selected' if settings.metadata_extraction_enabled }}>Enabled</option>
+                    <option value="false" {{ 'selected' if not settings.metadata_extraction_enabled }}>Disabled</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="metadata_max_doc_length">Max Document Length (chars)</label>
+                <input type="number" id="metadata_max_doc_length" name="metadata_max_doc_length" value="{{ settings.metadata_max_doc_length }}" min="1000" max="500000" style="max-width:120px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Chars sent to LLM for extraction</span>
+            </div>
+        </div>
+    </div>
+
     <div class="form-actions">
         <button type="submit">Save Settings</button>
     </div>
@@ -194,6 +212,11 @@ function generateApiKey() {
     <p class="section-desc">Purge the entire LightRAG knowledge graph (entities, relationships, embeddings). The graph will rebuild automatically as documents are re-ingested. Use this if you've deleted documents and want to clean up orphaned graph nodes.</p>
     <button type="button" hx-post="/admin/api/settings/purge-knowledge-graph" hx-target="#kg-status" hx-swap="innerHTML" hx-confirm="This will delete ALL knowledge graph data. Continue?">Purge Knowledge Graph</button>
     <span id="kg-status" style="margin-left:0.5rem;"></span>
+    <div style="margin-top:1rem;">
+        <button type="button" hx-post="/admin/api/settings/backfill-metadata" hx-target="#metadata-status" hx-swap="innerHTML">Backfill Document Metadata</button>
+        <span id="metadata-status" style="margin-left:0.5rem;"></span>
+        <p class="section-desc" style="margin-top:0.25rem;">Extract metadata for documents ingested before this feature was added. Runs in background.</p>
+    </div>
 </div>
 
 <div class="settings-section" style="margin-top:1.5rem;">

@@ -1528,6 +1528,8 @@ async def save_settings(
     entity_merge_review_threshold: float = Form(0.7),
     max_parallel_ingestion: int = Form(3),
     llm_concurrency: int = Form(4),
+    metadata_extraction_enabled: bool = Form(True),
+    metadata_max_doc_length: int = Form(200000),
 ):
     # Update in-memory settings
     if vllm_base_url:
@@ -1546,6 +1548,8 @@ async def save_settings(
     settings.entity_merge_review_threshold = entity_merge_review_threshold
     settings.max_parallel_ingestion = max_parallel_ingestion
     settings.llm_concurrency = llm_concurrency
+    settings.metadata_extraction_enabled = metadata_extraction_enabled
+    settings.metadata_max_doc_length = metadata_max_doc_length
 
     # Persist to .env file
     env_path = Path(".env")
@@ -1567,6 +1571,8 @@ async def save_settings(
     env_lines["ENTITY_MERGE_REVIEW_THRESHOLD"] = str(settings.entity_merge_review_threshold)
     env_lines["MAX_PARALLEL_INGESTION"] = str(settings.max_parallel_ingestion)
     env_lines["LLM_CONCURRENCY"] = str(settings.llm_concurrency)
+    env_lines["METADATA_EXTRACTION_ENABLED"] = str(settings.metadata_extraction_enabled).lower()
+    env_lines["METADATA_MAX_DOC_LENGTH"] = str(settings.metadata_max_doc_length)
 
     env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
 
@@ -1732,6 +1738,57 @@ async def purge_knowledge_graph():
     graph_rag._rag_instance = None
     graph_rag._initialized = False
     return HTMLResponse('<span class="status-ok">Knowledge graph purged. It will rebuild as documents are re-ingested.</span>')
+
+
+@router.post("/api/settings/backfill-metadata")
+async def backfill_metadata():
+    """Re-extract metadata for all documents missing metadata_tags."""
+    import asyncio
+
+    store = get_metadata_store()
+    docs = await store.list_documents()
+    missing = [d for d in docs if not getattr(d, 'metadata_tags', None)]
+
+    if not missing:
+        return HTMLResponse('<span class="status-ok">All documents already have metadata.</span>')
+
+    async def _backfill():
+        from src.ingestion.metadata_extractor import extract_metadata
+        from src.ingestion.embedder import embed_texts
+        vs = get_vector_store()
+        from src.retrieval.models import ChunkMetadata
+
+        for i, doc in enumerate(missing):
+            try:
+                # Reconstruct text from large chunks
+                chunks = vs.get_chunks_by_doc(doc.doc_id, limit=200, tier="large")
+                if not chunks:
+                    chunks = vs.get_chunks_by_doc(doc.doc_id, limit=200)
+                if not chunks:
+                    continue
+                text = "\n\n".join(c.text for c in chunks)
+
+                metadata = await asyncio.to_thread(extract_metadata, text, doc.filename)
+                summary = metadata.get("summary", "")
+
+                await store.update_document(doc.doc_id, summary=summary, metadata_tags=metadata)
+
+                # Embed and store summary vector
+                if summary:
+                    doc_context = f"Document: {doc.filename} (type: {doc.doc_type}, category: {doc.category})\nSummary: {summary}"
+                    vectors = await asyncio.to_thread(embed_texts, [doc_context])
+                    if vectors:
+                        meta = ChunkMetadata(
+                            doc_id=doc.doc_id, filename=doc.filename, doc_type=doc.doc_type,
+                            chunk_index=-1, start_char=0, acl_groups=doc.acl_groups,
+                            category=doc.category, chunk_size_tier="summary",
+                        )
+                        await asyncio.to_thread(vs.upsert, texts=[doc_context], vectors=vectors, metadatas=[meta])
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Backfill failed for {doc.filename}: {e}")
+
+    asyncio.create_task(_backfill())
+    return HTMLResponse(f'<span style="color:#2563eb;">Backfilling metadata for {len(missing)} documents in background...</span>')
 
 
 # ============================================================
