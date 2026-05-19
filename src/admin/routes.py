@@ -1526,6 +1526,8 @@ async def save_settings(
     mcp_port: int = Form(8090),
     entity_merge_auto_threshold: float = Form(0.9),
     entity_merge_review_threshold: float = Form(0.7),
+    max_parallel_ingestion: int = Form(3),
+    llm_concurrency: int = Form(4),
 ):
     # Update in-memory settings
     if vllm_base_url:
@@ -1542,6 +1544,8 @@ async def save_settings(
     settings.mcp_port = mcp_port
     settings.entity_merge_auto_threshold = entity_merge_auto_threshold
     settings.entity_merge_review_threshold = entity_merge_review_threshold
+    settings.max_parallel_ingestion = max_parallel_ingestion
+    settings.llm_concurrency = llm_concurrency
 
     # Persist to .env file
     env_path = Path(".env")
@@ -1561,6 +1565,8 @@ async def save_settings(
     env_lines["MCP_PORT"] = str(settings.mcp_port)
     env_lines["ENTITY_MERGE_AUTO_THRESHOLD"] = str(settings.entity_merge_auto_threshold)
     env_lines["ENTITY_MERGE_REVIEW_THRESHOLD"] = str(settings.entity_merge_review_threshold)
+    env_lines["MAX_PARALLEL_INGESTION"] = str(settings.max_parallel_ingestion)
+    env_lines["LLM_CONCURRENCY"] = str(settings.llm_concurrency)
 
     env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
 

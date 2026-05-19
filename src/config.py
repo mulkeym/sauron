@@ -47,8 +47,9 @@ class Settings(BaseSettings):
     mcp_port: int = 8090
     mcp_alt_port: int = 8091  # Alternative HTTP port for network access
 
-    # Ingestion
-    max_parallel_ingestion: int = 3  # concurrent file ingestion jobs (increase for fast API LLMs)
+    # Concurrency
+    max_parallel_ingestion: int = 3  # concurrent file ingestion jobs
+    llm_concurrency: int = 4  # concurrent LLM calls (map-reduce, entity extraction)
 
     # Chunking
     chunk_size: int = 1024

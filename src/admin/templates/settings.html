@@ -149,6 +149,22 @@ function generateApiKey() {
         </div>
     </div>
 
+    <div style="margin-top:1rem;">
+        <h3 style="margin-bottom:0.5rem;">Concurrency</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="max_parallel_ingestion">Parallel Ingestion Jobs</label>
+                <input type="number" id="max_parallel_ingestion" name="max_parallel_ingestion" value="{{ settings.max_parallel_ingestion }}" min="1" max="20" style="max-width:100px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Concurrent file processing workers</span>
+            </div>
+            <div class="form-group">
+                <label for="llm_concurrency">LLM Concurrency</label>
+                <input type="number" id="llm_concurrency" name="llm_concurrency" value="{{ settings.llm_concurrency }}" min="1" max="32" style="max-width:100px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Concurrent LLM calls (map-reduce, entity extraction)</span>
+            </div>
+        </div>
+    </div>
+
     <div class="form-actions">
         <button type="submit">Save Settings</button>
     </div>

@@ -72,7 +72,7 @@ async def get_lightrag() -> LightRAG:
         working_dir="data/lightrag",
         llm_model_func=_llm_func,
         llm_model_name=settings.vllm_model_name,
-        llm_model_max_async=4,
+        llm_model_max_async=settings.llm_concurrency,
 
         embedding_func=EmbeddingFunc(
             embedding_dim=embed_dim,

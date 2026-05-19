@@ -105,7 +105,8 @@ async def retrieve_map_reduce(
             return {"doc_id": doc_id, "filename": filename, "extraction": ""}
 
     # Run map in parallel (bounded concurrency)
-    semaphore = asyncio.Semaphore(4)
+    from src.config import settings as _settings
+    semaphore = asyncio.Semaphore(_settings.llm_concurrency)
 
     async def bounded_map(doc_id):
         async with semaphore:
