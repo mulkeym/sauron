@@ -580,7 +580,7 @@ _playground_jobs: dict = {}
 
 
 @router.post("/api/playground/start")
-async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full"), app_id: int = Form(0)):
+async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full"), app_id: int = Form(0), skip_cache: str = Form("false")):
     import uuid, asyncio
     from fastapi.responses import JSONResponse
 
@@ -649,13 +649,14 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             import time, html as html_mod
             import asyncio as _asyncio
 
-            # Check query cache first
+            # Check query cache first (unless skip_cache is set)
+            _skip_cache = skip_cache == "true"
             _playground_jobs[query_id]["step"] = "cache_check"
             from src.retrieval.query_cache import cache_lookup, cache_store
             from src.ingestion.embedder import embed_query
             cache_start = time.time()
             query_vector = await _asyncio.to_thread(embed_query, question)
-            cached = cache_lookup(query_vector, user_groups)
+            cached = cache_lookup(query_vector, user_groups) if not _skip_cache else None
             cache_time = round(time.time() - cache_start, 2)
 
             if cached:

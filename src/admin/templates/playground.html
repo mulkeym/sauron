@@ -35,6 +35,9 @@
             <option value="vector_only">Vector Search Only (LanceDB)</option>
         </select>
     </div>
+    <div class="form-group">
+        <label><input type="checkbox" id="play_skip_cache" value="true"> Skip cache</label>
+    </div>
     <button type="button" id="ask-btn" onclick="runQuery()">Ask</button>
 </div>
 
@@ -105,7 +108,7 @@ async function runQuery() {
         const startResp = await fetch('/admin/api/playground/start', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: `question=${encodeURIComponent(question)}&play_user=${encodeURIComponent(user)}&mode=${document.getElementById('play_mode').value}&app_id=${document.getElementById('play_app').value || 0}`,
+            body: `question=${encodeURIComponent(question)}&play_user=${encodeURIComponent(user)}&mode=${document.getElementById('play_mode').value}&app_id=${document.getElementById('play_app').value || 0}&skip_cache=${document.getElementById('play_skip_cache').checked}`,
         });
         const startData = await startResp.json();
         queryId = startData.query_id;
