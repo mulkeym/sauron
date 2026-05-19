@@ -67,8 +67,7 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
 
 
 def _extract_date_filter(question: str, vector_store: VectorStore) -> list[str] | None:
-    """If the question mentions a specific date, find documents matching that date by filename."""
-    # Match patterns like "Jan 2, 2026", "January 2, 2026", "Jan. 2", "01-02", "1/2/2026"
+    """If the question mentions a specific date, find documents with that date in metadata or filename."""
     month_names = {
         'jan': '01', 'january': '01', 'feb': '02', 'february': '02',
         'mar': '03', 'march': '03', 'apr': '04', 'april': '04',
@@ -77,24 +76,63 @@ def _extract_date_filter(question: str, vector_store: VectorStore) -> list[str] 
         'oct': '10', 'october': '10', 'nov': '11', 'november': '11',
         'dec': '12', 'december': '12',
     }
+    month_words = {v: k for k, v in month_names.items()}  # "01" -> "jan"
 
     q_lower = question.lower()
 
-    # Try "Jan 2, 2026" or "January 2, 2026" format
     m = re.search(r'(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\w*\.?\s+(\d{1,2})', q_lower)
     if m:
         month = month_names.get(m.group(1)[:3], '')
         day = m.group(2).zfill(2)
         if month and day:
-            date_str = f"-{month}-{day}"  # matches "2026-01-02" in filename
+            # Build date patterns to search for in metadata and filenames
+            # e.g. "01-30", "Jan 30", "January 30", "1/30", "Jan. 30"
+            month_word = m.group(1)[:3].capitalize()
+            date_patterns = [
+                f"-{month}-{day}",        # 2026-01-30 in filenames
+                f"{month}-{day}",          # 01-30
+                f"{month}/{day}",          # 01/30
+                f"{month_word} {int(day)}", # Jan 30
+                f"{month_word}. {int(day)}", # Jan. 30
+            ]
+
             try:
-                results = vector_store.table.search().where(f"chunk_size_tier = 'large'").limit(500).to_list()
-                matched_ids = set()
-                for r in results:
-                    if date_str in r.get('filename', ''):
-                        matched_ids.add(r['doc_id'])
+                # Search metadata_tags.dates field across all documents
+                from src.api.routes_ingest import get_metadata_store
+                import asyncio
+                store = get_metadata_store()
+
+                # Run async in sync context
+                async def _find_by_metadata():
+                    docs = await store.list_documents()
+                    matched = set()
+                    for doc in docs:
+                        # Check metadata dates
+                        meta = getattr(doc, 'metadata_tags', {}) or {}
+                        doc_dates = meta.get('dates', [])
+                        for d in doc_dates:
+                            d_lower = d.lower()
+                            if any(p.lower() in d_lower for p in date_patterns):
+                                matched.add(doc.doc_id)
+                                break
+
+                        # Also check filename as fallback
+                        if doc.doc_id not in matched:
+                            if any(p in doc.filename for p in date_patterns):
+                                matched.add(doc.doc_id)
+                    return list(matched)
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        matched_ids = pool.submit(asyncio.run, _find_by_metadata()).result()
+                except RuntimeError:
+                    matched_ids = asyncio.run(_find_by_metadata())
+
                 if matched_ids:
-                    return list(matched_ids)
+                    logger.info(f"Date filter: '{month_word} {int(day)}' matched {len(matched_ids)} documents via metadata+filename")
+                    return matched_ids
             except Exception:
                 pass
 
