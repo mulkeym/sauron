@@ -53,6 +53,42 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                     seen_keys.add(key)
             retrieve_logger.info(f"Sweep+MapReduce merged: {len(merged_chunks)} total chunks")
             result = {"retrieved_chunks": merged_chunks, "retrieval_attempts": retry_state.get("retrieval_attempts", 0) + 1}
+            # Add lightweight metadata context from documents not fully MAP'd
+            try:
+                from src.api.routes_ingest import get_metadata_store
+                _ms = get_metadata_store()
+                sweep_doc_ids = {c.metadata.doc_id for c in sweep_result.get("retrieved_chunks", [])}
+                mr_doc_ids = set()
+                for c in mr_result.get("retrieved_chunks", []):
+                    if c.metadata.doc_id != "map-reduce":
+                        mr_doc_ids.add(c.metadata.doc_id)
+                extra_doc_ids = sweep_doc_ids - mr_doc_ids - {"map-reduce", "knowledge-graph"}
+                if extra_doc_ids:
+                    meta_parts = []
+                    for did in list(extra_doc_ids)[:20]:
+                        doc_rec = await _ms.get_document(did)
+                        if doc_rec and getattr(doc_rec, 'metadata_tags', None):
+                            meta = doc_rec.metadata_tags
+                            parts = []
+                            for field in ["entities", "organizations", "amounts", "identifiers", "topics"]:
+                                vals = meta.get(field, [])
+                                if vals:
+                                    parts.append(f"{field}: {', '.join(vals[:5])}")
+                            if parts:
+                                meta_parts.append(f"[{doc_rec.filename}]: {'; '.join(parts)}")
+                    if meta_parts:
+                        meta_chunk = RetrievedChunk(
+                            text=f"Additional document metadata ({len(meta_parts)} docs not fully analyzed):\n" + "\n".join(meta_parts),
+                            score=0.3,
+                            metadata=ChunkMetadata(
+                                doc_id="metadata-context", filename="metadata_context",
+                                doc_type="metadata", chunk_index=0, start_char=0, acl_groups=["ALL"],
+                            ),
+                        )
+                        merged_chunks.append(meta_chunk)
+                        retrieve_logger.info(f"Added metadata context from {len(meta_parts)} additional documents")
+            except Exception as e:
+                retrieve_logger.debug(f"Metadata context enrichment skipped: {e}")
         elif query_type == QueryType.ANALYTICAL:
             result = await retrieve_analytical(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.CROSS_REFERENCE:
