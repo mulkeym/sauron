@@ -504,8 +504,12 @@ async def update_document(doc_id: str, category: str = Form(""), acl_groups: str
     </tr>""")
 
 
+_kg_delete_queue: list[str] = []  # doc_ids pending KG cleanup
+
+
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
+    import asyncio
     store = get_metadata_store()
     # Remove from metadata DB
     await store.delete_document(doc_id)
@@ -514,14 +518,33 @@ async def delete_document(doc_id: str):
     # Remove vector chunks from LanceDB
     vector_store = get_vector_store()
     vector_store.delete_by_doc_id(doc_id)
-    # Remove from LightRAG knowledge graph
+    # Queue KG cleanup in background — adelete_by_doc_id is slow (rebuilds entities)
+    _kg_delete_queue.append(doc_id)
+    asyncio.create_task(_process_kg_deletes())
+    return HTMLResponse("")
+
+
+_kg_delete_running = False
+
+
+async def _process_kg_deletes():
+    """Process queued KG deletions in background, one at a time."""
+    global _kg_delete_running
+    if _kg_delete_running:
+        return  # already running, will pick up new items
+    _kg_delete_running = True
     try:
         from src.knowledge.graph_rag import get_lightrag
         rag = await get_lightrag()
-        await rag.adelete_by_doc_id(doc_id)
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"LightRAG delete failed for {doc_id}: {e}")
-    return HTMLResponse("")
+        while _kg_delete_queue:
+            doc_id = _kg_delete_queue.pop(0)
+            try:
+                logging.getLogger(__name__).info(f"KG cleanup: deleting {doc_id} ({len(_kg_delete_queue)} remaining)")
+                await rag.adelete_by_doc_id(doc_id)
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"KG delete failed for {doc_id}: {e}")
+    finally:
+        _kg_delete_running = False
 
 
 @router.get("/playground", response_class=HTMLResponse)
