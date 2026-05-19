@@ -53,7 +53,7 @@ class IngestQueue:
         self._jobs: dict[str, IngestJob] = {}
         self._queue: asyncio.Queue | None = None
         self._worker_running = False
-        self._kg_counter_lock: asyncio.Lock | None = None  # serializes entity count tracking (not insertion)
+        # KG extraction runs without locks — counts are approximate when parallel
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
                 uploaded_by: str, category: str = "", dataset_id: int = 0,
@@ -107,7 +107,6 @@ class IngestQueue:
         if self._worker_running:
             return
         self._queue = asyncio.Queue()
-        self._kg_counter_lock = asyncio.Lock()
         self._worker_running = True
 
         # Re-queue any jobs that were queued before worker started
@@ -296,23 +295,35 @@ class IngestQueue:
                 )
 
         # Step 6: Build knowledge graph via LightRAG
-        # Serialized with a lock so the graph count delta is accurate per job.
-        # LightRAG's internal max_parallel_insert handles chunk-level parallelism.
         if job.build_graph:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
             from src.knowledge.graph_rag import insert_document as lightrag_insert, get_graph_counts
 
-            async with self._kg_counter_lock:
+            try:
+                # Get counts before (no lock needed — approximate is fine)
                 nodes_before, edges_before = await get_graph_counts()
 
-                await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+                # Insert with a timeout to prevent hanging forever
+                await asyncio.wait_for(
+                    lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename),
+                    timeout=600,  # 10 minute timeout per document
+                )
 
+                # Get counts after
                 nodes_after, edges_after = await get_graph_counts()
                 job.entity_count = max(0, nodes_after - nodes_before)
                 job.relationship_count = max(0, edges_after - edges_before)
 
-            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
+                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                    f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
+            except asyncio.TimeoutError:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"KG extraction timed out for {parsed.filename} after 600s")
+                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph timed out")
+            except Exception as e:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"KG extraction failed for {parsed.filename}: {e}")
+                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, f"Knowledge graph failed: {str(e)[:100]}")
 
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
         else:
