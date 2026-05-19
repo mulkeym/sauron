@@ -204,11 +204,56 @@ async def retrieve_map_reduce(
             "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
         }
 
-    # Step 3: REDUCE — build extractions into a synthetic chunk for the synthesizer
+    # Step 3: REDUCE — hierarchical reduce if extractions are too large
+    MAX_REDUCE_CHARS = 120000  # max chars per reduce batch (~30K tokens)
+
     extraction_text = "\n\n".join(
         f"[{r['filename']}]:\n{r['extraction']}"
         for r in valid_extractions
     )
+
+    if len(extraction_text) > MAX_REDUCE_CHARS:
+        # Hierarchical reduce: batch extractions, reduce each batch, then combine
+        logger.info(f"Map-reduce: extraction too large ({len(extraction_text):,} chars), running hierarchical reduce")
+
+        # Split into batches that fit in the LLM context
+        batches = []
+        current_batch = []
+        current_size = 0
+        for r in valid_extractions:
+            entry = f"[{r['filename']}]:\n{r['extraction']}"
+            if current_size + len(entry) > MAX_REDUCE_CHARS and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_size = 0
+            current_batch.append(entry)
+            current_size += len(entry)
+        if current_batch:
+            batches.append(current_batch)
+
+        logger.info(f"Map-reduce: reducing {len(valid_extractions)} extractions in {len(batches)} batches")
+
+        # Reduce each batch in parallel
+        async def reduce_batch(batch_entries, batch_num):
+            batch_text = "\n\n".join(batch_entries)
+            try:
+                summary = await asyncio.to_thread(
+                    generate,
+                    system_prompt="You combine document extractions into a comprehensive summary. Include ALL items — do not omit any. Cite source filenames.",
+                    user_prompt=REDUCE_PROMPT.format(question=question, extractions=batch_text),
+                    temperature=0.0,
+                    max_tokens=8192,
+                )
+                return summary.strip()
+            except Exception as e:
+                logger.warning(f"Reduce batch {batch_num} failed: {e}")
+                return batch_text[:MAX_REDUCE_CHARS]  # fallback: return raw
+
+        batch_results = await asyncio.gather(
+            *[reduce_batch(b, i) for i, b in enumerate(batches)]
+        )
+        extraction_text = "\n\n".join(batch_results)
+        logger.info(f"Map-reduce: hierarchical reduce complete, {len(extraction_text):,} chars")
 
     # Create a synthetic chunk containing the combined map results
     reduce_chunk = RetrievedChunk(

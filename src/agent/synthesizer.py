@@ -92,19 +92,27 @@ def synthesize_answer(state: AgentState) -> dict:
     # Filter out irrelevant chunks before synthesis
     chunks = _filter_relevant_chunks(chunks, question)
 
-    # Build context with a size cap to avoid LLM timeouts
-    MAX_CONTEXT_CHARS = 150000  # ~37K tokens — leaves room for prompt + response in 256K context
+    # Build context — prioritize map-reduce synthesis (already distilled) over raw chunks
+    MAX_CONTEXT_CHARS = 200000  # ~50K tokens — room for prompt + response in 256K context
     context_parts = []
     total_chars = 0
 
-    # Prioritize: map-reduce synthesis and KG context first, then raw chunks by score
-    priority_chunks = [c for c in chunks if c.metadata.doc_id in ("map-reduce", "knowledge-graph", "metadata-context")]
-    regular_chunks = sorted(
-        [c for c in chunks if c.metadata.doc_id not in ("map-reduce", "knowledge-graph", "metadata-context")],
-        key=lambda c: c.score, reverse=True,
-    )
+    SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
+    synthetic_chunks = [c for c in chunks if c.metadata.doc_id in SYNTHETIC_IDS]
+    has_map_reduce = any(c.metadata.doc_id == "map-reduce" for c in chunks)
 
-    for chunk in priority_chunks + regular_chunks:
+    if has_map_reduce:
+        # Map-reduce already extracted relevant facts from each document.
+        # Raw chunks are redundant — skip them to save context space.
+        regular_chunks = []
+        logger.info("Synthesizer: using map-reduce synthesis only (raw chunks skipped as redundant)")
+    else:
+        regular_chunks = sorted(
+            [c for c in chunks if c.metadata.doc_id not in SYNTHETIC_IDS],
+            key=lambda c: c.score, reverse=True,
+        )
+
+    for chunk in synthetic_chunks + regular_chunks:
         source = f"Source: {chunk.metadata.filename}"
         if chunk.metadata.page is not None:
             source += f", page {chunk.metadata.page}"
