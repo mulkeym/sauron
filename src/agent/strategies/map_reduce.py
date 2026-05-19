@@ -53,10 +53,9 @@ async def retrieve_map_reduce(
     date_filter_docs = _extract_date_filter(question, vector_store)
 
     if date_filter_docs:
-        relevant_doc_ids = date_filter_docs
-        logger.info(f"Map-reduce: date filter matched {len(relevant_doc_ids)} documents")
-    else:
-        # Phase 1: Search summary embeddings for fast document discovery
+        logger.info(f"Map-reduce: date filter found {len(date_filter_docs)} docs mentioning the date")
+
+    # Phase 1: Search summary embeddings for fast document discovery
         summary_results = vector_store.search(
             vector=query_vector, user_groups=user_groups,
             top_k=top_k, tier="summary", doc_ids=doc_ids,
@@ -140,9 +139,17 @@ async def retrieve_map_reduce(
         else:
             relevant_doc_ids = candidate_doc_ids
 
+    # Merge date-matched docs into the list
+    if date_filter_docs:
+        existing = set(relevant_doc_ids)
+        for did in date_filter_docs:
+            if did not in existing:
+                relevant_doc_ids.append(did)
+        logger.info(f"Map-reduce: {len(relevant_doc_ids)} docs after merging date filter")
+    else:
         logger.info(f"Map-reduce: {len(relevant_doc_ids)} docs pass relevance threshold (from {len(candidate_doc_ids)} candidates)")
-        for did in relevant_doc_ids:
-            logger.info(f"  - {doc_filenames.get(did, did)}")
+    for did in relevant_doc_ids:
+        logger.info(f"  - {doc_filenames.get(did, did)}")
 
     # Step 2: MAP — extract relevant data from each document in parallel
     async def map_document(doc_id: str) -> dict:

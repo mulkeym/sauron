@@ -21,26 +21,33 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
 
     query_vector = await asyncio.to_thread(embed_query, question)
 
-    # Step 1: Check if question references a specific date — use filename filter
+    # Step 1: Search for relevant documents
+    # Date filter adds docs that mention the date — used as a boost, not exclusive
     date_filter_docs = _extract_date_filter(question, vector_store)
-
     if date_filter_docs:
-        # Date-specific: only retrieve chunks from date-matched documents
-        relevant_doc_ids = date_filter_docs
-        logger.info(f"Sweep: date filter matched {len(relevant_doc_ids)} documents")
-    else:
-        # Search summary embeddings first, fall back to xlarge
-        initial_results = vector_store.search(
-            vector=query_vector, user_groups=user_groups,
-            top_k=top_k, tier="summary", doc_ids=doc_ids,
+        logger.info(f"Sweep: date filter found {len(date_filter_docs)} docs mentioning the date")
+
+    # Search summary embeddings first, fall back to xlarge
+    initial_results = vector_store.search(
+        vector=query_vector, user_groups=user_groups,
+        top_k=top_k, tier="summary", doc_ids=doc_ids,
+    )
+    if not initial_results:
+        initial_results = vector_store.hybrid_search(
+            vector=query_vector, text_query=question,
+            user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
         )
-        if not initial_results:
-            initial_results = vector_store.hybrid_search(
-                vector=query_vector, text_query=question,
-                user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
-            )
-            logger.info("Sweep: no summary embeddings, falling back to xlarge")
-        relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
+        logger.info("Sweep: no summary embeddings, falling back to xlarge")
+    relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
+
+    # Merge date-matched docs into the list (they may not rank high in vector search)
+    if date_filter_docs:
+        existing = set(relevant_doc_ids)
+        for did in date_filter_docs:
+            if did not in existing:
+                relevant_doc_ids.append(did)
+        logger.info(f"Sweep: {len(relevant_doc_ids)} docs after merging date filter")
+    else:
         logger.info(f"Sweep: found {len(relevant_doc_ids)} relevant documents from summary search")
 
     # Step 2: Retrieve large-tier chunks from relevant documents in parallel
