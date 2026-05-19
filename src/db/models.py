@@ -20,6 +20,8 @@ class DocumentRecord(Base):
     acl_groups: Mapped[list] = mapped_column(JSON, default=list)
     chunk_count: Mapped[int] = mapped_column(default=0)
     source_url: Mapped[str] = mapped_column(String, default="")
+    summary: Mapped[str] = mapped_column(String, default="")
+    metadata_tags: Mapped[dict] = mapped_column(JSON, default=dict)
     uploaded_by: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     max_parallel_ingestion: int = 3  # concurrent file ingestion jobs
     llm_concurrency: int = 4  # concurrent LLM calls (map-reduce, entity extraction)
 
+    # Metadata extraction
+    metadata_extraction_enabled: bool = True  # disable to skip metadata step
+    metadata_max_doc_length: int = 200000  # chars sent to LLM for extraction
+
     # Chunking
     chunk_size: int = 1024
     chunk_overlap: int = 100

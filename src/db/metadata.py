@@ -32,6 +32,8 @@ class MetadataStore:
                 ("source_url", "documents", 'TEXT DEFAULT ""'),
                 ("dataset_id", "documents", "INTEGER DEFAULT 0"),
                 ("dataset_id", "web_connectors", "INTEGER DEFAULT 0"),
+                ("summary", "documents", 'TEXT DEFAULT ""'),
+                ("metadata_tags", "documents", "TEXT DEFAULT '{}'"),
             ]
             for col, table, col_type in migrations:
                 try:
@@ -71,6 +73,8 @@ class MetadataStore:
         content_hash="",
         dataset_id=0,
         source_url="",
+        summary="",
+        metadata_tags=None,
     ):
         record = DocumentRecord(
             doc_id=doc_id,
@@ -83,6 +87,8 @@ class MetadataStore:
             chunk_count=chunk_count,
             uploaded_by=uploaded_by,
             category=category,
+            summary=summary,
+            metadata_tags=metadata_tags or {},
         )
         async with self.session_factory() as session:
             session.add(record)
