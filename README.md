@@ -155,13 +155,24 @@ Parse -> Categorize -> Generate Summary -> Chunk (4 tiers) -> Embed -> Store -> 
 
 - **Parse**: PDF, DOCX, XLSX, CSV, Markdown, plain text, meeting transcripts
 - **Categorize**: LLM matches against existing categories or proposes new ones
-- **Summary**: LLM generates a 2-3 sentence document summary, prepended to every chunk for contextual embeddings
-- **Chunk**: 4 tiers stored in parallel
+- **Extract Metadata**: LLM extracts structured metadata (entities, people, organizations, locations, dates, amounts, identifiers, topics, procedures, action items, key facts) and a summary in a single call
+- **Chunk**: 4 tiers stored in parallel, plus a dedicated summary embedding per document
 - **Embed**: Batch or individual via OpenAI-compatible API
 - **Store**: LanceDB with FTS index, scalar indexes on doc_id and acl_groups
 - **Extract**: Category-aware entity/relationship extraction with knowledge graph building
 
 The async ingestion queue shows live progress with entity/relationship counts.
+
+## Document Metadata
+
+Every document gets structured metadata extracted at ingestion time via a single LLM call:
+
+- **summary** -- 2-4 sentence document overview (also embedded as a searchable vector)
+- **entities, people, organizations, locations** -- named entities
+- **dates, amounts, identifiers** -- structured data points
+- **topics, procedures, action_items, key_facts** -- semantic content
+
+This metadata speeds up sweep queries -- instead of the LLM reading every discovered document, the system first searches document summaries and metadata to narrow the list, then only reads the truly relevant ones. Documents not fully read still contribute their metadata as lightweight context to the synthesizer. Existing documents can be backfilled from Settings.
 
 ## Web Crawler
 
