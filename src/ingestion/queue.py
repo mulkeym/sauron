@@ -299,31 +299,41 @@ class IngestQueue:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
             from src.knowledge.graph_rag import insert_document as lightrag_insert, get_graph_counts
 
-            try:
-                # Get counts before (no lock needed — approximate is fine)
-                nodes_before, edges_before = await get_graph_counts()
+            MAX_RETRIES = 3
+            TIMEOUT_SECS = 600  # 10 minutes per attempt
+            import logging as _log
+            _kg_logger = _log.getLogger(__name__)
 
-                # Insert with a timeout to prevent hanging forever
-                await asyncio.wait_for(
-                    lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename),
-                    timeout=600,  # 10 minute timeout per document
-                )
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    nodes_before, edges_before = await get_graph_counts()
 
-                # Get counts after
-                nodes_after, edges_after = await get_graph_counts()
-                job.entity_count = max(0, nodes_after - nodes_before)
-                job.relationship_count = max(0, edges_after - edges_before)
+                    if attempt > 1:
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                            f"Knowledge graph retry {attempt}/{MAX_RETRIES}...")
 
-                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                    f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
-            except asyncio.TimeoutError:
-                import logging as _log
-                _log.getLogger(__name__).warning(f"KG extraction timed out for {parsed.filename} after 600s")
-                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph timed out")
-            except Exception as e:
-                import logging as _log
-                _log.getLogger(__name__).warning(f"KG extraction failed for {parsed.filename}: {e}")
-                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, f"Knowledge graph failed: {str(e)[:100]}")
+                    await asyncio.wait_for(
+                        lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename),
+                        timeout=TIMEOUT_SECS,
+                    )
+
+                    nodes_after, edges_after = await get_graph_counts()
+                    job.entity_count = max(0, nodes_after - nodes_before)
+                    job.relationship_count = max(0, edges_after - edges_before)
+
+                    self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                        f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
+                    break  # success
+                except asyncio.TimeoutError:
+                    _kg_logger.warning(f"KG extraction timed out for {parsed.filename} (attempt {attempt}/{MAX_RETRIES})")
+                    if attempt == MAX_RETRIES:
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                            f"Knowledge graph timed out after {MAX_RETRIES} attempts")
+                except Exception as e:
+                    _kg_logger.warning(f"KG extraction failed for {parsed.filename} (attempt {attempt}/{MAX_RETRIES}): {e}")
+                    if attempt == MAX_RETRIES:
+                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                            f"Knowledge graph failed: {str(e)[:100]}")
 
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
         else:
