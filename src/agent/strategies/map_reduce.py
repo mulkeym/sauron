@@ -56,88 +56,88 @@ async def retrieve_map_reduce(
         logger.info(f"Map-reduce: date filter found {len(date_filter_docs)} docs mentioning the date")
 
     # Phase 1: Search summary embeddings for fast document discovery
-        summary_results = vector_store.search(
+    summary_results = vector_store.search(
             vector=query_vector, user_groups=user_groups,
             top_k=top_k, tier="summary", doc_ids=doc_ids,
         )
-        # Fallback to xlarge if no summary embeddings exist yet
-        if not summary_results:
-            summary_results = vector_store.hybrid_search(
-                vector=query_vector, text_query=question,
-                user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
-            )
-            logger.info("Map-reduce: no summary embeddings found, falling back to xlarge search")
+    # Fallback to xlarge if no summary embeddings exist yet
+    if not summary_results:
+        summary_results = vector_store.hybrid_search(
+            vector=query_vector, text_query=question,
+            user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+        )
+        logger.info("Map-reduce: no summary embeddings found, falling back to xlarge search")
 
-        candidate_doc_ids = list({c.metadata.doc_id for c in summary_results})
-        doc_filenames = {c.metadata.doc_id: c.metadata.filename for c in summary_results}
-        doc_scores = {c.metadata.doc_id: c.score for c in summary_results}
-        logger.info(f"Map-reduce: {len(candidate_doc_ids)} candidate docs from summary/xlarge search")
+    candidate_doc_ids = list({c.metadata.doc_id for c in summary_results})
+    doc_filenames = {c.metadata.doc_id: c.metadata.filename for c in summary_results}
+    doc_scores = {c.metadata.doc_id: c.score for c in summary_results}
+    logger.info(f"Map-reduce: {len(candidate_doc_ids)} candidate docs from summary/xlarge search")
 
-        # Phase 2: Also search metadata for keyword matches to catch docs that
-        # vector search missed (different terminology, lower embedding similarity)
-        metadata_store = None
-        try:
-            from src.api.routes_ingest import get_metadata_store
-            metadata_store = get_metadata_store()
-        except Exception:
-            pass
+    # Phase 2: Also search metadata for keyword matches to catch docs that
+    # vector search missed (different terminology, lower embedding similarity)
+    metadata_store = None
+    try:
+        from src.api.routes_ingest import get_metadata_store
+        metadata_store = get_metadata_store()
+    except Exception:
+        pass
 
-        if metadata_store:
-            q_lower = question.lower()
-            q_words = {w for w in q_lower.split() if len(w) > 3}
+    if metadata_store:
+        q_lower = question.lower()
+        q_words = {w for w in q_lower.split() if len(w) > 3}
 
-            # Search ALL documents by metadata to find ones vector search missed
-            all_docs = await metadata_store.list_documents(user_groups)
-            for doc in all_docs:
-                if doc.doc_id in {d for d in candidate_doc_ids}:
-                    continue  # already found by vector search
-                meta = getattr(doc, 'metadata_tags', {}) or {}
-                if not meta:
-                    continue
-                # Check if any metadata field matches query terms
-                match = False
-                for field in ["entities", "organizations", "topics", "identifiers"]:
-                    for val in meta.get(field, []):
-                        if val and (val.lower() in q_lower or any(w in val.lower() for w in q_words)):
-                            match = True
-                            break
-                    if match:
+        # Search ALL documents by metadata to find ones vector search missed
+        all_docs = await metadata_store.list_documents(user_groups)
+        for doc in all_docs:
+            if doc.doc_id in {d for d in candidate_doc_ids}:
+                continue  # already found by vector search
+            meta = getattr(doc, 'metadata_tags', {}) or {}
+            if not meta:
+                continue
+            # Check if any metadata field matches query terms
+            match = False
+            for field in ["entities", "organizations", "topics", "identifiers"]:
+                for val in meta.get(field, []):
+                    if val and (val.lower() in q_lower or any(w in val.lower() for w in q_words)):
+                        match = True
                         break
                 if match:
-                    candidate_doc_ids.append(doc.doc_id)
-                    doc_filenames[doc.doc_id] = doc.filename
-                    doc_scores[doc.doc_id] = 0.1  # low score, found by metadata only
+                    break
+            if match:
+                candidate_doc_ids.append(doc.doc_id)
+                doc_filenames[doc.doc_id] = doc.filename
+                doc_scores[doc.doc_id] = 0.1  # low score, found by metadata only
 
-            # Score and rank all candidates
-            scored_docs = []
-            for did in candidate_doc_ids:
-                doc_rec = await metadata_store.get_document(did)
-                meta = getattr(doc_rec, 'metadata_tags', {}) or {} if doc_rec else {}
-                meta_score = 0
-                if meta:
-                    for field, values in meta.items():
-                        if field == "summary" or not isinstance(values, list):
-                            continue
-                        for val in values:
-                            if val and val.lower() in q_lower:
-                                meta_score += 2
-                            elif val and any(w in val.lower() for w in q_words):
-                                meta_score += 1
-                combined = doc_scores.get(did, 0) + (meta_score * 0.1)
-                scored_docs.append((did, combined))
+        # Score and rank all candidates
+        scored_docs = []
+        for did in candidate_doc_ids:
+            doc_rec = await metadata_store.get_document(did)
+            meta = getattr(doc_rec, 'metadata_tags', {}) or {} if doc_rec else {}
+            meta_score = 0
+            if meta:
+                for field, values in meta.items():
+                    if field == "summary" or not isinstance(values, list):
+                        continue
+                    for val in values:
+                        if val and val.lower() in q_lower:
+                            meta_score += 2
+                        elif val and any(w in val.lower() for w in q_words):
+                            meta_score += 1
+            combined = doc_scores.get(did, 0) + (meta_score * 0.1)
+            scored_docs.append((did, combined))
 
-            scored_docs.sort(key=lambda x: x[1], reverse=True)
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
 
-            # Relevance-based cutoff instead of hard cap:
-            # Keep all docs above 20% of the top score, plus any with metadata matches
-            if scored_docs:
-                top_score = scored_docs[0][1]
-                threshold = top_score * 0.2 if top_score > 0 else 0
-                relevant_doc_ids = [did for did, score in scored_docs if score >= threshold or score >= 0.1]
-            else:
-                relevant_doc_ids = []
+        # Relevance-based cutoff instead of hard cap:
+        # Keep all docs above 20% of the top score, plus any with metadata matches
+        if scored_docs:
+            top_score = scored_docs[0][1]
+            threshold = top_score * 0.2 if top_score > 0 else 0
+            relevant_doc_ids = [did for did, score in scored_docs if score >= threshold or score >= 0.1]
         else:
-            relevant_doc_ids = candidate_doc_ids
+            relevant_doc_ids = []
+    else:
+        relevant_doc_ids = candidate_doc_ids
 
     # Merge date-matched docs into the list
     if date_filter_docs:
