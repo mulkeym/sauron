@@ -53,7 +53,7 @@ class IngestQueue:
         self._jobs: dict[str, IngestJob] = {}
         self._queue: asyncio.Queue | None = None
         self._worker_running = False
-        # No KG lock needed — LightRAG handles parallel insertion internally via max_parallel_insert
+        self._kg_counter_lock: asyncio.Lock | None = None  # serializes entity count tracking (not insertion)
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
                 uploaded_by: str, category: str = "", dataset_id: int = 0,
@@ -107,6 +107,7 @@ class IngestQueue:
         if self._worker_running:
             return
         self._queue = asyncio.Queue()
+        self._kg_counter_lock = asyncio.Lock()
         self._worker_running = True
 
         # Re-queue any jobs that were queued before worker started
@@ -295,21 +296,21 @@ class IngestQueue:
                 )
 
         # Step 6: Build knowledge graph via LightRAG
-        # LightRAG handles parallel insertion internally via max_parallel_insert.
-        # We measure entity/relationship counts by graph delta (before/after).
+        # Serialized with a lock so the graph count delta is accurate per job.
+        # LightRAG's internal max_parallel_insert handles chunk-level parallelism.
         if job.build_graph:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
             from src.knowledge.graph_rag import insert_document as lightrag_insert, get_graph_counts
 
-            # Snapshot graph counts before insertion
-            nodes_before, edges_before = await get_graph_counts()
+            async with self._kg_counter_lock:
+                nodes_before, edges_before = await get_graph_counts()
 
-            await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+                await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
 
-            # Measure what was added
-            nodes_after, edges_after = await get_graph_counts()
-            job.entity_count = max(0, nodes_after - nodes_before)
-            job.relationship_count = max(0, edges_after - edges_before)
+                nodes_after, edges_after = await get_graph_counts()
+                job.entity_count = max(0, nodes_after - nodes_before)
+                job.relationship_count = max(0, edges_after - edges_before)
+
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                 f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
 
