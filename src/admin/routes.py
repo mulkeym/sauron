@@ -1747,7 +1747,14 @@ async def backfill_metadata():
 
     store = get_metadata_store()
     docs = await store.list_documents()
-    missing = [d for d in docs if not getattr(d, 'metadata_tags', None)]
+    def _needs_metadata(doc):
+        meta = getattr(doc, 'metadata_tags', None)
+        if not meta:
+            return True
+        if isinstance(meta, dict) and not meta.get("summary"):
+            return True
+        return False
+    missing = [d for d in docs if _needs_metadata(d)]
 
     if not missing:
         return HTMLResponse('<span class="status-ok">All documents already have metadata.</span>')
