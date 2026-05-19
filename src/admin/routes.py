@@ -528,21 +528,40 @@ _kg_delete_running = False
 
 
 async def _process_kg_deletes():
-    """Process queued KG deletions in background, one at a time."""
+    """Process queued KG deletions in background. Purges if no docs remain."""
     global _kg_delete_running
     if _kg_delete_running:
         return  # already running, will pick up new items
     _kg_delete_running = True
+    _logger = logging.getLogger(__name__)
     try:
+        # Check if all documents were deleted — if so, just purge the whole graph
+        store = get_metadata_store()
+        remaining_docs = await store.list_documents()
+        if not remaining_docs:
+            _logger.info(f"KG cleanup: no documents remain, purging entire knowledge graph ({len(_kg_delete_queue)} queued deletes skipped)")
+            _kg_delete_queue.clear()
+            import shutil
+            lightrag_dir = Path("data/lightrag")
+            if lightrag_dir.exists():
+                shutil.rmtree(str(lightrag_dir))
+                lightrag_dir.mkdir(exist_ok=True)
+            from src.knowledge import graph_rag
+            graph_rag._rag_instance = None
+            graph_rag._initialized = False
+            return
+
         from src.knowledge.graph_rag import get_lightrag
         rag = await get_lightrag()
         while _kg_delete_queue:
             doc_id = _kg_delete_queue.pop(0)
             try:
-                logging.getLogger(__name__).info(f"KG cleanup: deleting {doc_id} ({len(_kg_delete_queue)} remaining)")
-                await rag.adelete_by_doc_id(doc_id)
+                _logger.info(f"KG cleanup: deleting {doc_id} ({len(_kg_delete_queue)} remaining)")
+                await asyncio.wait_for(rag.adelete_by_doc_id(doc_id), timeout=120)
+            except asyncio.TimeoutError:
+                _logger.warning(f"KG delete timed out for {doc_id}, skipping")
             except Exception as e:
-                logging.getLogger(__name__).warning(f"KG delete failed for {doc_id}: {e}")
+                _logger.warning(f"KG delete failed for {doc_id}: {e}")
     finally:
         _kg_delete_running = False
 
