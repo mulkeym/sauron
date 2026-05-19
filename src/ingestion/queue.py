@@ -15,6 +15,7 @@ class IngestStep(StrEnum):
     QUEUED = "queued"
     PARSING = "parsing"
     CATEGORIZING = "categorizing"
+    EXTRACTING_METADATA = "extracting_metadata"
     CHUNKING = "chunking"
     EMBEDDING = "embedding"
     STORING = "storing"
@@ -33,6 +34,7 @@ class IngestJob:
     category: str = ""
     dataset_id: int = 0
     source_url: str = ""
+    metadata_tags: dict = field(default_factory=dict)
     auto_categorize: bool = True
     build_graph: bool = True
     step: IngestStep = IngestStep.QUEUED
@@ -207,19 +209,20 @@ class IngestQueue:
             if cat_record and cat_record.acl_groups:
                 job.acl_groups = cat_record.acl_groups
 
-        # Generate LLM document summary for contextual enrichment
-        self.update_step(job.job_id, IngestStep.CHUNKING, "Generating document summary")
-        doc_summary = ""
-        try:
-            from src.generation.llm_client import generate as llm_generate
-            doc_summary = await asyncio.to_thread(
-                llm_generate,
-                system_prompt="Summarize ALL items in this document in 2-4 sentences. List EVERY company, contract, or award mentioned — do not omit any. Include names, amounts, and dates.",
-                user_prompt=parsed.text[:6000],
-                temperature=0.0, max_tokens=1024,
-            )
-        except Exception:
-            pass
+        # Extract structured metadata (includes summary)
+        self.update_step(job.job_id, IngestStep.EXTRACTING_METADATA, "Extracting document metadata...")
+        from src.ingestion.metadata_extractor import extract_metadata
+        metadata = await asyncio.to_thread(extract_metadata, parsed.text, parsed.filename)
+        doc_summary = metadata.get("summary", "")
+        job.metadata_tags = metadata
+
+        # Log extraction results
+        field_counts = {k: len(v) for k, v in metadata.items() if isinstance(v, list) and v}
+        if field_counts:
+            counts_str = ", ".join(f"{v} {k}" for k, v in field_counts.items())
+            self.update_step(job.job_id, IngestStep.EXTRACTING_METADATA, f"Extracted: {counts_str}")
+        else:
+            self.update_step(job.job_id, IngestStep.EXTRACTING_METADATA, "No metadata extracted")
 
         # Step 3-5: Multi-pass chunking, embedding, and storage
         CHUNK_TIERS = [
@@ -259,12 +262,29 @@ class IngestQueue:
                 chunks = tier_chunks  # use medium tier for entity extraction
                 job.chunk_count = total_chunks  # show count in UI immediately
 
+        # Embed the summary as a dedicated "summary" tier for fast document discovery
+        if doc_summary:
+            self.update_step(job.job_id, IngestStep.EMBEDDING, "Embedding document summary")
+            summary_text = f"{doc_context}\n{doc_summary}"
+            summary_vector = await asyncio.to_thread(embed_texts, [summary_text])
+            if summary_vector:
+                from src.retrieval.models import ChunkMetadata
+                summary_meta = ChunkMetadata(
+                    doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
+                    chunk_index=-1, start_char=0, acl_groups=job.acl_groups,
+                    category=category, chunk_size_tier="summary",
+                )
+                await asyncio.to_thread(
+                    vector_store.upsert,
+                    texts=[summary_text], vectors=summary_vector, metadatas=[summary_meta],
+                )
+
         await metadata_store.add_document(
             doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
             acl_groups=job.acl_groups, chunk_count=total_chunks,
             uploaded_by=job.uploaded_by, category=category,
             content_hash=content_hash, dataset_id=job.dataset_id,
-            source_url=job.source_url,
+            source_url=job.source_url, summary=doc_summary, metadata_tags=job.metadata_tags,
         )
         if category and category != "uncategorized":
             existing = await metadata_store.get_category(category)
