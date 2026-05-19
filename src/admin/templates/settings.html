@@ -199,6 +199,13 @@ function generateApiKey() {
 </form>
 
 <div class="settings-section" style="margin-top:1.5rem;">
+    <h2>Query Performance Metrics</h2>
+    <p class="section-desc">Track retrieval accuracy and efficiency. MAP Precision = % of documents the LLM read that were actually relevant. Higher is better (less wasted LLM calls).</p>
+    <div id="metrics-dashboard" hx-get="/admin/api/settings/query-metrics" hx-trigger="load" hx-swap="innerHTML">
+    </div>
+</div>
+
+<div class="settings-section" style="margin-top:1.5rem;">
     <h2>Run Entity Reconciliation</h2>
     <p class="section-desc">Scan all entities for duplicates. High-confidence matches merge automatically, others go to the Knowledge Graph page for review.</p>
     <button type="button" hx-post="/admin/api/settings/reconcile" hx-target="#reconcile-status" hx-swap="innerHTML">Run Now</button>

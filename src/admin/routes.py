@@ -743,6 +743,15 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 </div>"""
 
                 _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+                # Log cache hit metric
+                try:
+                    from src.retrieval.metrics import QueryMetricsCollector
+                    m = QueryMetricsCollector(query_text=question, user_groups=user_groups, cache_hit=True,
+                        total_time_seconds=round(cache_time + judge_time, 2), docs_cited=len(citations))
+                    m.log_summary()
+                    await m.save()
+                except Exception:
+                    pass
                 return
 
             # No cache hit — proceed with full pipeline
@@ -980,6 +989,47 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     answer=answer, citations=citation_dicts,
                     user_groups=user_groups, source_doc_ids=source_ids,
                 )
+            except Exception:
+                pass
+
+            # Log query metrics
+            try:
+                from src.retrieval.metrics import QueryMetricsCollector
+                SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
+                metrics = QueryMetricsCollector(
+                    query_text=question,
+                    query_type=query_type,
+                    strategy_used=query_type,  # sweep, lookup, etc.
+                    user_groups=user_groups,
+                    docs_cited=len(citations),
+                    answer_length=len(answer),
+                    context_chars=len(context) if 'context' in dir() else 0,
+                    cache_hit=False,
+                    total_time_seconds=round(total_time, 2),
+                )
+                # Count docs from chunks
+                all_doc_ids = {c.metadata.doc_id for c in chunks if c.metadata.doc_id not in SYNTHETIC_IDS}
+                metrics.docs_discovered = len(all_doc_ids)
+
+                # Check map-reduce results for MAP precision
+                mr_chunks = [c for c in chunks if c.metadata.doc_id == "map-reduce"]
+                if mr_chunks:
+                    mr_text = mr_chunks[0].text
+                    # Count "[filename]:" entries in map-reduce output
+                    import re
+                    mr_entries = re.findall(r'\[([^\]]+\.(?:md|pdf|docx))\]:', mr_text)
+                    metrics.docs_relevant = len(set(mr_entries))
+                    metrics.docs_map_read = metrics.docs_discovered  # approximate
+
+                # Extract step timings
+                for s in steps_data:
+                    if s["step"] == "retrieve":
+                        metrics.retrieval_time = s["time"]
+                    elif s["step"] == "synthesize":
+                        metrics.synthesis_time = s["time"]
+
+                metrics.log_summary()
+                await metrics.save()
             except Exception:
                 pass
 
@@ -1758,6 +1808,64 @@ async def test_embedding_connection(
             return HTMLResponse(f'<span class="status-ok">Loaded locally. Model: {model_name}, Dimension: {dim}</span>')
     except Exception as e:
         return HTMLResponse(f'<span class="status-err">Failed: {e}</span>')
+
+
+@router.get("/api/settings/query-metrics")
+async def query_metrics_dashboard():
+    """Return query performance metrics summary."""
+    from src.db.models import QueryMetrics
+    from sqlalchemy import select, func
+    store = get_metadata_store()
+    try:
+        async with store.session_factory() as session:
+            # Recent queries
+            result = await session.execute(
+                select(QueryMetrics).order_by(QueryMetrics.created_at.desc()).limit(50)
+            )
+            rows = list(result.scalars().all())
+
+        if not rows:
+            return HTMLResponse("<p>No query metrics yet. Run some queries in the playground to collect data.</p>")
+
+        # Summary stats
+        total = len(rows)
+        non_cache = [r for r in rows if not r.cache_hit]
+        avg_precision = sum(r.map_precision for r in non_cache) / len(non_cache) if non_cache else 0
+        avg_time = sum(r.total_time_seconds for r in non_cache) / len(non_cache) if non_cache else 0
+        avg_docs_read = sum(r.docs_map_read for r in non_cache) / len(non_cache) if non_cache else 0
+        avg_docs_cited = sum(r.docs_cited for r in non_cache) / len(non_cache) if non_cache else 0
+        cache_hits = sum(1 for r in rows if r.cache_hit)
+
+        summary = f"""<div style="display:grid; grid-template-columns:repeat(5,1fr); gap:1rem; margin-bottom:1rem;">
+            <div><strong>{total}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Total Queries</span></div>
+            <div><strong>{avg_precision:.0%}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg MAP Precision</span></div>
+            <div><strong>{avg_time:.1f}s</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg Query Time</span></div>
+            <div><strong>{avg_docs_read:.0f}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg Docs MAP'd</span></div>
+            <div><strong>{cache_hits}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Cache Hits</span></div>
+        </div>"""
+
+        # Recent queries table
+        table_rows = ""
+        for r in rows[:20]:
+            precision = f"{r.map_precision:.0%}" if r.docs_map_read > 0 else "—"
+            strategy = r.query_type or r.strategy_used or "—"
+            table_rows += f"""<tr>
+                <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{r.query_text[:80]}</td>
+                <td>{strategy}</td>
+                <td>{'Cache' if r.cache_hit else f'{r.docs_map_read}→{r.docs_relevant}→{r.docs_cited}'}</td>
+                <td>{precision}</td>
+                <td>{r.total_time_seconds}s</td>
+                <td>{r.created_at.strftime('%m-%d %H:%M') if r.created_at else ''}</td>
+            </tr>"""
+
+        table = f"""<table style="font-size:0.85rem;">
+            <thead><tr><th>Query</th><th>Strategy</th><th>Docs (MAP→Rel→Cited)</th><th>Precision</th><th>Time</th><th>When</th></tr></thead>
+            <tbody>{table_rows}</tbody>
+        </table>"""
+
+        return HTMLResponse(summary + table)
+    except Exception as e:
+        return HTMLResponse(f"<p>Error loading metrics: {e}</p>")
 
 
 @router.post("/api/settings/purge-cache")

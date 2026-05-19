@@ -155,3 +155,30 @@ class Relationship(Base):
     relationship_type: Mapped[str] = mapped_column(String, nullable=False)
     doc_id: Mapped[str] = mapped_column(String, default="")
     context_snippet: Mapped[str] = mapped_column(String, default="")
+
+
+class QueryMetrics(Base):
+    __tablename__ = "query_metrics"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    query_text: Mapped[str] = mapped_column(String, nullable=False)
+    query_type: Mapped[str] = mapped_column(String, default="")  # sweep, lookup, etc.
+    strategy_used: Mapped[str] = mapped_column(String, default="")
+    user_groups: Mapped[list] = mapped_column(JSON, default=list)
+    docs_discovered: Mapped[int] = mapped_column(default=0)
+    docs_map_read: Mapped[int] = mapped_column(default=0)
+    docs_relevant: Mapped[int] = mapped_column(default=0)
+    docs_cited: Mapped[int] = mapped_column(default=0)
+    map_precision: Mapped[float] = mapped_column(default=0.0)
+    total_time_seconds: Mapped[float] = mapped_column(default=0.0)
+    retrieval_time: Mapped[float] = mapped_column(default=0.0)
+    map_time: Mapped[float] = mapped_column(default=0.0)
+    synthesis_time: Mapped[float] = mapped_column(default=0.0)
+    context_chars: Mapped[int] = mapped_column(default=0)
+    answer_length: Mapped[int] = mapped_column(default=0)
+    feedback_boost_applied: Mapped[int] = mapped_column(default=0)
+    prf_triggered: Mapped[bool] = mapped_column(default=False)
+    cache_hit: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
