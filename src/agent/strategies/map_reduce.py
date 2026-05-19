@@ -38,7 +38,7 @@ Extractions:
 async def retrieve_map_reduce(
     state: AgentState,
     vector_store: VectorStore,
-    top_k: int = 100,
+    top_k: int = 500,
 ) -> dict:
     """Map-reduce: extract from each doc individually, then combine."""
     question = state["question"]
@@ -128,11 +128,19 @@ async def retrieve_map_reduce(
                 scored_docs.append((did, combined))
 
             scored_docs.sort(key=lambda x: x[1], reverse=True)
-            relevant_doc_ids = [did for did, _ in scored_docs[:50]]
+
+            # Relevance-based cutoff instead of hard cap:
+            # Keep all docs above 20% of the top score, plus any with metadata matches
+            if scored_docs:
+                top_score = scored_docs[0][1]
+                threshold = top_score * 0.2 if top_score > 0 else 0
+                relevant_doc_ids = [did for did, score in scored_docs if score >= threshold or score >= 0.1]
+            else:
+                relevant_doc_ids = []
         else:
             relevant_doc_ids = candidate_doc_ids
 
-        logger.info(f"Map-reduce: {len(relevant_doc_ids)} docs after metadata search (from {len(candidate_doc_ids)} candidates)")
+        logger.info(f"Map-reduce: {len(relevant_doc_ids)} docs pass relevance threshold (from {len(candidate_doc_ids)} candidates)")
         for did in relevant_doc_ids:
             logger.info(f"  - {doc_filenames.get(did, did)}")
 

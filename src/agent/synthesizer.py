@@ -56,30 +56,26 @@ def _strip_reasoning_artifacts(text: str) -> str:
 
 def _filter_relevant_chunks(chunks, question):
     """Filter irrelevant chunks using scores — no LLM call needed."""
-    if len(chunks) <= 10:
-        return chunks
+    # Always keep synthetic chunks (map-reduce, knowledge-graph, metadata-context)
+    SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
+    synthetic = [c for c in chunks if c.metadata.doc_id in SYNTHETIC_IDS]
+    regular = [c for c in chunks if c.metadata.doc_id not in SYNTHETIC_IDS]
 
-    # Use the scores from hybrid search / CrossEncoder reranking
-    scored = [c for c in chunks if c.score > 0]
+    if len(regular) <= 10:
+        return synthetic + regular
+
+    # Use scores: keep all chunks above 10% of the top score
+    scored = [c for c in regular if c.score > 0]
     if not scored:
-        return chunks
+        return synthetic + regular
 
-    # Keep chunks above the median score, with a minimum floor
-    scores = sorted([c.score for c in scored], reverse=True)
-    median = scores[len(scores) // 2] if scores else 0
-    threshold = max(median * 0.5, 0.01)  # at least half of median
+    top_score = max(c.score for c in scored)
+    threshold = max(top_score * 0.1, 0.01)
 
-    filtered = [c for c in chunks if c.score >= threshold or c.score == 0]
-    # Also keep any knowledge-graph chunks (score=0.5, doc_id="knowledge-graph")
-    kg_chunks = [c for c in chunks if c.metadata.doc_id == "knowledge-graph"]
-    for kc in kg_chunks:
-        if kc not in filtered:
-            filtered.append(kc)
+    filtered = [c for c in regular if c.score >= threshold or c.score == 0]
 
-    if filtered:
-        logger.info(f"Score filter: {len(chunks)} → {len(filtered)} chunks (threshold: {threshold:.3f})")
-        return filtered
-    return chunks
+    logger.info(f"Score filter: {len(regular)} → {len(filtered)} regular chunks (threshold: {threshold:.3f}, top: {top_score:.3f})")
+    return synthetic + filtered
 
 
 def synthesize_answer(state: AgentState) -> dict:
