@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     feedback_penalty_irrelevant: float = 0.1
     feedback_decay_days: int = 90
 
+    # Pseudo-relevance feedback
+    prf_enabled: bool = True
+    prf_top_k: int = 5  # number of top results to extract terms from
+    prf_max_terms: int = 10  # max terms to append to expanded query
+
     # Chunking
     chunk_size: int = 1024
     chunk_overlap: int = 100
