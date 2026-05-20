@@ -1057,9 +1057,14 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     mr_text = mr_chunks[0].text
                     mr_filenames = set(_re.findall(r'\[([^\]]+\.(?:md|pdf|docx))\]:', mr_text))
                     mr_relevant_ids = [fn_to_docid[fn] for fn in mr_filenames if fn in fn_to_docid]
-                    # Discovered docs NOT in relevant or cited = irrelevant
-                    relevant_set = set(mr_relevant_ids) | set(cited_ids)
+                    # Discovered docs NOT in MAP-relevant results = irrelevant
+                    # (Don't include cited_ids — citations come from sweep raw chunks too)
+                    relevant_set = set(mr_relevant_ids)
                     mr_irrelevant_ids = [did for did in doc_fn_map if did not in relevant_set]
+                    import logging as _fb_log
+                    _fb_log.getLogger(__name__).info(
+                        f"Feedback: {len(mr_relevant_ids)} relevant, {len(mr_irrelevant_ids)} irrelevant, {len(cited_ids)} cited"
+                    )
 
                 await log_feedback(
                     query_text=question,
