@@ -1037,15 +1037,29 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             try:
                 from src.retrieval.feedback import log_feedback
                 SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
+
                 cited_ids = [c.doc_id for c in citations]
-                mr_chunks = [c for c in chunks if c.metadata.doc_id == "map-reduce"]
+
+                # Build filename→doc_id map
+                fn_to_docid = {}
+                doc_fn_map = {}
+                for c in chunks:
+                    if c.metadata.doc_id not in SYNTHETIC_IDS:
+                        fn_to_docid[c.metadata.filename] = c.metadata.doc_id
+                        doc_fn_map[c.metadata.doc_id] = c.metadata.filename
+
+                # Parse map-reduce to find relevant vs irrelevant docs
                 mr_relevant_ids = []
+                mr_irrelevant_ids = []
+                mr_chunks = [c for c in chunks if c.metadata.doc_id == "map-reduce"]
                 if mr_chunks:
                     import re as _re
                     mr_text = mr_chunks[0].text
-                    mr_filenames = _re.findall(r'\[([^\]]+\.(?:md|pdf|docx))\]:', mr_text)
-                    mr_relevant_ids = list(set(mr_filenames))
-                doc_fn_map = {c.metadata.doc_id: c.metadata.filename for c in chunks if c.metadata.doc_id not in SYNTHETIC_IDS}
+                    mr_filenames = set(_re.findall(r'\[([^\]]+\.(?:md|pdf|docx))\]:', mr_text))
+                    mr_relevant_ids = [fn_to_docid[fn] for fn in mr_filenames if fn in fn_to_docid]
+                    # Discovered docs NOT in relevant or cited = irrelevant
+                    relevant_set = set(mr_relevant_ids) | set(cited_ids)
+                    mr_irrelevant_ids = [did for did in doc_fn_map if did not in relevant_set]
 
                 await log_feedback(
                     query_text=question,
@@ -1054,7 +1068,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     user_groups=user_groups,
                     cited_doc_ids=cited_ids,
                     relevant_doc_ids=mr_relevant_ids,
-                    irrelevant_doc_ids=[],
+                    irrelevant_doc_ids=mr_irrelevant_ids,
                     doc_filenames=doc_fn_map,
                 )
             except Exception:
