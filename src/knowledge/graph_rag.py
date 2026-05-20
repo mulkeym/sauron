@@ -125,10 +125,41 @@ async def insert_document(text: str, doc_id: str = "", filename: str = "") -> st
             file_paths=[filename] if filename else None,
         )
         logger.info(f"LightRAG insert complete: {filename or doc_id}")
+
+        # Clear cached query responses since graph data changed.
+        # Keep extract/summary caches (expensive, chunk-specific, still valid).
+        _invalidate_query_cache()
+
         return result
     except Exception as e:
         logger.error(f"LightRAG insert failed: {e}")
         return f"error: {e}"
+
+
+def _invalidate_query_cache():
+    """Remove only 'query' entries from LightRAG's LLM cache.
+
+    Extract and summary caches are tied to specific chunks and remain valid
+    after new documents are added. Query caches contain stale answers that
+    may not reflect newly ingested data.
+    """
+    import json
+    from pathlib import Path
+
+    cache_file = Path("data/lightrag/kv_store_llm_response_cache.json")
+    if not cache_file.exists():
+        return
+
+    try:
+        data = json.loads(cache_file.read_text())
+        before = len(data)
+        data = {k: v for k, v in data.items() if v.get("cache_type") != "query"}
+        removed = before - len(data)
+        if removed:
+            cache_file.write_text(json.dumps(data, indent=2))
+            logger.info(f"Invalidated {removed} query cache entries (kept {len(data)} extract/summary entries)")
+    except Exception as e:
+        logger.warning(f"Query cache invalidation failed: {e}")
 
 
 async def _get_allowed_filenames(user_groups: list[str]) -> set[str] | None:
