@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     llm_max_context: int = 200000  # max chars sent to LLM for synthesis (~50K tokens for 256K context models)
     llm_max_output_tokens: int = 32768  # max tokens the LLM can generate in a response
 
+    # Relevance feedback
+    feedback_enabled: bool = True
+    feedback_similarity_threshold: float = 0.85
+    feedback_boost_cited: float = 0.3
+    feedback_boost_relevant: float = 0.2
+    feedback_penalty_irrelevant: float = 0.1
+    feedback_decay_days: int = 90
+
     # Chunking
     chunk_size: int = 1024
     chunk_overlap: int = 100

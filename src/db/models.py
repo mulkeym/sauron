@@ -182,3 +182,22 @@ class QueryMetrics(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class QueryFeedback(Base):
+    __tablename__ = "query_feedback"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    query_hash: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    query_text: Mapped[str] = mapped_column(String, nullable=False)
+    query_vector_blob: Mapped[bytes] = mapped_column(default=b"")
+    query_type: Mapped[str] = mapped_column(String, default="")
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    filename: Mapped[str] = mapped_column(String, default="")
+    relevance_score: Mapped[float] = mapped_column(default=0.0)
+    was_cited: Mapped[bool] = mapped_column(default=False)
+    was_in_map_reduce: Mapped[bool] = mapped_column(default=False)
+    user_groups: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
