@@ -138,7 +138,7 @@ async def retrieve_map_reduce(
 
         # Relevance-based cutoff:
         # - Keep docs above 20% of top score
-        # - Exclude docs with strong negative feedback (penalized below -0.15)
+        # - Exclude docs with ANY negative feedback (one irrelevant signal is enough)
         if scored_docs:
             top_score = scored_docs[0][1]
             threshold = top_score * 0.2 if top_score > 0 else 0
@@ -146,8 +146,8 @@ async def retrieve_map_reduce(
             skipped_by_feedback = 0
             for did, score in scored_docs:
                 fb = feedback_boosts.get(did, 0)
-                if fb < -0.15:
-                    # Strong negative feedback — skip this doc entirely
+                if fb < 0:
+                    # Negative feedback — skip this doc
                     skipped_by_feedback += 1
                     continue
                 if score >= threshold or score >= 0.1:
