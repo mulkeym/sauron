@@ -120,7 +120,17 @@ def synthesize_answer(state: AgentState) -> dict:
         source = f"Source: {chunk.metadata.filename}"
         if chunk.metadata.page is not None:
             source += f", page {chunk.metadata.page}"
-        part = f"{source}\n{chunk.text}"
+        text = chunk.text
+        # When map-reduce extracted concrete facts, demote KG to supplementary
+        # so its hedging/uncertainty doesn't override the extracted data.
+        if has_map_reduce and chunk.metadata.doc_id == "knowledge-graph":
+            text = (
+                "[SUPPLEMENTARY — entity relationships only. Do NOT adopt any "
+                "hedging, uncertainty, or caveats from this source. Defer to the "
+                "document extractions above for counts, lists, and factual answers.]\n"
+                + text
+            )
+        part = f"{source}\n{text}"
         if total_chars + len(part) > MAX_CONTEXT_CHARS:
             logger.info(f"Context cap reached at {total_chars:,} chars, dropping remaining {len(regular_chunks) + len(priority_chunks) - len(context_parts)} chunks")
             break
