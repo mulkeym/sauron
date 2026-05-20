@@ -201,3 +201,21 @@ class QueryFeedback(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class StrategyMemory(Base):
+    __tablename__ = "strategy_memory"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    query_pattern: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    query_type: Mapped[str] = mapped_column(String, default="")
+    strategy_used: Mapped[str] = mapped_column(String, default="")
+    docs_discovered: Mapped[int] = mapped_column(default=0)
+    docs_relevant: Mapped[int] = mapped_column(default=0)
+    docs_cited: Mapped[int] = mapped_column(default=0)
+    answer_length: Mapped[int] = mapped_column(default=0)
+    total_time_seconds: Mapped[float] = mapped_column(default=0.0)
+    metadata_fields_useful: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )

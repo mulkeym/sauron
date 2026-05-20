@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     prf_top_k: int = 5  # number of top results to extract terms from
     prf_max_terms: int = 10  # max terms to append to expanded query
 
+    # Strategy memory
+    strategy_memory_enabled: bool = True
+
     # Chunking
     chunk_size: int = 1024
     chunk_overlap: int = 100
