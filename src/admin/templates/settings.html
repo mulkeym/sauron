@@ -217,6 +217,14 @@ function generateApiKey() {
                 </select>
                 <span style="font-size:0.8rem; color:#6b7280;">Expand queries with terms from top results for better recall</span>
             </div>
+            <div class="form-group">
+                <label for="strategy_memory_enabled">Strategy Memory</label>
+                <select id="strategy_memory_enabled" name="strategy_memory_enabled">
+                    <option value="true" {{ 'selected' if settings.strategy_memory_enabled }}>Enabled</option>
+                    <option value="false" {{ 'selected' if not settings.strategy_memory_enabled }}>Disabled</option>
+                </select>
+                <span style="font-size:0.8rem; color:#6b7280;">Learn which strategy works best for each query pattern</span>
+            </div>
         </div>
     </div>
 

@@ -180,6 +180,7 @@ SAURON learns from past queries to improve future retrieval accuracy:
 
 - **Relevance Feedback** -- after each query, logs which documents were cited, relevant, or irrelevant. Similar future queries boost useful docs and exclude irrelevant ones (~50% speed improvement on repeated patterns)
 - **Pseudo-Relevance Feedback (PRF)** -- expands queries using key terms from top initial results (organizations, identifiers, topics). Improves first-time query recall without needing history
+- **Strategy Memory** -- learns which retrieval strategy (sweep, lookup, etc.) works best for each query pattern. Tracks precision per pattern over time
 - **Decay** -- feedback older than 90 days loses weight, preventing stale patterns from dominating
 - **Metrics Dashboard** -- Settings page shows MAP Precision (% of docs the LLM read that were useful), query timing, and feedback signal counts
 

@@ -1084,6 +1084,22 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             except Exception:
                 pass
 
+            # Log strategy memory
+            try:
+                from src.retrieval.strategy_memory import log_strategy_result
+                await log_strategy_result(
+                    query_text=question,
+                    query_type=query_type,
+                    strategy_used=query_type,
+                    docs_discovered=len({c.metadata.doc_id for c in chunks if c.metadata.doc_id not in {"map-reduce", "knowledge-graph", "metadata-context"}}),
+                    docs_relevant=len(mr_relevant_ids) if mr_relevant_ids else 0,
+                    docs_cited=len(citations),
+                    answer_length=len(answer),
+                    total_time_seconds=round(total_time, 2),
+                )
+            except Exception:
+                pass
+
         except Exception as e:
             import traceback
             _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": f"{e}\n{traceback.format_exc()}"}
@@ -1679,6 +1695,7 @@ async def save_settings(
     feedback_enabled: bool = Form(True),
     feedback_similarity_threshold: float = Form(0.85),
     prf_enabled: bool = Form(True),
+    strategy_memory_enabled: bool = Form(True),
 ):
     # Update in-memory settings
     if vllm_base_url:
@@ -1704,6 +1721,7 @@ async def save_settings(
     settings.feedback_enabled = feedback_enabled
     settings.feedback_similarity_threshold = feedback_similarity_threshold
     settings.prf_enabled = prf_enabled
+    settings.strategy_memory_enabled = strategy_memory_enabled
 
     # Persist to .env file
     env_path = Path(".env")
@@ -1732,6 +1750,7 @@ async def save_settings(
     env_lines["FEEDBACK_ENABLED"] = str(settings.feedback_enabled).lower()
     env_lines["FEEDBACK_SIMILARITY_THRESHOLD"] = str(settings.feedback_similarity_threshold)
     env_lines["PRF_ENABLED"] = str(settings.prf_enabled).lower()
+    env_lines["STRATEGY_MEMORY_ENABLED"] = str(settings.strategy_memory_enabled).lower()
 
     env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
 
@@ -1923,6 +1942,24 @@ async def query_metrics_dashboard():
                         <div><strong>{fb_unique_docs}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Unique Docs Seen</span></div>
                         <div><strong>{fb_cited}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Cited Signals</span></div>
                         <div><strong>{fb_irrelevant}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Irrelevant Signals</span></div>
+                    </div>"""
+            except Exception:
+                pass
+
+            # Strategy memory stats
+            try:
+                from src.db.models import StrategyMemory
+                from collections import Counter
+                sm_result = await session.execute(select(StrategyMemory))
+                sm_rows = list(sm_result.scalars().all())
+                if sm_rows:
+                    patterns = len({r.query_pattern for r in sm_rows})
+                    strategies = Counter(r.query_type or r.strategy_used for r in sm_rows)
+                    top_strategy = strategies.most_common(1)[0] if strategies else ("—", 0)
+                    summary += f"""<div style="display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">
+                        <div><strong>{len(sm_rows)}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Strategy Records</span></div>
+                        <div><strong>{patterns}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Unique Patterns</span></div>
+                        <div><strong>{top_strategy[0]} ({top_strategy[1]}x)</strong><br><span style="font-size:0.8rem; color:#6b7280;">Most Used Strategy</span></div>
                     </div>"""
             except Exception:
                 pass
