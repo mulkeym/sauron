@@ -116,21 +116,31 @@ function toggleMeta(id) {
 
 let sortDir = {};
 function sortTable(col) {
-    const table = document.getElementById('doc-table');
-    const tbody = table.querySelector('tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const tbody = document.getElementById('doc-table-body');
+    // Collect document rows paired with their metadata rows
+    const pairs = [];
+    const rows = Array.from(tbody.children);
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.id && row.id.startsWith('meta-')) continue; // skip, handled by pair
+        const metaRow = rows[i + 1] && rows[i + 1].id && rows[i + 1].id.startsWith('meta-') ? rows[i + 1] : null;
+        pairs.push({ doc: row, meta: metaRow });
+    }
 
     sortDir[col] = !sortDir[col];
     const dir = sortDir[col] ? 1 : -1;
 
-    rows.sort((a, b) => {
-        let aVal = a.cells[col]?.textContent.trim() || '';
-        let bVal = b.cells[col]?.textContent.trim() || '';
+    pairs.sort((a, b) => {
+        let aVal = a.doc.cells[col]?.textContent.trim() || '';
+        let bVal = b.doc.cells[col]?.textContent.trim() || '';
         if (col === 6) return (parseInt(aVal) - parseInt(bVal)) * dir;
         return aVal.localeCompare(bVal) * dir;
     });
 
-    rows.forEach(row => tbody.appendChild(row));
+    pairs.forEach(pair => {
+        tbody.appendChild(pair.doc);
+        if (pair.meta) tbody.appendChild(pair.meta);
+    });
 }
 
 function toggleAll(el) {
