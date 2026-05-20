@@ -136,12 +136,24 @@ async def retrieve_map_reduce(
 
         scored_docs.sort(key=lambda x: x[1], reverse=True)
 
-        # Relevance-based cutoff instead of hard cap:
-        # Keep all docs above 20% of the top score, plus any with metadata matches
+        # Relevance-based cutoff:
+        # - Keep docs above 20% of top score
+        # - Exclude docs with strong negative feedback (penalized below -0.15)
         if scored_docs:
             top_score = scored_docs[0][1]
             threshold = top_score * 0.2 if top_score > 0 else 0
-            relevant_doc_ids = [did for did, score in scored_docs if score >= threshold or score >= 0.1]
+            relevant_doc_ids = []
+            skipped_by_feedback = 0
+            for did, score in scored_docs:
+                fb = feedback_boosts.get(did, 0)
+                if fb < -0.15:
+                    # Strong negative feedback — skip this doc entirely
+                    skipped_by_feedback += 1
+                    continue
+                if score >= threshold or score >= 0.1:
+                    relevant_doc_ids.append(did)
+            if skipped_by_feedback:
+                logger.info(f"Map-reduce: feedback excluded {skipped_by_feedback} previously-irrelevant docs")
         else:
             relevant_doc_ids = []
     else:
