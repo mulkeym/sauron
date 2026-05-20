@@ -73,6 +73,34 @@ async def retrieve_map_reduce(
     doc_scores = {c.metadata.doc_id: c.score for c in summary_results}
     logger.info(f"Map-reduce: {len(candidate_doc_ids)} candidate docs from summary/xlarge search")
 
+    # PRF: expand query with terms from top results, search again to find more docs
+    try:
+        from src.retrieval.prf import expand_query_with_prf
+        expanded_query, expanded_vector = await expand_query_with_prf(
+            question, query_vector, user_groups, vector_store, doc_ids,
+        )
+        if expanded_query != question:
+            prf_results = vector_store.search(
+                vector=expanded_vector, user_groups=user_groups,
+                top_k=top_k, tier="summary", doc_ids=doc_ids,
+            )
+            if not prf_results:
+                prf_results = vector_store.hybrid_search(
+                    vector=expanded_vector, text_query=expanded_query,
+                    user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+                )
+            prf_new = 0
+            for c in prf_results:
+                if c.metadata.doc_id not in doc_scores:
+                    candidate_doc_ids.append(c.metadata.doc_id)
+                    doc_filenames[c.metadata.doc_id] = c.metadata.filename
+                    doc_scores[c.metadata.doc_id] = c.score
+                    prf_new += 1
+            if prf_new:
+                logger.info(f"PRF added {prf_new} new candidate docs")
+    except Exception as e:
+        logger.debug(f"PRF skipped: {e}")
+
     # Fetch feedback boosts from past similar queries
     feedback_boosts = {}
     try:

@@ -50,6 +50,33 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     else:
         logger.info(f"Sweep: found {len(relevant_doc_ids)} relevant documents from summary search")
 
+    # PRF: expand query to find more documents
+    try:
+        from src.retrieval.prf import expand_query_with_prf
+        expanded_query, expanded_vector = await expand_query_with_prf(
+            question, query_vector, user_groups, vector_store, doc_ids,
+        )
+        if expanded_query != question:
+            prf_results = vector_store.search(
+                vector=expanded_vector, user_groups=user_groups,
+                top_k=top_k, tier="summary", doc_ids=doc_ids,
+            )
+            if not prf_results:
+                prf_results = vector_store.hybrid_search(
+                    vector=expanded_vector, text_query=expanded_query,
+                    user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
+                )
+            existing = set(relevant_doc_ids)
+            prf_new = 0
+            for c in prf_results:
+                if c.metadata.doc_id not in existing:
+                    relevant_doc_ids.append(c.metadata.doc_id)
+                    prf_new += 1
+            if prf_new:
+                logger.info(f"PRF added {prf_new} new documents to sweep")
+    except Exception as e:
+        logger.debug(f"PRF skipped: {e}")
+
     # Step 2: Retrieve large-tier chunks from relevant documents in parallel
     async def get_doc(doc_id):
         chunks = await asyncio.to_thread(vector_store.get_chunks_by_doc, doc_id, 200, "large")
