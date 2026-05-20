@@ -1702,6 +1702,7 @@ async def save_settings(
     embedding_api_url: str = Form(""),
     embedding_model_name: str = Form(""),
     mcp_port: int = Form(8090),
+    mcp_alt_port: int = Form(8091),
     entity_merge_auto_threshold: float = Form(0.9),
     entity_merge_review_threshold: float = Form(0.7),
     max_parallel_ingestion: int = Form(3),
@@ -1736,6 +1737,7 @@ async def save_settings(
     if embedding_model_name:
         settings.embedding_model_name = embedding_model_name
     settings.mcp_port = mcp_port
+    settings.mcp_alt_port = mcp_alt_port
     settings.entity_merge_auto_threshold = entity_merge_auto_threshold
     settings.entity_merge_review_threshold = entity_merge_review_threshold
     settings.max_parallel_ingestion = max_parallel_ingestion
@@ -1761,6 +1763,7 @@ async def save_settings(
         "embedding_api_url": settings.embedding_api_url,
         "embedding_model_name": settings.embedding_model_name,
         "mcp_port": settings.mcp_port,
+        "mcp_alt_port": settings.mcp_alt_port,
         "entity_merge_auto_threshold": settings.entity_merge_auto_threshold,
         "entity_merge_review_threshold": settings.entity_merge_review_threshold,
         "max_parallel_ingestion": settings.max_parallel_ingestion,

@@ -206,9 +206,18 @@ function generateApiKey() {
 <!-- SECTION 4: SYSTEM -->
 <div class="settings-section">
     <h2>System</h2>
-    <div class="form-group">
-        <label for="mcp_port">MCP Server Port</label>
-        <input type="number" id="mcp_port" name="mcp_port" value="{{ settings.mcp_port }}" placeholder="8090" style="max-width:100px;">
+    <h3>MCP Servers</h3>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="mcp_port">MCP Server Port (SSE)</label>
+            <input type="number" id="mcp_port" name="mcp_port" value="{{ settings.mcp_port }}" placeholder="8090" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Direct MCP clients (SSE transport)</span>
+        </div>
+        <div class="form-group">
+            <label for="mcp_alt_port">MCPO Proxy Port (HTTP)</label>
+            <input type="number" id="mcp_alt_port" name="mcp_alt_port" value="{{ settings.mcp_alt_port }}" placeholder="8091" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">OpenAPI proxy for REST clients (OpenWebUI, etc.)</span>
+        </div>
     </div>
     <div class="form-row">
         <div class="form-group">
