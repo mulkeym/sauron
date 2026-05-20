@@ -59,6 +59,11 @@
             </div>
         </div>
         <div class="form-group">
+            <label for="conn_download_types">Download File Types (comma-separated, optional)</label>
+            <input type="text" id="conn_download_types" name="download_file_types" placeholder="pdf, docx, xlsx">
+            <span style="font-size:0.8rem; color:#6b7280;">Only ingest linked files of these types. Pages are still crawled for links but not ingested. Leave blank to ingest everything.</span>
+        </div>
+        <div class="form-group">
             <label for="conn_extra_urls">Additional URLs (one per line)</label>
             <textarea id="conn_extra_urls" name="additional_urls" rows="3" placeholder="https://example.com/page1&#10;https://example.com/page2" style="width:100%; max-width:700px; padding:0.5rem 0.75rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.9rem; font-family:inherit;"></textarea>
             <span style="font-size:0.8rem; color:#6b7280;">Extra seed URLs to crawl alongside the base URL.</span>
@@ -94,7 +99,7 @@
             </td>
         </tr>
         <tr id="edit-{{ c.id }}" style="display:none;">
-            <td colspan="7" style="background:#f9fafb; padding:1rem;">
+            <td colspan="7" style="background:var(--bg-card); padding:1rem;">
                 <form hx-post="/admin/api/connectors/{{ c.id }}/update" hx-target="#edit-status-{{ c.id }}" hx-swap="innerHTML">
                     <div class="form-row">
                         <div class="form-group">
@@ -145,6 +150,11 @@
                             <label>Max Pages</label>
                             <input type="number" name="max_pages" value="{{ c.max_pages }}">
                         </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Download File Types (comma-separated, optional)</label>
+                        <input type="text" name="download_file_types" value="{{ (c.download_file_types or []) | join(', ') }}">
+                        <span style="font-size:0.8rem; color:#6b7280;">Only ingest linked files of these types. Leave blank to ingest everything.</span>
                     </div>
                     <div class="form-group">
                         <label>Additional URLs (one per line)</label>
