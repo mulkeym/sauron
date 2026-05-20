@@ -1033,6 +1033,33 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             except Exception:
                 pass
 
+            # Log relevance feedback for adaptive retrieval
+            try:
+                from src.retrieval.feedback import log_feedback
+                SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
+                cited_ids = [c.doc_id for c in citations]
+                mr_chunks = [c for c in chunks if c.metadata.doc_id == "map-reduce"]
+                mr_relevant_ids = []
+                if mr_chunks:
+                    import re as _re
+                    mr_text = mr_chunks[0].text
+                    mr_filenames = _re.findall(r'\[([^\]]+\.(?:md|pdf|docx))\]:', mr_text)
+                    mr_relevant_ids = list(set(mr_filenames))
+                doc_fn_map = {c.metadata.doc_id: c.metadata.filename for c in chunks if c.metadata.doc_id not in SYNTHETIC_IDS}
+
+                await log_feedback(
+                    query_text=question,
+                    query_vector=query_vector,
+                    query_type=query_type,
+                    user_groups=user_groups,
+                    cited_doc_ids=cited_ids,
+                    relevant_doc_ids=mr_relevant_ids,
+                    irrelevant_doc_ids=[],
+                    doc_filenames=doc_fn_map,
+                )
+            except Exception:
+                pass
+
         except Exception as e:
             import traceback
             _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": f"{e}\n{traceback.format_exc()}"}

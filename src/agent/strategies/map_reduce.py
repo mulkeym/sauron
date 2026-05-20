@@ -73,6 +73,14 @@ async def retrieve_map_reduce(
     doc_scores = {c.metadata.doc_id: c.score for c in summary_results}
     logger.info(f"Map-reduce: {len(candidate_doc_ids)} candidate docs from summary/xlarge search")
 
+    # Fetch feedback boosts from past similar queries
+    feedback_boosts = {}
+    try:
+        from src.retrieval.feedback import get_feedback_boosts
+        feedback_boosts = await get_feedback_boosts(query_vector, user_groups)
+    except Exception:
+        pass
+
     # Phase 2: Also search metadata for keyword matches to catch docs that
     # vector search missed (different terminology, lower embedding similarity)
     metadata_store = None
@@ -123,7 +131,7 @@ async def retrieve_map_reduce(
                             meta_score += 2
                         elif val and any(w in val.lower() for w in q_words):
                             meta_score += 1
-            combined = doc_scores.get(did, 0) + (meta_score * 0.1)
+            combined = doc_scores.get(did, 0) + (meta_score * 0.1) + feedback_boosts.get(did, 0)
             scored_docs.append((did, combined))
 
         scored_docs.sort(key=lambda x: x[1], reverse=True)
@@ -137,7 +145,12 @@ async def retrieve_map_reduce(
         else:
             relevant_doc_ids = []
     else:
-        relevant_doc_ids = candidate_doc_ids
+        if feedback_boosts:
+            scored = [(did, doc_scores.get(did, 0) + feedback_boosts.get(did, 0)) for did in candidate_doc_ids]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            relevant_doc_ids = [did for did, _ in scored]
+        else:
+            relevant_doc_ids = candidate_doc_ids
 
     # Merge date-matched docs into the list
     if date_filter_docs:
