@@ -613,25 +613,40 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             return detail
         elif node_name == "retrieve":
             rc = output.get("retrieved_chunks", [])
-            detail = f"<strong>Chunks retrieved:</strong> {len(rc)}"
-            if rc:
-                # Show source documents
-                seen = set()
-                docs_list = []
-                for c in rc:
-                    fn = c.metadata.filename if hasattr(c, 'metadata') else ''
-                    if fn and fn not in seen and fn != "map_reduce_synthesis":
-                        seen.add(fn)
-                        docs_list.append(fn)
-                if docs_list:
-                    detail += f"<br><strong>Documents ({len(docs_list)}):</strong> " + ", ".join(docs_list[:15])
-                    if len(docs_list) > 15:
-                        detail += f" ... +{len(docs_list)-15} more"
-                # Show map-reduce synthesis if present
-                mr_chunks = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == "map_reduce_synthesis"]
-                if mr_chunks:
-                    mr_text = mr_chunks[0].text
-                    detail += f'<br><br><details open><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{_h.escape(mr_text)}</pre></details>'
+            SYNTHETIC = {"map-reduce", "knowledge-graph", "metadata-context"}
+            regular = [c for c in rc if hasattr(c, 'metadata') and c.metadata.doc_id not in SYNTHETIC]
+            synthetic = [c for c in rc if hasattr(c, 'metadata') and c.metadata.doc_id in SYNTHETIC]
+
+            # Group regular chunks by document
+            from collections import OrderedDict
+            docs = OrderedDict()
+            for c in regular:
+                fn = c.metadata.filename
+                if fn not in docs:
+                    docs[fn] = []
+                docs[fn].append(c)
+
+            detail = f"<strong>Chunks retrieved:</strong> {len(regular)} from {len(docs)} documents"
+
+            # Each document as a collapsible section with its chunks
+            for fn, chunks_list in docs.items():
+                chunks_list.sort(key=lambda c: c.metadata.chunk_index)
+                top_score = max(c.score for c in chunks_list) if chunks_list else 0
+                tier = getattr(chunks_list[0].metadata, 'chunk_size_tier', '')
+                tier_label = f" [{tier}]" if tier else ''
+                header = f"{fn}{tier_label} — {len(chunks_list)} chunks, relevance: {top_score:.2f}"
+                chunks_html = ""
+                for c in chunks_list:
+                    snippet = _h.escape(c.text)
+                    page = f" (page {c.metadata.page})" if c.metadata.page else ""
+                    chunks_html += f'<div style="margin:0.3rem 0; padding:0.4rem 0.6rem; background:#1e293b; border-radius:4px; font-size:0.8rem;"><strong>Chunk {c.metadata.chunk_index}{page}</strong> <span style="opacity:0.6;">score: {c.score:.3f}</span><pre style="white-space:pre-wrap; margin:0.2rem 0 0 0; color:#e2e8f0;">{snippet}</pre></div>'
+                detail += f'<details style="margin-top:0.4rem;"><summary style="cursor:pointer; font-weight:600; font-size:0.9rem;">{_h.escape(header)}</summary>{chunks_html}</details>'
+
+            # Show map-reduce synthesis if present
+            mr_chunks = [c for c in synthetic if c.metadata.doc_id == "map-reduce"]
+            if mr_chunks:
+                mr_text = mr_chunks[0].text
+                detail += f'<br><details open><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{_h.escape(mr_text)}</pre></details>'
             return detail
         elif node_name == "enrich":
             rc = output.get("retrieved_chunks", [])
@@ -910,24 +925,37 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     return detail
                 elif step_name == "retrieve":
                     rc = output.get("retrieved_chunks", [])
-                    attempts = output.get("retrieval_attempts", 0)
-                    detail = f"<strong>Chunks retrieved:</strong> {len(rc)}<br><strong>Attempts:</strong> {attempts}<br>"
-                    if rc:
-                        detail += "<strong>Sources:</strong><ul>"
-                        seen = set()
-                        for c in rc:
-                            fn = c.metadata.filename if hasattr(c, 'metadata') else str(c.get('metadata', {}).get('filename', ''))
-                            score = c.score if hasattr(c, 'score') else ''
-                            key = fn
-                            if key not in seen and fn != "map_reduce_synthesis":
-                                seen.add(key)
-                                detail += f"<li>{fn} (relevance: {score:.2f})</li>" if score else f"<li>{fn}</li>"
-                        detail += "</ul>"
-                        # Show map-reduce synthesis content
-                        mr_chunks = [c for c in rc if hasattr(c, 'metadata') and c.metadata.filename == "map_reduce_synthesis"]
-                        if mr_chunks:
-                            mr_text = mr_chunks[0].text
-                            detail += f'<details style="margin-top:0.5rem;"><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{html_mod.escape(mr_text)}</pre></details>'
+                    SYNTHETIC = {"map-reduce", "knowledge-graph", "metadata-context"}
+                    regular = [c for c in rc if hasattr(c, 'metadata') and c.metadata.doc_id not in SYNTHETIC]
+                    synthetic = [c for c in rc if hasattr(c, 'metadata') and c.metadata.doc_id in SYNTHETIC]
+
+                    from collections import OrderedDict
+                    docs = OrderedDict()
+                    for c in regular:
+                        fn = c.metadata.filename
+                        if fn not in docs:
+                            docs[fn] = []
+                        docs[fn].append(c)
+
+                    detail = f"<strong>Chunks retrieved:</strong> {len(regular)} from {len(docs)} documents"
+
+                    for fn, chunks_list in docs.items():
+                        chunks_list.sort(key=lambda c: c.metadata.chunk_index)
+                        top_score = max(c.score for c in chunks_list) if chunks_list else 0
+                        tier = getattr(chunks_list[0].metadata, 'chunk_size_tier', '')
+                        tier_label = f" [{tier}]" if tier else ''
+                        header = f"{fn}{tier_label} — {len(chunks_list)} chunks, relevance: {top_score:.2f}"
+                        chunks_html = ""
+                        for c in chunks_list:
+                            snippet = html_mod.escape(c.text)
+                            page = f" (page {c.metadata.page})" if c.metadata.page else ""
+                            chunks_html += f'<div style="margin:0.3rem 0; padding:0.4rem 0.6rem; background:#1e293b; border-radius:4px; font-size:0.8rem;"><strong>Chunk {c.metadata.chunk_index}{page}</strong> <span style="opacity:0.6;">score: {c.score:.3f}</span><pre style="white-space:pre-wrap; margin:0.2rem 0 0 0; color:#e2e8f0;">{snippet}</pre></div>'
+                        detail += f'<details style="margin-top:0.4rem;"><summary style="cursor:pointer; font-weight:600; font-size:0.9rem;">{html_mod.escape(header)}</summary>{chunks_html}</details>'
+
+                    mr_chunks = [c for c in synthetic if c.metadata.doc_id == "map-reduce"]
+                    if mr_chunks:
+                        mr_text = mr_chunks[0].text
+                        detail += f'<br><details open><summary style="cursor:pointer; font-weight:600;">Map-Reduce Extraction ({len(mr_text):,} chars)</summary><pre style="font-size:0.8rem; white-space:pre-wrap; max-height:500px; overflow-y:auto; background:#1e293b; color:#e2e8f0; padding:0.5rem; border-radius:4px;">{html_mod.escape(mr_text)}</pre></details>'
                     return detail
                 elif step_name == "enrich":
                     rc = output.get("retrieved_chunks", [])
