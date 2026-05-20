@@ -38,6 +38,17 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
             user_groups=user_groups, top_k=top_k, tier="xlarge", doc_ids=doc_ids,
         )
         logger.info("Sweep: no summary embeddings, falling back to xlarge")
+
+    # Score-based cutoff: drop docs below 30% of top score to avoid pulling
+    # in loosely-matching documents that dilute results
+    if initial_results:
+        top_score = max(c.score for c in initial_results)
+        score_threshold = top_score * 0.3 if top_score > 0 else 0
+        before_count = len(initial_results)
+        initial_results = [c for c in initial_results if c.score >= score_threshold]
+        if len(initial_results) < before_count:
+            logger.info(f"Sweep: score cutoff ({score_threshold:.3f}) reduced {before_count} → {len(initial_results)} results")
+
     relevant_doc_ids = list({chunk.metadata.doc_id for chunk in initial_results})
 
     # Merge date-matched docs into the list (they may not rank high in vector search)
