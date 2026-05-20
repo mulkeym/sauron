@@ -82,7 +82,7 @@
             </td>
         </tr>
         <tr id="meta-{{ loop.index }}" style="display:none;">
-            <td colspan="10" style="background:#f9fafb; padding:0.75rem;">
+            <td colspan="10" style="background:var(--bg-card); padding:0.75rem; border-left:3px solid var(--accent); color:var(--text);">
                 {% set meta = doc.metadata_tags or {} %}
                 {% if meta and meta.get('summary') %}
                 <div style="margin-bottom:0.5rem;">
@@ -100,7 +100,7 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <span style="color:#6b7280;">No metadata extracted. Use Settings → Backfill Document Metadata.</span>
+                <span style="color:var(--text-muted);">No metadata extracted. Use Settings → Backfill Document Metadata.</span>
                 {% endif %}
             </td>
         </tr>
