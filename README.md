@@ -174,6 +174,15 @@ Every document gets structured metadata extracted at ingestion time via a single
 
 This metadata speeds up sweep queries -- instead of the LLM reading every discovered document, the system first searches document summaries and metadata to narrow the list, then only reads the truly relevant ones. Documents not fully read still contribute their metadata as lightweight context to the synthesizer. Existing documents can be backfilled from Settings.
 
+## Adaptive Retrieval
+
+SAURON learns from past queries to improve future retrieval accuracy:
+
+- **Relevance Feedback** -- after each query, logs which documents were cited, which were relevant but not cited, and which were irrelevant (MAP returned NO_RELEVANT_DATA)
+- **Feedback Boost** -- when a similar query is asked later, previously-useful documents get a relevance boost during document discovery, reducing wasted LLM reads
+- **Decay** -- feedback older than 90 days loses weight, preventing stale patterns from dominating
+- **Metrics Dashboard** -- Settings page shows MAP Precision (% of docs the LLM read that were useful), query timing, and feedback signal counts
+
 ## Web Crawler
 
 SAURON can crawl websites and automatically ingest their content:
