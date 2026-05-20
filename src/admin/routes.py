@@ -1678,6 +1678,7 @@ async def save_settings(
     metadata_max_doc_length: int = Form(200000),
     feedback_enabled: bool = Form(True),
     feedback_similarity_threshold: float = Form(0.85),
+    prf_enabled: bool = Form(True),
 ):
     # Update in-memory settings
     if vllm_base_url:
@@ -1702,6 +1703,7 @@ async def save_settings(
     settings.metadata_max_doc_length = metadata_max_doc_length
     settings.feedback_enabled = feedback_enabled
     settings.feedback_similarity_threshold = feedback_similarity_threshold
+    settings.prf_enabled = prf_enabled
 
     # Persist to .env file
     env_path = Path(".env")
@@ -1729,6 +1731,7 @@ async def save_settings(
     env_lines["METADATA_MAX_DOC_LENGTH"] = str(settings.metadata_max_doc_length)
     env_lines["FEEDBACK_ENABLED"] = str(settings.feedback_enabled).lower()
     env_lines["FEEDBACK_SIMILARITY_THRESHOLD"] = str(settings.feedback_similarity_threshold)
+    env_lines["PRF_ENABLED"] = str(settings.prf_enabled).lower()
 
     env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
 
