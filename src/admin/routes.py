@@ -1652,6 +1652,8 @@ async def save_settings(
     llm_max_output_tokens: int = Form(32768),
     metadata_extraction_enabled: bool = Form(True),
     metadata_max_doc_length: int = Form(200000),
+    feedback_enabled: bool = Form(True),
+    feedback_similarity_threshold: float = Form(0.85),
 ):
     # Update in-memory settings
     if vllm_base_url:
@@ -1674,6 +1676,8 @@ async def save_settings(
     settings.llm_max_output_tokens = llm_max_output_tokens
     settings.metadata_extraction_enabled = metadata_extraction_enabled
     settings.metadata_max_doc_length = metadata_max_doc_length
+    settings.feedback_enabled = feedback_enabled
+    settings.feedback_similarity_threshold = feedback_similarity_threshold
 
     # Persist to .env file
     env_path = Path(".env")
@@ -1699,6 +1703,8 @@ async def save_settings(
     env_lines["LLM_MAX_OUTPUT_TOKENS"] = str(settings.llm_max_output_tokens)
     env_lines["METADATA_EXTRACTION_ENABLED"] = str(settings.metadata_extraction_enabled).lower()
     env_lines["METADATA_MAX_DOC_LENGTH"] = str(settings.metadata_max_doc_length)
+    env_lines["FEEDBACK_ENABLED"] = str(settings.feedback_enabled).lower()
+    env_lines["FEEDBACK_SIMILARITY_THRESHOLD"] = str(settings.feedback_similarity_threshold)
 
     env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
 
@@ -1851,25 +1857,48 @@ async def query_metrics_dashboard():
             )
             rows = list(result.scalars().all())
 
-        if not rows:
-            return HTMLResponse("<p>No query metrics yet. Run some queries in the playground to collect data.</p>")
+            if not rows:
+                return HTMLResponse("<p>No query metrics yet. Run some queries in the playground to collect data.</p>")
 
-        # Summary stats
-        total = len(rows)
-        non_cache = [r for r in rows if not r.cache_hit]
-        avg_precision = sum(r.map_precision for r in non_cache) / len(non_cache) if non_cache else 0
-        avg_time = sum(r.total_time_seconds for r in non_cache) / len(non_cache) if non_cache else 0
-        avg_docs_read = sum(r.docs_map_read for r in non_cache) / len(non_cache) if non_cache else 0
-        avg_docs_cited = sum(r.docs_cited for r in non_cache) / len(non_cache) if non_cache else 0
-        cache_hits = sum(1 for r in rows if r.cache_hit)
+            # Summary stats
+            total = len(rows)
+            non_cache = [r for r in rows if not r.cache_hit]
+            avg_precision = sum(r.map_precision for r in non_cache) / len(non_cache) if non_cache else 0
+            avg_time = sum(r.total_time_seconds for r in non_cache) / len(non_cache) if non_cache else 0
+            avg_docs_read = sum(r.docs_map_read for r in non_cache) / len(non_cache) if non_cache else 0
+            avg_docs_cited = sum(r.docs_cited for r in non_cache) / len(non_cache) if non_cache else 0
+            cache_hits = sum(1 for r in rows if r.cache_hit)
 
-        summary = f"""<div style="display:grid; grid-template-columns:repeat(5,1fr); gap:1rem; margin-bottom:1rem;">
-            <div><strong>{total}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Total Queries</span></div>
-            <div><strong>{avg_precision:.0%}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg MAP Precision</span></div>
-            <div><strong>{avg_time:.1f}s</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg Query Time</span></div>
-            <div><strong>{avg_docs_read:.0f}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg Docs MAP'd</span></div>
-            <div><strong>{cache_hits}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Cache Hits</span></div>
-        </div>"""
+            summary = f"""<div style="display:grid; grid-template-columns:repeat(5,1fr); gap:1rem; margin-bottom:1rem;">
+                <div><strong>{total}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Total Queries</span></div>
+                <div><strong>{avg_precision:.0%}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg MAP Precision</span></div>
+                <div><strong>{avg_time:.1f}s</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg Query Time</span></div>
+                <div><strong>{avg_docs_read:.0f}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Avg Docs MAP'd</span></div>
+                <div><strong>{cache_hits}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Cache Hits</span></div>
+            </div>"""
+
+            # Feedback stats
+            try:
+                from src.db.models import QueryFeedback
+                fb_result = await session.execute(select(QueryFeedback))
+                fb_rows = list(fb_result.scalars().all())
+                fb_total = len(fb_rows)
+                fb_cited = sum(1 for r in fb_rows if r.was_cited)
+                fb_relevant = sum(1 for r in fb_rows if r.was_in_map_reduce and not r.was_cited)
+                fb_irrelevant = sum(1 for r in fb_rows if not r.was_in_map_reduce)
+                fb_unique_queries = len({r.query_hash for r in fb_rows})
+                fb_unique_docs = len({r.doc_id for r in fb_rows})
+
+                if fb_total > 0:
+                    summary += f"""<div style="display:grid; grid-template-columns:repeat(5,1fr); gap:1rem; margin-bottom:1rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">
+                        <div><strong>{fb_total}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Feedback Records</span></div>
+                        <div><strong>{fb_unique_queries}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Unique Queries</span></div>
+                        <div><strong>{fb_unique_docs}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Unique Docs Seen</span></div>
+                        <div><strong>{fb_cited}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Cited Signals</span></div>
+                        <div><strong>{fb_irrelevant}</strong><br><span style="font-size:0.8rem; color:#6b7280;">Irrelevant Signals</span></div>
+                    </div>"""
+            except Exception:
+                pass
 
         # Recent queries table
         table_rows = ""

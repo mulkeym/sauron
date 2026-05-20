@@ -193,6 +193,25 @@ function generateApiKey() {
         </div>
     </div>
 
+    <div style="margin-top:1rem;">
+        <h3 style="margin-bottom:0.5rem;">Relevance Feedback</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="feedback_enabled">Enable Feedback Learning</label>
+                <select id="feedback_enabled" name="feedback_enabled">
+                    <option value="true" {{ 'selected' if settings.feedback_enabled }}>Enabled</option>
+                    <option value="false" {{ 'selected' if not settings.feedback_enabled }}>Disabled</option>
+                </select>
+                <span style="font-size:0.8rem; color:#6b7280;">Log and learn from query results to improve future retrieval</span>
+            </div>
+            <div class="form-group">
+                <label for="feedback_similarity_threshold">Similarity Threshold</label>
+                <input type="number" id="feedback_similarity_threshold" name="feedback_similarity_threshold" value="{{ settings.feedback_similarity_threshold }}" step="0.05" min="0.5" max="1.0" style="max-width:100px;">
+                <span style="font-size:0.8rem; color:#6b7280;">Min cosine similarity to match past queries (0.85 = very similar)</span>
+            </div>
+        </div>
+    </div>
+
     <div class="form-actions">
         <button type="submit">Save Settings</button>
     </div>
