@@ -222,6 +222,10 @@ function generateApiKey() {
     <p class="section-desc">Track retrieval accuracy and efficiency. MAP Precision = % of documents the LLM read that were actually relevant. Higher is better (less wasted LLM calls).</p>
     <div id="metrics-dashboard" hx-get="/admin/api/settings/query-metrics" hx-trigger="load" hx-swap="innerHTML">
     </div>
+    <div style="margin-top:0.5rem;">
+        <button type="button" hx-post="/admin/api/settings/purge-feedback" hx-target="#purge-fb-status" hx-swap="innerHTML" hx-confirm="Clear all feedback and metrics data? This resets the learning system.">Reset Feedback Data</button>
+        <span id="purge-fb-status" style="margin-left:0.5rem;"></span>
+    </div>
 </div>
 
 <div class="settings-section" style="margin-top:1.5rem;">

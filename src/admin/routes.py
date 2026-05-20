@@ -1066,12 +1066,17 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                         f"Feedback: {len(mr_relevant_ids)} relevant, {len(mr_irrelevant_ids)} irrelevant, {len(cited_ids)} cited"
                     )
 
+                # Don't log irrelevant docs as cited — they appear in citations
+                # from sweep raw chunks but MAP determined they're irrelevant
+                irrelevant_set = set(mr_irrelevant_ids)
+                clean_cited_ids = [did for did in cited_ids if did not in irrelevant_set]
+
                 await log_feedback(
                     query_text=question,
                     query_vector=query_vector,
                     query_type=query_type,
                     user_groups=user_groups,
-                    cited_doc_ids=cited_ids,
+                    cited_doc_ids=clean_cited_ids,
                     relevant_doc_ids=mr_relevant_ids,
                     irrelevant_doc_ids=mr_irrelevant_ids,
                     doc_filenames=doc_fn_map,
@@ -1970,6 +1975,19 @@ async def purge_knowledge_graph():
     graph_rag._rag_instance = None
     graph_rag._initialized = False
     return HTMLResponse('<span class="status-ok">Knowledge graph purged. It will rebuild as documents are re-ingested.</span>')
+
+
+@router.post("/api/settings/purge-feedback")
+async def purge_feedback():
+    """Clear all feedback and metrics data to start fresh."""
+    from src.db.models import QueryFeedback, QueryMetrics
+    from sqlalchemy import delete
+    store = get_metadata_store()
+    async with store.session_factory() as session:
+        await session.execute(delete(QueryFeedback))
+        await session.execute(delete(QueryMetrics))
+        await session.commit()
+    return HTMLResponse('<span class="status-ok">Feedback and metrics data cleared.</span>')
 
 
 @router.post("/api/settings/backfill-metadata")
