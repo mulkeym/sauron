@@ -88,6 +88,9 @@ tr:hover { background: var(--bg-card-alt); }
 .form-actions { margin-top: 1rem; }
 .form-row { display: flex; gap: 1rem; }
 .form-row .form-group { flex: 1; }
+.maintenance-area { background: var(--bg-card); border: 2px dashed var(--border); border-radius: 8px; padding: 1.5rem; margin-top: 2rem; }
+.maintenance-area h2 { font-size: 1.2rem; margin-bottom: 1rem; color: var(--text-muted); }
+.maintenance-area .settings-section { box-shadow: none; padding: 1rem; margin-bottom: 1rem; }
 .input-with-button { display: flex; gap: 0.5rem; align-items: center; }
 .input-with-button input { flex: 1; max-width: 500px; }
 
