@@ -35,7 +35,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             retry_state = state
 
         if query_type == QueryType.LOOKUP:
-            result = retrieve_lookup(retry_state, vector_store=vector_store)
+            import asyncio as _asyncio_lookup
+            result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
         elif query_type == QueryType.SWEEP:
             # Run both sweep (raw chunks) and map-reduce (per-doc extraction), merge results
             import asyncio as _asyncio
@@ -94,9 +95,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         elif query_type == QueryType.CROSS_REFERENCE:
             result = await retrieve_cross_reference(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.TEMPORAL:
-            result = retrieve_lookup(retry_state, vector_store=vector_store)
+            result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
         else:
-            result = retrieve_lookup(retry_state, vector_store=vector_store)
+            result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
 
         # Sub-task decomposition: run additional searches for each sub-task IN PARALLEL
         sub_tasks = state.get("sub_tasks", [])
@@ -110,7 +111,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
             # Search in parallel (safe — LanceDB handles concurrent reads)
             async def search_subtask(task, vector):
-                return vector_store.hybrid_search(
+                return await asyncio.to_thread(
+                    vector_store.hybrid_search,
                     vector=vector, text_query=task,
                     user_groups=state.get("user_groups", ["ALL"]),
                     top_k=10, tier="small",
@@ -148,12 +150,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
     graph.add_node("retrieve", retrieve)
 
-    # Enrich retrieved context with LightRAG knowledge graph
+    # Knowledge graph query — runs in parallel with retrieve (only needs question + user_groups)
     async def enrich_with_graph(state: AgentState) -> dict:
         if state.get("skip_graph"):
-            return {}
-        chunks = state.get("retrieved_chunks", [])
-        if not chunks:
             return {}
 
         question = state.get("question", "")
@@ -163,11 +162,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
             kg_logger = logging.getLogger("knowledge_graph")
 
-            # Skip if graph has no data
             if not await is_graph_populated():
                 return {}
 
-            # Query LightRAG for knowledge graph context (ACL-aware)
             user_groups = state.get("user_groups", ["ALL"])
             result = await query_graph(question, mode="mix", user_groups=user_groups)
             kg_context = result.get("context", "")
@@ -177,7 +174,6 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
             kg_logger.info(f"LightRAG enrichment: {len(kg_context)} chars of graph context")
 
-            # Add as a synthetic chunk
             kg_chunk = RetrievedChunk(
                 text=f"Knowledge Graph Context:\n{kg_context}",
                 score=0.5,
@@ -186,19 +182,30 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                     doc_type="graph", chunk_index=0, start_char=0, acl_groups=["ALL"],
                 ),
             )
-            return {"retrieved_chunks": chunks + [kg_chunk]}
+            return {"retrieved_chunks": [kg_chunk]}
         except Exception as e:
             import logging
             logging.getLogger("knowledge_graph").warning(f"Graph enrichment failed: {e}")
             return {}
 
     graph.add_node("enrich", enrich_with_graph)
+
+    # Merge node: combine retrieve + enrich results before synthesis
+    def merge_results(state: AgentState) -> dict:
+        """No-op merge — LangGraph already combined retrieved_chunks from both branches."""
+        return {}
+
+    graph.add_node("merge", merge_results)
     graph.add_node("synthesize", synthesize_answer)
 
     graph.set_entry_point("classify")
+    # After classify, run retrieve and enrich IN PARALLEL
     graph.add_edge("classify", "retrieve")
-    graph.add_edge("retrieve", "enrich")
-    graph.add_edge("enrich", "synthesize")
+    graph.add_edge("classify", "enrich")
+    # Both feed into merge, then synthesize
+    graph.add_edge("retrieve", "merge")
+    graph.add_edge("enrich", "merge")
+    graph.add_edge("merge", "synthesize")
     graph.add_edge("synthesize", END)
     return graph.compile()
 

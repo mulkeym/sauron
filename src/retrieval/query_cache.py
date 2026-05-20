@@ -84,7 +84,13 @@ def _has_new_related_docs(source_doc_ids: list[str], cached_at: float) -> bool:
             all_docs = await store.list_documents(None)
             for doc in all_docs:
                 if doc.category in source_categories and doc.doc_id not in source_doc_ids:
-                    if doc.created_at and doc.created_at > cached_time:
+                    doc_time = doc.created_at
+                    if doc_time is None:
+                        continue
+                    # Normalize: make naive datetimes UTC-aware for comparison
+                    if doc_time.tzinfo is None:
+                        doc_time = doc_time.replace(tzinfo=timezone.utc)
+                    if doc_time > cached_time:
                         return True
             return False
 

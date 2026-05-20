@@ -108,4 +108,28 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
-settings = Settings()
+def _load_persisted_settings(s: Settings) -> Settings:
+    """Apply settings saved via the admin UI (data/settings.json).
+
+    These override docker-compose defaults but NOT explicit host env vars.
+    The file lives on the mounted volume so it survives container restarts.
+    """
+    import json
+    from pathlib import Path
+
+    path = Path("data/settings.json")
+    if not path.exists():
+        return s
+
+    try:
+        saved = json.loads(path.read_text())
+    except Exception:
+        return s
+
+    for key, value in saved.items():
+        if hasattr(s, key):
+            setattr(s, key, value)
+    return s
+
+
+settings = _load_persisted_settings(Settings())

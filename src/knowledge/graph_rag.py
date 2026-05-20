@@ -131,28 +131,19 @@ async def insert_document(text: str, doc_id: str = "", filename: str = "") -> st
         return f"error: {e}"
 
 
-def _get_allowed_filenames(user_groups: list[str]) -> set[str] | None:
+async def _get_allowed_filenames(user_groups: list[str]) -> set[str] | None:
     """Get filenames the user can access based on ACL groups.
     Returns None if user has ALL access (no filtering needed).
     """
     if "ALL" in user_groups:
         return None  # no filtering
 
-    import asyncio
     from src.db.metadata import MetadataStore
 
-    async def _fetch():
-        store = MetadataStore()
-        await store.init()
-        docs = await store.list_documents(user_groups)
-        return {d.filename for d in docs}
-
-    try:
-        return asyncio.run(_fetch())
-    except RuntimeError:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            return pool.submit(asyncio.run, _fetch()).result()
+    store = MetadataStore()
+    await store.init()
+    docs = await store.list_documents(user_groups)
+    return {d.filename for d in docs}
 
 
 def _files_to_allowed_entities(allowed_files: set[str]) -> set[str]:
@@ -189,14 +180,14 @@ def _files_to_allowed_entities(allowed_files: set[str]) -> set[str]:
     return allowed_entities
 
 
-def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
+async def _get_acl_allowed_entities(user_groups: list[str]) -> set[str] | None:
     """Get entity names the user can see based on source document ACLs.
     Returns None if user has ALL access.
     """
     if "ALL" in user_groups:
         return None
 
-    allowed_files = _get_allowed_filenames(user_groups)
+    allowed_files = await _get_allowed_filenames(user_groups)
     if allowed_files is None:
         return None
 
@@ -262,7 +253,7 @@ async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str
         # ACL post-filter: if user doesn't have ALL access, verify the
         # response only references documents they can see
         if user_groups and "ALL" not in user_groups:
-            allowed = _get_acl_allowed_entities(user_groups)
+            allowed = await _get_acl_allowed_entities(user_groups)
             if allowed is not None:
                 # Filter lines that reference entities the user can't see
                 filtered_lines = []

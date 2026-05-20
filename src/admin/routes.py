@@ -597,7 +597,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         docs = await store.list_documents()
         allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
-    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": ""}
+    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": "", "completed_steps": []}
 
     def _format_live_step(node_name, node_output, current_state):
         """Generate live step detail HTML for the polling UI."""
@@ -806,21 +806,58 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 **({"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids else {}),
             )
 
+            # Node execution order — retrieve and enrich run in parallel after classify.
+            # merge is a no-op (instant), so we skip it in the UI and jump to synthesize.
+            _STEP_ORDER = ["classify", "retrieve", "enrich", "merge", "synthesize"]
+
             steps_data = [{"step": "cache_check", "time": cache_time, "output": {"result": "miss"}}]
+            _playground_jobs[query_id]["completed_steps"].append({"step": "cache_check", "time": cache_time, "detail": f"<strong>Result:</strong> miss ({cache_time}s)"})
             step_start = time.time()
-            prev_node = None
-            prev_output = None
             final_state = {}
+            # Show classify as the first active step
+            _playground_jobs[query_id]["step"] = "classify"
+
+            # Track per-node start times for parallel branches
+            _node_starts = {}
+            _completed_nodes = set()
 
             async for event in graph.astream(initial_state, stream_mode="updates"):
                 now = time.time()
                 for node_name, node_output in event.items():
-                    if prev_node:
-                        steps_data.append({"step": prev_node, "time": round(now - step_start, 2), "output": prev_output})
-                    _playground_jobs[query_id]["step"] = node_name
-                    _playground_jobs[query_id]["step_detail"] = _format_live_step(node_name, node_output, final_state)
-                    prev_node = node_name
-                    prev_output = dict(node_output) if isinstance(node_output, dict) else {}
+                    # Use per-node start time if available, else fall back to step_start
+                    node_elapsed = round(now - _node_starts.pop(node_name, step_start), 2)
+                    output = dict(node_output) if isinstance(node_output, dict) else {}
+                    _completed_nodes.add(node_name)
+
+                    # Skip the merge node in UI — it's a no-op
+                    if node_name != "merge":
+                        step_entry = {"step": node_name, "time": node_elapsed, "detail": _format_live_step(node_name, node_output, final_state)}
+                        steps_data.append({"step": node_name, "time": node_elapsed, "output": output})
+                        _playground_jobs[query_id]["completed_steps"].append(step_entry)
+
+                    # Determine what's running next
+                    if node_name == "classify":
+                        # After classify, retrieve + enrich start in parallel
+                        _node_starts["retrieve"] = now
+                        _node_starts["enrich"] = now
+                        _playground_jobs[query_id]["step"] = "retrieve"
+                        _playground_jobs[query_id]["step_detail"] = ""
+                    elif node_name in ("retrieve", "enrich"):
+                        # If both parallel branches done, next is synthesize
+                        if "retrieve" in _completed_nodes and "enrich" in _completed_nodes:
+                            _playground_jobs[query_id]["step"] = "synthesize"
+                            _playground_jobs[query_id]["step_detail"] = ""
+                        else:
+                            # Show whichever parallel branch is still running
+                            still_running = "enrich" if node_name == "retrieve" else "retrieve"
+                            _playground_jobs[query_id]["step"] = still_running
+                            _playground_jobs[query_id]["step_detail"] = ""
+                    elif node_name == "merge":
+                        _playground_jobs[query_id]["step"] = "synthesize"
+                        _playground_jobs[query_id]["step_detail"] = ""
+                    else:
+                        _playground_jobs[query_id]["step_detail"] = _format_live_step(node_name, node_output, final_state)
+
                     step_start = now
                     final_state.update(node_output if isinstance(node_output, dict) else {})
 
@@ -845,9 +882,6 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                             "question": question,
                         }
 
-            if prev_node:
-                steps_data.append({"step": prev_node, "time": round(time.time() - step_start, 2), "output": prev_output})
-
             total_time = sum(s["time"] for s in steps_data)
             answer = final_state.get("answer", "No answer")
             chunks = final_state.get("retrieved_chunks", [])
@@ -858,7 +892,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 answer = _playground_jobs[query_id]["streamed_answer"]
 
             # Build trace with expandable step details
-            step_labels = {"cache_check": "Check Cache", "classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph Enrichment", "synthesize": "Generate Answer"}
+            step_labels = {"cache_check": "Check Cache", "classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph", "synthesize": "Generate Answer"}
 
             def format_step_detail(step_name, output):
                 """Format step output for display."""
@@ -1185,7 +1219,7 @@ async def playground_query(question: str = Form(""), play_user: str = Form("fina
         step_labels = {
             "classify": "Classify Query",
             "retrieve": "Retrieve Documents",
-            "enrich": "Knowledge Graph Enrichment",
+            "enrich": "Knowledge Graph",
             "synthesize": "Generate Answer",
         }
         steps_html = ""
@@ -1406,7 +1440,7 @@ async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
 
     if not no_persona_filter:
         from src.knowledge.graph_rag import _get_acl_allowed_entities
-        acl_allowed = await asyncio.to_thread(_get_acl_allowed_entities, user_groups)
+        acl_allowed = await _get_acl_allowed_entities(user_groups)
         if acl_allowed is not None:
             allowed = acl_allowed
 
@@ -1723,36 +1757,29 @@ async def save_settings(
     settings.prf_enabled = prf_enabled
     settings.strategy_memory_enabled = strategy_memory_enabled
 
-    # Persist to .env file
-    env_path = Path(".env")
-    env_lines = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                key, _, val = line.partition("=")
-                env_lines[key.strip()] = val.strip()
-
-    env_lines["VLLM_BASE_URL"] = settings.vllm_base_url
-    env_lines["VLLM_MODEL_NAME"] = settings.vllm_model_name
-    env_lines["VLLM_API_KEY"] = settings.vllm_api_key
-    env_lines["EMBEDDING_MODE"] = settings.embedding_mode
-    env_lines["EMBEDDING_API_URL"] = settings.embedding_api_url
-    env_lines["EMBEDDING_MODEL_NAME"] = settings.embedding_model_name
-    env_lines["MCP_PORT"] = str(settings.mcp_port)
-    env_lines["ENTITY_MERGE_AUTO_THRESHOLD"] = str(settings.entity_merge_auto_threshold)
-    env_lines["ENTITY_MERGE_REVIEW_THRESHOLD"] = str(settings.entity_merge_review_threshold)
-    env_lines["MAX_PARALLEL_INGESTION"] = str(settings.max_parallel_ingestion)
-    env_lines["LLM_CONCURRENCY"] = str(settings.llm_concurrency)
-    env_lines["LLM_MAX_CONTEXT"] = str(settings.llm_max_context)
-    env_lines["LLM_MAX_OUTPUT_TOKENS"] = str(settings.llm_max_output_tokens)
-    env_lines["METADATA_EXTRACTION_ENABLED"] = str(settings.metadata_extraction_enabled).lower()
-    env_lines["METADATA_MAX_DOC_LENGTH"] = str(settings.metadata_max_doc_length)
-    env_lines["FEEDBACK_ENABLED"] = str(settings.feedback_enabled).lower()
-    env_lines["FEEDBACK_SIMILARITY_THRESHOLD"] = str(settings.feedback_similarity_threshold)
-    env_lines["PRF_ENABLED"] = str(settings.prf_enabled).lower()
-    env_lines["STRATEGY_MEMORY_ENABLED"] = str(settings.strategy_memory_enabled).lower()
-
-    env_path.write_text("\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n")
+    # Persist to data/settings.json on the mounted volume so it survives container restarts
+    persist = {
+        "vllm_base_url": settings.vllm_base_url,
+        "vllm_model_name": settings.vllm_model_name,
+        "vllm_api_key": settings.vllm_api_key,
+        "embedding_mode": settings.embedding_mode,
+        "embedding_api_url": settings.embedding_api_url,
+        "embedding_model_name": settings.embedding_model_name,
+        "mcp_port": settings.mcp_port,
+        "entity_merge_auto_threshold": settings.entity_merge_auto_threshold,
+        "entity_merge_review_threshold": settings.entity_merge_review_threshold,
+        "max_parallel_ingestion": settings.max_parallel_ingestion,
+        "llm_concurrency": settings.llm_concurrency,
+        "llm_max_context": settings.llm_max_context,
+        "llm_max_output_tokens": settings.llm_max_output_tokens,
+        "metadata_extraction_enabled": settings.metadata_extraction_enabled,
+        "metadata_max_doc_length": settings.metadata_max_doc_length,
+        "feedback_enabled": settings.feedback_enabled,
+        "feedback_similarity_threshold": settings.feedback_similarity_threshold,
+        "prf_enabled": settings.prf_enabled,
+        "strategy_memory_enabled": settings.strategy_memory_enabled,
+    }
+    Path("data/settings.json").write_text(json.dumps(persist, indent=2) + "\n")
 
     return HTMLResponse('<div class="status-ok">Settings saved successfully.</div>')
 

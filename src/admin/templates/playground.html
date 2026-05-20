@@ -49,39 +49,64 @@ const STEPS = [
     {id: "cache_check", label: "Check Cache", num: 1},
     {id: "classify", label: "Classify Query", num: 2},
     {id: "retrieve", label: "Retrieve Documents", num: 3},
-    {id: "enrich", label: "Knowledge Graph Enrichment", num: 4},
-    {id: "synthesize", label: "Generate Answer", num: 5},
+    {id: "enrich", label: "Knowledge Graph", num: 3},
+    {id: "synthesize", label: "Generate Answer", num: 4},
 ];
 
-function buildProgressHTML(currentStep, elapsed, stepDetail) {
-    let html = '<div class="trace-panel"><div class="trace-steps">';
+/* ---------- Initial full render (called once at query start) ---------- */
+function initProgressPanel() {
+    let html = '<div class="trace-panel"><div class="trace-steps" id="trace-steps">';
     for (const step of STEPS) {
-        let icon, cls;
-        if (step.id === currentStep) {
-            icon = '⏳';
-            cls = 'style="background:#1e40af; color:white;"';
-        } else if (getStepNum(currentStep) > step.num) {
-            icon = '✅';
-            cls = '';
-        } else {
-            icon = '⬜';
-            cls = 'style="opacity:0.4;"';
-        }
-        html += `<div class="trace-step" ${cls}>
-            <span>${icon} Step ${step.num} of 5: ${step.label}</span>
-            ${step.id === currentStep ? '<span class="trace-time">' + elapsed + 's</span>' : ''}
-        </div>`;
-        if (step.id === currentStep && stepDetail) {
-            html += `<div class="trace-detail expanded" style="padding:0.5rem 1rem; font-size:0.85rem; border-left:3px solid #1e40af; margin-bottom:0.25rem;">${stepDetail}</div>`;
-        }
+        html += `<div id="step-row-${step.id}" class="trace-step" style="opacity:0.4;">
+            <span id="step-icon-${step.id}">&#11036;</span>
+            <span> Step ${step.num} of 4: ${step.label}</span>
+            <span id="step-arrow-${step.id}" style="display:none;"> &#9660;</span>
+            <span class="trace-time" id="step-time-${step.id}"></span>
+        </div>
+        <div id="step-detail-${step.id}" class="trace-detail"></div>`;
     }
     html += '</div></div>';
     return html;
 }
 
-function getStepNum(stepId) {
-    const s = STEPS.find(s => s.id === stepId);
-    return s ? s.num : 0;
+/* ---------- Targeted update: mark a step as completed with drill-down ---------- */
+function markStepCompleted(stepId, time, detail) {
+    const row = document.getElementById(`step-row-${stepId}`);
+    if (!row || row.dataset.done) return; // already marked
+    row.dataset.done = '1';
+    row.style = '';
+    row.style.cursor = 'pointer';
+    row.onclick = () => document.getElementById(`step-detail-${stepId}`).classList.toggle('expanded');
+    document.getElementById(`step-icon-${stepId}`).innerHTML = '&#9989;';
+    document.getElementById(`step-arrow-${stepId}`).style.display = '';
+    document.getElementById(`step-time-${stepId}`).textContent = time + 's';
+    const detailEl = document.getElementById(`step-detail-${stepId}`);
+    if (detailEl && detail) detailEl.innerHTML = detail;
+}
+
+/* ---------- Targeted update: mark a step as active (running) ---------- */
+function markStepActive(stepId, elapsed) {
+    const row = document.getElementById(`step-row-${stepId}`);
+    if (!row || row.dataset.done) return;
+    row.style = 'background:#1e40af; color:white;';
+    document.getElementById(`step-icon-${stepId}`).innerHTML = '&#9203;';
+    document.getElementById(`step-time-${stepId}`).textContent = elapsed + 's';
+}
+
+/* ---------- Targeted update: only update the active step's elapsed timer ---------- */
+function updateActiveTimer(stepId, elapsed) {
+    const timeEl = document.getElementById(`step-time-${stepId}`);
+    if (timeEl) timeEl.textContent = elapsed + 's';
+}
+
+/* ---------- Reset a step back to pending (in case active step changes) ---------- */
+function markStepPending(stepId) {
+    const row = document.getElementById(`step-row-${stepId}`);
+    if (!row || row.dataset.done) return;
+    row.style = 'opacity:0.4;';
+    row.onclick = null;
+    document.getElementById(`step-icon-${stepId}`).innerHTML = '&#11036;';
+    document.getElementById(`step-time-${stepId}`).textContent = '';
 }
 
 async function runQuery() {
@@ -97,14 +122,15 @@ async function runQuery() {
     btn.textContent = 'Working...';
     results.innerHTML = '';
     progress.style.display = 'block';
-    progress.innerHTML = buildProgressHTML('classify', '0', '');
+    progress.innerHTML = initProgressPanel();
+    markStepActive('classify', '0');
 
-    // Start the query and poll for status
     const startTime = Date.now();
     let queryId;
+    let renderedStepCount = 0;
+    const stepStartTimes = { classify: Date.now() };  // per-step start times
 
     try {
-        // Start async query
         const startResp = await fetch('/admin/api/playground/start', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -113,7 +139,6 @@ async function runQuery() {
         const startData = await startResp.json();
         queryId = startData.query_id;
 
-        // Poll for progress, then stream the answer
         let done = false;
         let streaming = false;
         while (!done) {
@@ -123,11 +148,24 @@ async function runQuery() {
             const statusResp = await fetch(`/admin/api/playground/status/${queryId}`);
             const status = await statusResp.json();
 
+            // Render any newly completed steps (without touching already-rendered ones)
+            const completed = status.completed_steps || [];
+            const doneSet = new Set(completed.map(s => s.step));
+            while (renderedStepCount < completed.length) {
+                const cs = completed[renderedStepCount];
+                markStepCompleted(cs.step, cs.time, cs.detail);
+                renderedStepCount++;
+            }
+
             if (status.step === 'streaming' && !streaming) {
-                // Start streaming the answer via SSE
                 streaming = true;
-                progress.innerHTML = buildProgressHTML('synthesize', elapsed, status.step_detail || '');
-                results.innerHTML = `<div class="result-card"><div class="result-meta">Groups: ${user}</div><div class="result-answer" id="stream-output"><span class="streaming-cursor">▊</span></div></div>`;
+                // Mark all non-completed steps as pending, then activate synthesize
+                for (const step of STEPS) {
+                    if (step.id !== 'synthesize') markStepPending(step.id);
+                }
+                stepStartTimes['synthesize'] = Date.now();
+                markStepActive('synthesize', '0');
+                results.innerHTML = `<div class="result-card"><div class="result-meta">Groups: ${user}</div><div class="result-answer" id="stream-output"><span class="streaming-cursor">&#9610;</span></div></div>`;
 
                 const evtSource = new EventSource(`/admin/api/playground/stream/${queryId}`);
                 const outputDiv = document.getElementById('stream-output');
@@ -138,7 +176,7 @@ async function runQuery() {
                     if (data.token) {
                         fullText += data.token;
                         if (typeof marked !== 'undefined') {
-                            outputDiv.innerHTML = marked.parse(fullText) + '<span class="streaming-cursor">▊</span>';
+                            outputDiv.innerHTML = marked.parse(fullText) + '<span class="streaming-cursor">&#9610;</span>';
                         } else {
                             outputDiv.textContent = fullText;
                         }
@@ -150,7 +188,6 @@ async function runQuery() {
                         } else {
                             outputDiv.textContent = data.answer || fullText;
                         }
-                        // Continue polling for final result with citations
                     }
                     if (data.error) {
                         evtSource.close();
@@ -161,10 +198,8 @@ async function runQuery() {
             } else if (status.step === 'complete') {
                 done = true;
                 progress.style.display = 'none';
-                // Keep streamed answer but add trace + citations from final result
                 const currentAnswer = document.getElementById('stream-output');
                 if (currentAnswer) {
-                    // Extract trace and citations from result_html, keep our streamed answer
                     const temp = document.createElement('div');
                     temp.innerHTML = status.result_html;
                     const trace = temp.querySelector('.trace-panel');
@@ -195,7 +230,37 @@ async function runQuery() {
                 progress.style.display = 'none';
                 results.innerHTML = `<div class="status-err">${status.error}</div>`;
             } else if (!streaming) {
-                progress.innerHTML = buildProgressHTML(status.step, elapsed, status.step_detail || '');
+                // Infer active steps from completed_steps — more robust than relying on backend step field.
+                // After classify completes, retrieve + enrich run in parallel; after both, synthesize runs.
+                const activeSteps = [];
+                for (const step of STEPS) {
+                    if (doneSet.has(step.id)) continue;  // already completed
+                    // A step is active if all its predecessors are done
+                    if (step.id === 'cache_check' || step.id === 'classify') {
+                        // Sequential: active if prior step done (or first step)
+                        activeSteps.push(step.id);
+                        break;
+                    } else if (step.id === 'retrieve' || step.id === 'enrich') {
+                        // Parallel: both active once classify is done
+                        if (doneSet.has('classify')) activeSteps.push(step.id);
+                    } else if (step.id === 'synthesize') {
+                        // Active once both retrieve and enrich are done
+                        if (doneSet.has('retrieve') && doneSet.has('enrich')) activeSteps.push(step.id);
+                    }
+                }
+
+                // Update UI: activate new steps, deactivate old ones
+                const activeSet = new Set(activeSteps);
+                for (const step of STEPS) {
+                    if (doneSet.has(step.id)) continue;
+                    if (activeSet.has(step.id)) {
+                        if (!stepStartTimes[step.id]) stepStartTimes[step.id] = Date.now();
+                        const stepElapsed = ((Date.now() - stepStartTimes[step.id]) / 1000).toFixed(1);
+                        markStepActive(step.id, stepElapsed);
+                    } else {
+                        markStepPending(step.id);
+                    }
+                }
             }
         }
     } catch (e) {
