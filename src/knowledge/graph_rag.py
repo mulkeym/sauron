@@ -254,11 +254,12 @@ def _get_dataset_allowed_entities(ds_id: int) -> set[str] | None:
     return _files_to_allowed_entities(allowed_files)
 
 
-async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None) -> dict:
-    """Query the knowledge graph with ACL filtering.
+async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None, dataset_id: int = 0) -> dict:
+    """Query the knowledge graph with ACL and dataset filtering.
 
     If user_groups is provided and doesn't contain "ALL", only returns
     context from documents the user can access.
+    If dataset_id is provided, only returns context from that dataset.
     """
     rag = await get_lightrag()
 
@@ -281,19 +282,30 @@ async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str
         if not result or len(result.strip()) < 20:
             return {"context": "", "mode": mode}
 
-        # ACL post-filter: if user doesn't have ALL access, verify the
-        # response only references documents they can see
+        # Build set of allowed entities from ACL and dataset filters
+        allowed = None
+
         if user_groups and "ALL" not in user_groups:
-            allowed = await _get_acl_allowed_entities(user_groups)
-            if allowed is not None:
-                # Filter lines that reference entities the user can't see
-                filtered_lines = []
-                for line in result.strip().split("\n"):
-                    # Keep lines that reference allowed entities or are generic
-                    line_lower = line.lower()
-                    if any(ent.lower() in line_lower for ent in allowed) or not line.strip().startswith("-"):
-                        filtered_lines.append(line)
-                result = "\n".join(filtered_lines)
+            acl_allowed = await _get_acl_allowed_entities(user_groups)
+            if acl_allowed is not None:
+                allowed = acl_allowed
+
+        if dataset_id:
+            import asyncio
+            ds_allowed = await asyncio.to_thread(_get_dataset_allowed_entities, dataset_id)
+            if ds_allowed is not None:
+                if allowed is not None:
+                    allowed = allowed & ds_allowed  # intersection of both filters
+                else:
+                    allowed = ds_allowed
+
+        if allowed is not None:
+            filtered_lines = []
+            for line in result.strip().split("\n"):
+                line_lower = line.lower()
+                if any(ent.lower() in line_lower for ent in allowed) or not line.strip().startswith("-"):
+                    filtered_lines.append(line)
+            result = "\n".join(filtered_lines)
 
         return {"context": result.strip(), "mode": mode}
     except Exception as e:

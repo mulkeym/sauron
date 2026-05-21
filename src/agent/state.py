@@ -39,3 +39,4 @@ class AgentState(TypedDict, total=False):
     warnings: list[str]
     skip_graph: bool
     allowed_doc_ids: list[str]  # restrict retrieval to these doc_ids (app filter)
+    dataset_id: int  # dataset filter for KG queries

@@ -166,7 +166,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 return {}
 
             user_groups = state.get("user_groups", ["ALL"])
-            result = await query_graph(question, mode="mix", user_groups=user_groups)
+            ds_id = state.get("dataset_id", 0)
+            result = await query_graph(question, mode="mix", user_groups=user_groups, dataset_id=ds_id)
             kg_context = result.get("context", "")
 
             if not kg_context or len(kg_context.strip()) < 20:

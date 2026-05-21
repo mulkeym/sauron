@@ -820,6 +820,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
                 needs_reretrieval=False, answer="", citations=[], warnings=[],
                 skip_graph=(mode == "vector_only"),
+                dataset_id=app_id or 0,
                 **({"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids else {}),
             )
 
