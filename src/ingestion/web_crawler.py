@@ -207,6 +207,17 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
 
             pages_found += 1
 
+            # If download_types is set, only ingest matching files — crawl pages for links but skip their content
+            if download_types:
+                if depth < crawl_depth:
+                    links = await asyncio.to_thread(_extract_links, html, url, url_pattern)
+                    for link in links:
+                        if _clean_url(link) not in visited:
+                            to_visit.append((link, depth + 1))
+                if progress_callback:
+                    progress_callback({"pages_found": pages_found, "pages_ingested": pages_ingested, "current_url": url})
+                continue
+
             # Convert to markdown
             markdown = await asyncio.to_thread(_html_to_markdown, html, url)
             if len(markdown.strip()) < 50:
