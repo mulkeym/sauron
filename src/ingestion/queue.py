@@ -131,6 +131,7 @@ class IngestQueue:
                 await self._process_job(job, vector_store, metadata_store)
             except Exception as e:
                 error_msg = f"{str(e)}\n{traceback.format_exc()}"
+                logger.error(f"Ingestion failed for {job.filename} at step {job.step}: {error_msg}")
                 self.fail_job(job_id, error_msg)
                 # Write to file for debugging
                 with open('/tmp/ingest_errors.log', 'a') as f:
