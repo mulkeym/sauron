@@ -205,9 +205,8 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
             if "text/html" not in content_type and "text/plain" not in content_type:
                 continue
 
-            pages_found += 1
-
             # If download_types is set, only ingest matching files — crawl pages for links but skip their content
+            # Don't count link-only pages against max_pages
             if download_types:
                 if depth < crawl_depth:
                     links = await asyncio.to_thread(_extract_links, html, url, url_pattern)
@@ -217,6 +216,8 @@ async def crawl_connector(connector, metadata_store, ingest_queue, vector_store,
                 if progress_callback:
                     progress_callback({"pages_found": pages_found, "pages_ingested": pages_ingested, "current_url": url})
                 continue
+
+            pages_found += 1
 
             # Convert to markdown
             markdown = await asyncio.to_thread(_html_to_markdown, html, url)
