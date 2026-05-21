@@ -130,6 +130,16 @@ def _embed_via_local(texts: list[str], batch_size: int = 0) -> list[list[float]]
     return embeddings.tolist()
 
 
+def _truncate_for_embedding(texts: list[str], max_chars: int = 3000) -> list[str]:
+    """Truncate texts to fit within embedding model token limits.
+
+    Most embedding models support 512 tokens (~2000 chars). We use 3000 chars
+    as a safe limit to accommodate models with larger context (e.g. nomic 2048 tokens).
+    The embedding still captures the key content from the beginning of each chunk.
+    """
+    return [t[:max_chars] if len(t) > max_chars else t for t in texts]
+
+
 def embed_texts(
     texts: list[str],
     mode: str = "passage",
@@ -141,6 +151,7 @@ def embed_texts(
     prefixes = _get_prefixes()
     prefix = prefixes.get(mode, prefixes.get("passage", ""))
     prefixed = [f"{prefix}{t}" for t in texts]
+    prefixed = _truncate_for_embedding(prefixed)
 
     if settings.embedding_mode == "api":
         return _embed_via_api(prefixed)
