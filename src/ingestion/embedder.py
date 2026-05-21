@@ -26,34 +26,43 @@ def _get_prefixes() -> dict:
     return MODEL_PREFIXES["default"]
 
 
-def _embed_via_api(texts: list[str]) -> list[list[float]]:
-    """Call an OpenAI-compatible /v1/embeddings endpoint."""
-    try:
-        resp = requests.post(
-            f'{settings.embedding_api_url}/embeddings',
-            json={"model": settings.embedding_model_name, "input": texts},
-            timeout=120,
-            verify=settings.ssl_verify,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if 'data' in data:
-            return [item['embedding'] for item in data['data']]
-    except Exception as e:
-        logger.warning(f"Batch embedding failed, trying individually: {e}")
+def _embed_via_api(texts: list[str], batch_size: int = 16) -> list[list[float]]:
+    """Call an OpenAI-compatible /v1/embeddings endpoint in batches."""
+    all_embeddings = []
 
-    # Fallback: send individually
-    embeddings = []
-    for text in texts:
-        resp = requests.post(
-            f'{settings.embedding_api_url}/embeddings',
-            json={"model": settings.embedding_model_name, "input": text},
-            timeout=60,
-            verify=settings.ssl_verify,
-        )
-        resp.raise_for_status()
-        embeddings.append(resp.json()['data'][0]['embedding'])
-    return embeddings
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        try:
+            resp = requests.post(
+                f'{settings.embedding_api_url}/embeddings',
+                json={"model": settings.embedding_model_name, "input": batch},
+                timeout=120,
+                verify=settings.ssl_verify,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if 'data' in data:
+                all_embeddings.extend(item['embedding'] for item in data['data'])
+                continue
+        except Exception as e:
+            logger.warning(f"Batch embedding failed (batch {i//batch_size + 1}), trying individually: {e}")
+
+        # Fallback: send individually for this batch
+        for text in batch:
+            try:
+                resp = requests.post(
+                    f'{settings.embedding_api_url}/embeddings',
+                    json={"model": settings.embedding_model_name, "input": text},
+                    timeout=60,
+                    verify=settings.ssl_verify,
+                )
+                resp.raise_for_status()
+                all_embeddings.append(resp.json()['data'][0]['embedding'])
+            except Exception as e:
+                logger.error(f"Individual embedding failed: {e}")
+                raise
+
+    return all_embeddings
 
 
 @lru_cache(maxsize=1)
