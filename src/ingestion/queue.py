@@ -238,6 +238,9 @@ class IngestQueue:
             doc_context += f"\nSummary: {doc_summary}"
         total_chunks = 0
 
+        # Smaller batch sizes for larger tiers to prevent OOM kills
+        TIER_BATCH_SIZES = {"small": 64, "medium": 32, "large": 16, "xlarge": 8}
+
         for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
             self.update_step(job.job_id, IngestStep.CHUNKING, f"Chunking at {tier_name} ({tier_size} chars)")
             tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
@@ -253,7 +256,8 @@ class IngestQueue:
                 )
                 for c in tier_chunks
             ]
-            vectors = await asyncio.to_thread(embed_texts, texts) if texts else []
+            batch_size = TIER_BATCH_SIZES.get(tier_name, 32)
+            vectors = await asyncio.to_thread(embed_texts, texts, "passage", batch_size) if texts else []
 
             self.update_step(job.job_id, IngestStep.STORING, f"Storing {tier_name} chunks")
             if vectors:
