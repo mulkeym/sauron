@@ -80,7 +80,8 @@ async def get_lightrag() -> LightRAG:
             max_token_size=8192,
             func=_embed_func,
         ),
-        embedding_batch_num=10,
+        embedding_batch_num=4,
+        default_embedding_timeout=120,
 
         # Chunking — smaller chunks help smaller models extract entities more reliably
         chunk_token_size=500,
