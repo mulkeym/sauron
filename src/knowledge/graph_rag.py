@@ -73,8 +73,10 @@ async def get_lightrag() -> LightRAG:
         working_dir="data/lightrag",
         llm_model_func=_llm_func,
         llm_model_name=settings.vllm_model_name,
-        llm_model_max_async=settings.llm_concurrency,
-        max_parallel_insert=max(1, settings.llm_concurrency // 2),
+        # Limit concurrent LLM + embedding during KG builds to prevent OOM.
+        # Each merge task triggers LLM call + embedding + graph serialization.
+        llm_model_max_async=min(settings.llm_concurrency, 2) if settings.embedding_mode == "local" else settings.llm_concurrency,
+        max_parallel_insert=1 if settings.embedding_mode == "local" else max(1, settings.llm_concurrency // 2),
 
         embedding_func=EmbeddingFunc(
             embedding_dim=embed_dim,
