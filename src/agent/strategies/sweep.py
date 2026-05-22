@@ -23,7 +23,7 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
 
     # Step 1: Search for relevant documents
     # Date filter adds docs that mention the date — used as a boost, not exclusive
-    date_filter_docs = _extract_date_filter(question, vector_store)
+    date_filter_docs = _extract_date_filter(question, vector_store, user_groups)
     if date_filter_docs:
         logger.info(f"Sweep: date filter found {len(date_filter_docs)} docs mentioning the date")
 
@@ -111,7 +111,7 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     }
 
 
-def _extract_date_filter(question: str, vector_store: VectorStore) -> list[str] | None:
+def _extract_date_filter(question: str, vector_store: VectorStore, user_groups: list[str] | None = None) -> list[str] | None:
     """If the question mentions a specific date, find documents with that date in metadata or filename."""
     month_names = {
         'jan': '01', 'january': '01', 'feb': '02', 'february': '02',
@@ -149,7 +149,7 @@ def _extract_date_filter(question: str, vector_store: VectorStore) -> list[str] 
 
                 # Run async in sync context
                 async def _find_by_metadata():
-                    docs = await store.list_documents()
+                    docs = await store.list_documents(user_groups)
                     matched = set()
                     for doc in docs:
                         # Check metadata dates

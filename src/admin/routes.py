@@ -592,11 +592,11 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
     query_id = str(uuid.uuid4())[:8]
     user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
 
-    # Look up doc_ids for the selected dataset
+    # Look up doc_ids for the selected dataset, filtered by user's ACL groups
     allowed_doc_ids = None
     if app_id:
         store = get_metadata_store()
-        docs = await store.list_documents()
+        docs = await store.list_documents(user_groups)
         allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
     _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": "", "completed_steps": []}

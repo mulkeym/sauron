@@ -15,7 +15,7 @@ def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 3
 
     # Check for date-specific query — restrict to date-matched docs if found
     from src.agent.strategies.sweep import _extract_date_filter
-    date_doc_ids = _extract_date_filter(question, vector_store)
+    date_doc_ids = _extract_date_filter(question, vector_store, user_groups)
     if date_doc_ids:
         # Override doc_ids to only search date-matched documents
         doc_ids = date_doc_ids

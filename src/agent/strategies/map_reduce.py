@@ -50,7 +50,7 @@ async def retrieve_map_reduce(
 
     # Check for date-specific query
     from src.agent.strategies.sweep import _extract_date_filter
-    date_filter_docs = _extract_date_filter(question, vector_store)
+    date_filter_docs = _extract_date_filter(question, vector_store, user_groups)
 
     if date_filter_docs:
         logger.info(f"Map-reduce: date filter found {len(date_filter_docs)} docs mentioning the date")
