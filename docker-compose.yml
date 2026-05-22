@@ -6,8 +6,6 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
-    mem_limit: 6g
-    memswap_limit: 8g
     environment:
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}

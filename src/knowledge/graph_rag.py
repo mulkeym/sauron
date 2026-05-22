@@ -59,6 +59,27 @@ def _detect_embed_dim() -> int:
     return dim
 
 
+def _safe_concurrency(requested: int) -> int:
+    """Return the requested concurrency if memory allows, otherwise back off.
+
+    Each concurrent KG worker needs ~300MB for embedding + buffers.
+    The model itself uses ~1.5GB. We need at least 1GB headroom for
+    graph serialization and other operations.
+    """
+    try:
+        import psutil
+        available_gb = psutil.virtual_memory().available / (1024 ** 3)
+        overhead_gb = 2.5  # model + graph + headroom
+        per_worker_gb = 0.3
+        max_safe = max(1, int((available_gb - overhead_gb) / per_worker_gb))
+        if max_safe < requested:
+            logger.info(f"KG concurrency: {requested} requested, capped to {max_safe} ({available_gb:.1f}GB available)")
+            return max_safe
+    except Exception:
+        pass
+    return requested
+
+
 async def get_lightrag() -> LightRAG:
     """Get or create the LightRAG instance."""
     global _rag_instance, _initialized
@@ -73,10 +94,8 @@ async def get_lightrag() -> LightRAG:
         working_dir="data/lightrag",
         llm_model_func=_llm_func,
         llm_model_name=settings.vllm_model_name,
-        # Limit concurrent LLM + embedding during KG builds to prevent OOM.
-        # Each merge task triggers LLM call + embedding + graph serialization.
-        llm_model_max_async=min(settings.llm_concurrency, 2) if settings.embedding_mode == "local" else settings.llm_concurrency,
-        max_parallel_insert=1 if settings.embedding_mode == "local" else max(1, settings.llm_concurrency // 2),
+        llm_model_max_async=_safe_concurrency(settings.llm_concurrency),
+        max_parallel_insert=max(1, _safe_concurrency(settings.llm_concurrency) // 2),
 
         embedding_func=EmbeddingFunc(
             embedding_dim=embed_dim,
