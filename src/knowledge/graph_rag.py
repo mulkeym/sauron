@@ -40,20 +40,11 @@ async def _llm_func(
     )
 
 
-_embed_lock = asyncio.Lock()
-
 async def _embed_func(texts: list[str], **kwargs) -> np.ndarray:
-    """Embedding function for LightRAG — serialized to prevent concurrent access.
-
-    Nomic-bert's rotary embedding cache gets corrupted when multiple threads
-    hit the model simultaneously (LightRAG spawns parallel workers). The lock
-    ensures only one embedding call runs at a time.
-    """
+    """Embedding function for LightRAG — runs in thread to avoid blocking."""
     from src.ingestion.embedder import embed_texts, _truncate_for_embedding
     truncated = _truncate_for_embedding(texts)
-
-    async with _embed_lock:
-        vectors = await asyncio.to_thread(embed_texts, truncated, "passage")
+    vectors = await asyncio.to_thread(embed_texts, truncated, "passage")
     return np.array(vectors)
 
 
@@ -90,6 +81,9 @@ async def get_lightrag() -> LightRAG:
             max_token_size=8192,
             func=_embed_func,
         ),
+        # Local CPU embedding is not thread-safe (nomic-bert rotary cache corruption).
+        # Serialize with max_async=1 for local mode; API servers handle concurrency internally.
+        embedding_func_max_async=1 if settings.embedding_mode == "local" else settings.llm_concurrency,
         embedding_batch_num=4,
         default_embedding_timeout=120,
 
