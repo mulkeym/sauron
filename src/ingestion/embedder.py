@@ -130,12 +130,22 @@ def _embed_via_local(texts: list[str], batch_size: int = 0) -> list[list[float]]
     return embeddings.tolist()
 
 
-def _truncate_for_embedding(texts: list[str], max_chars: int = 8000) -> list[str]:
-    """Truncate texts to fit within embedding model token limits.
+def _get_max_embed_chars() -> int:
+    """Return safe max chars based on the embedding model's token limit.
 
-    Nomic Embed v1 supports 8192 tokens (~32K chars). We use 8000 chars
-    as a safe limit that accommodates the doc_context prefix added to each chunk.
+    Token-to-char ratio is ~4 chars/token for English text.
     """
+    model = settings.embedding_model_name.lower()
+    if "nomic" in model:
+        return 8000   # nomic: 8192 token limit
+    elif "e5" in model:
+        return 1800   # e5: 512 token limit
+    return 2000       # conservative default for unknown models
+
+
+def _truncate_for_embedding(texts: list[str]) -> list[str]:
+    """Truncate texts to fit within the embedding model's token limit."""
+    max_chars = _get_max_embed_chars()
     return [t[:max_chars] if len(t) > max_chars else t for t in texts]
 
 
