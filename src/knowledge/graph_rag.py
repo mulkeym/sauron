@@ -273,9 +273,8 @@ async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str
             question,
             param=QueryParam(
                 mode=mode,
-                only_need_context=False,
+                only_need_context=True,
                 top_k=top_k,
-                response_type="Brief bullet points focusing on specific names, amounts, and relationships",
             ),
         )
 
