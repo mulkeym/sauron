@@ -42,8 +42,12 @@ async def _llm_func(
 
 async def _embed_func(texts: list[str], **kwargs) -> np.ndarray:
     """Embedding function for LightRAG — runs in thread to avoid blocking."""
-    from src.ingestion.embedder import embed_texts
-    vectors = await asyncio.to_thread(embed_texts, texts, "passage")
+    from src.ingestion.embedder import embed_texts, _truncate_for_embedding
+    # LightRAG may pass texts that exceed the model's token limit or
+    # produce mismatched tensor shapes when batch items vary wildly in length.
+    # Truncate before embedding to prevent both issues.
+    truncated = _truncate_for_embedding(texts)
+    vectors = await asyncio.to_thread(embed_texts, truncated, "passage")
     return np.array(vectors)
 
 
