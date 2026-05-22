@@ -255,12 +255,19 @@ def _get_dataset_allowed_entities(ds_id: int) -> set[str] | None:
 
 
 async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None, dataset_id: int = 0) -> dict:
-    """Query the knowledge graph with ACL and dataset filtering.
+    """Query the knowledge graph with ACL filtering.
 
     If user_groups is provided and doesn't contain "ALL", only returns
     context from documents the user can access.
-    If dataset_id is provided, only returns context from that dataset.
+    If dataset_id is set, skips KG entirely — the shared graph can't
+    reliably filter by dataset, so vector search handles it instead.
     """
+    # Skip KG when a specific dataset is selected — the graph is shared
+    # across all datasets and post-filtering by entity name is unreliable
+    if dataset_id:
+        logger.info(f"Skipping KG query: dataset filter active (dataset_id={dataset_id})")
+        return {"context": "", "mode": mode}
+
     rag = await get_lightrag()
 
     # Reduce top_k for non-admin users to speed up queries
@@ -273,38 +280,26 @@ async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str
             question,
             param=QueryParam(
                 mode=mode,
-                only_need_context=True,
+                only_need_context=False,
                 top_k=top_k,
+                response_type="Brief bullet points focusing on specific names, amounts, and relationships",
             ),
         )
 
         if not result or len(result.strip()) < 20:
             return {"context": "", "mode": mode}
 
-        # Build set of allowed entities from ACL and dataset filters
-        allowed = None
-
+        # ACL post-filter: if user doesn't have ALL access, verify the
+        # response only references documents they can see
         if user_groups and "ALL" not in user_groups:
-            acl_allowed = await _get_acl_allowed_entities(user_groups)
-            if acl_allowed is not None:
-                allowed = acl_allowed
-
-        if dataset_id:
-            import asyncio
-            ds_allowed = await asyncio.to_thread(_get_dataset_allowed_entities, dataset_id)
-            if ds_allowed is not None:
-                if allowed is not None:
-                    allowed = allowed & ds_allowed  # intersection of both filters
-                else:
-                    allowed = ds_allowed
-
-        if allowed is not None:
-            filtered_lines = []
-            for line in result.strip().split("\n"):
-                line_lower = line.lower()
-                if any(ent.lower() in line_lower for ent in allowed) or not line.strip().startswith("-"):
-                    filtered_lines.append(line)
-            result = "\n".join(filtered_lines)
+            allowed = await _get_acl_allowed_entities(user_groups)
+            if allowed is not None:
+                filtered_lines = []
+                for line in result.strip().split("\n"):
+                    line_lower = line.lower()
+                    if any(ent.lower() in line_lower for ent in allowed) or not line.strip().startswith("-"):
+                        filtered_lines.append(line)
+                result = "\n".join(filtered_lines)
 
         return {"context": result.strip(), "mode": mode}
     except Exception as e:
