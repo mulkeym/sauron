@@ -122,11 +122,15 @@ async def retrieve_map_reduce(
         q_lower = question.lower()
         q_words = {w for w in q_lower.split() if len(w) > 3}
 
-        # Search ALL documents by metadata to find ones vector search missed
+        # Search documents by metadata to find ones vector search missed
+        # Respect dataset filter (allowed_doc_ids) if set
         all_docs = await metadata_store.list_documents(user_groups)
+        allowed_set = set(doc_ids) if doc_ids else None
         for doc in all_docs:
             if doc.doc_id in {d for d in candidate_doc_ids}:
                 continue  # already found by vector search
+            if allowed_set and doc.doc_id not in allowed_set:
+                continue  # not in selected dataset
             meta = getattr(doc, 'metadata_tags', {}) or {}
             if not meta:
                 continue

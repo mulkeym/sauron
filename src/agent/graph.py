@@ -110,12 +110,14 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             task_vectors = await asyncio.to_thread(embed_texts, unique_tasks, "query")
 
             # Search in parallel (safe — LanceDB handles concurrent reads)
+            sub_doc_ids = state.get("allowed_doc_ids")
             async def search_subtask(task, vector):
                 return await asyncio.to_thread(
                     vector_store.hybrid_search,
                     vector=vector, text_query=task,
                     user_groups=state.get("user_groups", ["ALL"]),
                     top_k=10, tier="small",
+                    doc_ids=sub_doc_ids,
                 )
 
             all_subtask_results = await asyncio.gather(
