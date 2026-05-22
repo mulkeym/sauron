@@ -152,10 +152,11 @@ def synthesize_answer(state: AgentState) -> dict:
     answer = _strip_reasoning_artifacts(answer)
 
     # Deduplicate citations — one per document, with best relevance score
+    # Include all real documents (skip synthetic chunks like map-reduce, knowledge-graph, metadata-context)
     seen_docs = {}
     for c in chunks:
         doc_id = c.metadata.doc_id
-        if doc_id == "knowledge-graph":
+        if doc_id in SYNTHETIC_IDS:
             continue
         if doc_id not in seen_docs or c.score > seen_docs[doc_id].score:
             seen_docs[doc_id] = c
