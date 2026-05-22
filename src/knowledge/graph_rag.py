@@ -254,52 +254,108 @@ def _get_dataset_allowed_entities(ds_id: int) -> set[str] | None:
     return _files_to_allowed_entities(allowed_files)
 
 
-async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None, dataset_id: int = 0) -> dict:
-    """Query the knowledge graph with ACL filtering.
-
-    If user_groups is provided and doesn't contain "ALL", only returns
-    context from documents the user can access.
-    If dataset_id is set, skips KG entirely — the shared graph can't
-    reliably filter by dataset, so vector search handles it instead.
+async def _get_allowed_filenames_for_query(user_groups: list[str] | None, dataset_id: int) -> set[str] | None:
+    """Get filenames allowed by both ACL and dataset filters.
+    Returns None if no filtering needed (ALL access, no dataset).
     """
-    # Skip KG when a specific dataset is selected — the graph is shared
-    # across all datasets and post-filtering by entity name is unreliable
-    if dataset_id:
-        logger.info(f"Skipping KG query: dataset filter active (dataset_id={dataset_id})")
-        return {"context": "", "mode": mode}
+    from src.db.metadata import MetadataStore
 
+    store = MetadataStore()
+    await store.init()
+
+    # Get ACL-filtered docs
+    if user_groups and "ALL" not in user_groups:
+        docs = await store.list_documents(user_groups)
+    else:
+        docs = await store.list_documents()
+
+    # Further filter by dataset
+    if dataset_id:
+        docs = [d for d in docs if d.dataset_id == dataset_id]
+
+    return {d.filename for d in docs}
+
+
+def _file_path_allowed(file_path: str, allowed_files: set[str] | None) -> bool:
+    """Check if a file_path (possibly SEP-delimited) matches allowed files."""
+    if allowed_files is None:
+        return True
+    # LightRAG uses <SEP> for multi-source entities
+    paths = file_path.split("<SEP>") if "<SEP>" in file_path else [file_path]
+    return any(p.strip() in allowed_files for p in paths)
+
+
+async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None, dataset_id: int = 0) -> dict:
+    """Query the knowledge graph with ACL and dataset filtering.
+
+    Uses aquery_data to get structured results with file_path metadata,
+    then filters entities/chunks by allowed filenames before building context.
+    """
     rag = await get_lightrag()
 
-    # Reduce top_k for non-admin users to speed up queries
     top_k = 20
     if user_groups and "ALL" not in user_groups:
-        top_k = 10  # fewer entities to search = faster
+        top_k = 10
+
+    # Determine if we need file-based filtering
+    needs_filtering = dataset_id or (user_groups and "ALL" not in user_groups)
 
     try:
-        result = await rag.aquery(
-            question,
-            param=QueryParam(
-                mode=mode,
-                only_need_context=False,
-                top_k=top_k,
-                response_type="Brief bullet points focusing on specific names, amounts, and relationships",
-            ),
-        )
+        if needs_filtering:
+            # Use structured query so we can filter by file_path
+            allowed_files = await _get_allowed_filenames_for_query(user_groups, dataset_id)
+
+            data = await rag.aquery_data(
+                question,
+                param=QueryParam(mode=mode, top_k=top_k),
+            )
+            inner = data.get("data", {})
+
+            # Filter entities and chunks by allowed filenames
+            filtered_entities = []
+            for e in inner.get("entities", []):
+                fp = e.get("file_path", "")
+                if _file_path_allowed(fp, allowed_files):
+                    filtered_entities.append(e)
+
+            filtered_chunks = []
+            for c in inner.get("chunks", []):
+                fp = c.get("file_path", "")
+                if _file_path_allowed(fp, allowed_files):
+                    filtered_chunks.append(c)
+
+            if not filtered_entities and not filtered_chunks:
+                return {"context": "", "mode": mode}
+
+            # Build context from filtered results
+            parts = []
+            if filtered_entities:
+                parts.append("Entities:")
+                for e in filtered_entities:
+                    desc = e.get("description", "").split("<SEP>")[0]
+                    parts.append(f"- {e.get('entity_name', '')} ({e.get('entity_type', '')}): {desc}")
+            if filtered_chunks:
+                parts.append("\nRelevant excerpts:")
+                for c in filtered_chunks:
+                    content = c.get("content", "")[:500]
+                    parts.append(f"- [{c.get('file_path', '')}]: {content}")
+
+            result = "\n".join(parts)
+            logger.info(f"KG filtered: {len(filtered_entities)} entities, {len(filtered_chunks)} chunks from {len(inner.get('entities', []))} / {len(inner.get('chunks', []))}")
+        else:
+            # No filtering needed — use LLM-synthesized response for richer context
+            result = await rag.aquery(
+                question,
+                param=QueryParam(
+                    mode=mode,
+                    only_need_context=False,
+                    top_k=top_k,
+                    response_type="Brief bullet points focusing on specific names, amounts, and relationships",
+                ),
+            )
 
         if not result or len(result.strip()) < 20:
             return {"context": "", "mode": mode}
-
-        # ACL post-filter: if user doesn't have ALL access, verify the
-        # response only references documents they can see
-        if user_groups and "ALL" not in user_groups:
-            allowed = await _get_acl_allowed_entities(user_groups)
-            if allowed is not None:
-                filtered_lines = []
-                for line in result.strip().split("\n"):
-                    line_lower = line.lower()
-                    if any(ent.lower() in line_lower for ent in allowed) or not line.strip().startswith("-"):
-                        filtered_lines.append(line)
-                result = "\n".join(filtered_lines)
 
         return {"context": result.strip(), "mode": mode}
     except Exception as e:
