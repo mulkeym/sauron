@@ -160,6 +160,31 @@ def synthesize_answer(state: AgentState) -> dict:
             continue
         if doc_id not in seen_docs or c.score > seen_docs[doc_id].score:
             seen_docs[doc_id] = c
+
+    # Look up source URLs for crawled documents
+    url_map = {}
+    try:
+        import asyncio
+        from src.api.routes_ingest import get_metadata_store
+        ms = get_metadata_store()
+
+        async def _fetch_urls():
+            urls = {}
+            for doc_id in seen_docs:
+                doc_rec = await ms.get_document(doc_id)
+                if doc_rec and getattr(doc_rec, 'source_url', ''):
+                    urls[doc_id] = doc_rec.source_url
+            return urls
+
+        try:
+            url_map = asyncio.run(_fetch_urls())
+        except RuntimeError:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                url_map = pool.submit(asyncio.run, _fetch_urls()).result()
+    except Exception as e:
+        logger.debug(f"Source URL lookup skipped: {e}")
+
     citations = [
         Citation(
             doc_id=c.metadata.doc_id,
@@ -169,6 +194,7 @@ def synthesize_answer(state: AgentState) -> dict:
             page=c.metadata.page,
             snippet=c.text[:200],
             relevance=c.score,
+            source_url=url_map.get(c.metadata.doc_id, ""),
         )
         for c in seen_docs.values()
     ]
