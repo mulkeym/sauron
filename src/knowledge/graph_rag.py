@@ -41,12 +41,22 @@ async def _llm_func(
 
 
 async def _embed_func(texts: list[str], **kwargs) -> np.ndarray:
-    """Embedding function for LightRAG — runs in thread to avoid blocking."""
+    """Embedding function for LightRAG — runs in thread to avoid blocking.
+
+    Embeds one text at a time to avoid a nomic-bert rotary embedding bug
+    where batched inputs with different token lengths cause tensor mismatches.
+    """
     from src.ingestion.embedder import embed_texts, _truncate_for_embedding
     truncated = _truncate_for_embedding(texts)
-    # Use batch_size=1 to avoid nomic-bert tensor shape mismatches when
-    # texts in a batch have different token lengths after padding.
-    vectors = await asyncio.to_thread(embed_texts, truncated, "passage", 1)
+
+    def _embed_one_by_one():
+        all_vecs = []
+        for t in truncated:
+            vecs = embed_texts([t], "passage", 1)
+            all_vecs.append(vecs[0])
+        return all_vecs
+
+    vectors = await asyncio.to_thread(_embed_one_by_one)
     return np.array(vectors)
 
 
