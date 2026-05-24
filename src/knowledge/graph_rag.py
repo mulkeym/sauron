@@ -9,6 +9,7 @@ from lightrag.llm.openai import openai_complete_if_cache
 from lightrag.utils import EmbeddingFunc
 
 from src.config import settings
+from src.knowledge.kg_format import repair_extraction_format, should_skip_graph
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ async def _llm_func(
     This adapter has better prompt construction and format enforcement
     than a raw HTTP call, resulting in more reliable entity extraction.
     """
-    return await openai_complete_if_cache(
+    result = await openai_complete_if_cache(
         model=settings.vllm_model_name,
         prompt=prompt,
         system_prompt=system_prompt,
@@ -36,8 +37,15 @@ async def _llm_func(
         keyword_extraction=keyword_extraction,
         base_url=settings.vllm_base_url,
         api_key=settings.vllm_api_key or "not-needed",
+        # Bound the HTTP call so a wedged connection fails fast instead of
+        # tying up a LightRAG worker until its (2x) execution-timeout cap.
+        timeout=settings.vllm_request_timeout,
         **kwargs,
     )
+    # Small local models occasionally drop a field (e.g. entity type), which
+    # makes LightRAG silently discard otherwise-valid records. Repair before
+    # the result is parsed (and cached).
+    return repair_extraction_format(result)
 
 
 async def _embed_func(texts: list[str], **kwargs) -> np.ndarray:
@@ -107,6 +115,10 @@ async def get_lightrag() -> LightRAG:
         embedding_func_max_async=1 if settings.embedding_mode == "local" else settings.llm_concurrency,
         embedding_batch_num=4,
         default_embedding_timeout=120,
+        # Align LightRAG's per-call LLM timeout with our configured request
+        # timeout (worker execution cap is ~2x this) so slow prose chunks have
+        # room to finish instead of being killed at the 360s default.
+        default_llm_timeout=settings.vllm_request_timeout,
 
         # Chunking — smaller chunks help smaller models extract entities more reliably
         chunk_token_size=500,
@@ -143,6 +155,9 @@ async def get_graph_counts() -> tuple[int, int]:
 
 async def insert_document(text: str, doc_id: str = "", filename: str = "") -> str:
     """Insert a document into LightRAG for knowledge graph extraction."""
+    if should_skip_graph(filename):
+        logger.info(f"Skipping KG extraction for tabular/numeric file: {filename or doc_id}")
+        return "skipped: tabular file has no graph entities"
     rag = await get_lightrag()
     try:
         result = await rag.ainsert(
