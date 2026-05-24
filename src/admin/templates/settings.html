@@ -258,6 +258,11 @@ function generateApiKey() {
         <button type="button" hx-post="/admin/api/settings/purge-knowledge-graph" hx-target="#kg-status" hx-swap="innerHTML" hx-confirm="This will delete ALL knowledge graph data. Continue?">Purge Knowledge Graph</button>
         <span id="kg-status" style="margin-left:0.5rem;"></span>
         <div style="margin-top:0.75rem;">
+            <button type="button" hx-post="/admin/api/settings/purge-orphan-chunks" hx-target="#orphan-status" hx-swap="innerHTML" hx-confirm="Delete vector chunks that have no metadata record? (Refused if ingestion is running or metadata is empty.)">Purge Orphaned Chunks</button>
+            <span id="orphan-status" style="margin-left:0.5rem;"></span>
+            <p class="section-desc" style="margin-top:0.25rem;">Remove vector-store chunks left behind by interrupted ingestions (no owning document).</p>
+        </div>
+        <div style="margin-top:0.75rem;">
             <button type="button" hx-post="/admin/api/settings/backfill-metadata" hx-target="#metadata-status" hx-swap="innerHTML">Backfill Document Metadata</button>
             <span id="metadata-status" style="margin-left:0.5rem;"></span>
             <p class="section-desc" style="margin-top:0.25rem;">Extract metadata for documents ingested before this feature was added.</p>

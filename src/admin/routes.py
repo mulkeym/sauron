@@ -2054,6 +2054,53 @@ async def purge_knowledge_graph():
     return HTMLResponse('<span class="status-ok">Knowledge graph purged. It will rebuild as documents are re-ingested.</span>')
 
 
+@router.post("/api/settings/purge-orphan-chunks")
+async def purge_orphan_chunks():
+    """Delete LanceDB chunks whose doc_id has no metadata document row.
+
+    Orphans arise when an ingestion is hard-killed (e.g. container stop) after
+    chunks are written but before the metadata commit; the graceful failure
+    path cleans these up automatically, but a SIGKILL cannot.
+    """
+    from src.admin.orphans import plan_orphan_purge
+
+    # Cheap guard first: avoid reading the stores while ingestion is running.
+    if ingest_queue.has_active_jobs():
+        return HTMLResponse(
+            '<span style="color:#c00;">Cannot purge orphans while ingestion is in progress. '
+            'Wait for it to finish, then retry.</span>'
+        )
+
+    store = get_metadata_store()
+    docs = await store.list_documents()
+    meta_ids = {d.doc_id for d in docs}
+    vector_store = get_vector_store()
+    try:
+        tbl = vector_store.table.to_pandas()
+    except Exception as e:
+        return HTMLResponse(f'<span style="color:#c00;">Could not read vector store: {e}</span>')
+    if "doc_id" not in tbl.columns or len(tbl) == 0:
+        return HTMLResponse('<span class="status-ok">No chunks present; nothing to purge.</span>')
+
+    status, orphan_ids = plan_orphan_purge(meta_ids, set(tbl["doc_id"].unique()), ingestion_active=False)
+    if status == "refused_empty_metadata":
+        return HTMLResponse(
+            '<span style="color:#c00;">Refusing to purge: metadata has 0 documents, so every chunk '
+            'would be treated as an orphan. If you intend to wipe everything, use a full reset instead.</span>'
+        )
+    if not orphan_ids:
+        return HTMLResponse('<span class="status-ok">No orphaned chunks found.</span>')
+
+    deleted = 0
+    for did in sorted(orphan_ids):
+        deleted += int((tbl["doc_id"] == did).sum())
+        vector_store.delete_by_doc_id(did)
+    return HTMLResponse(
+        f'<span class="status-ok">Purged {deleted} orphaned chunk(s) across {len(orphan_ids)} '
+        f'document(s) that had no metadata record.</span>'
+    )
+
+
 @router.post("/api/settings/purge-feedback")
 async def purge_feedback():
     """Clear all feedback and metrics data to start fresh."""

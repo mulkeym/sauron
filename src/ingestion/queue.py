@@ -3,12 +3,15 @@ from __future__ import annotations
 from __future__ import annotations
 """Ingestion job queue with step-level status tracking."""
 import asyncio
+import logging
 import time
 import threading
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class IngestStep(StrEnum):
@@ -142,6 +145,12 @@ class IngestQueue:
                 error_msg = f"{str(e)}\n{traceback.format_exc()}"
                 logger.error(f"Ingestion failed for {job.filename} at step {job.step}: {error_msg}")
                 self.fail_job(job_id, error_msg)
+                # Roll back partial writes so a failed job can't orphan chunks.
+                # Ingestion writes vectors before committing metadata, so a
+                # mid-flight failure would otherwise leave LanceDB chunks with
+                # no owning document. Deleting by this job's doc_id is bounded
+                # to exactly this job (a no-op if nothing was written yet).
+                await self._cleanup_failed_job(job, vector_store, metadata_store)
                 # Write to file for debugging
                 with open('/tmp/ingest_errors.log', 'a') as f:
                     f.write(f"\n{'='*60}\n")
@@ -150,6 +159,25 @@ class IngestQueue:
                     f.write(f"Progress: {job.progress}\n")
                     f.write(f"Error:\n{error_msg}\n")
             self._queue.task_done()
+
+    async def _cleanup_failed_job(self, job: IngestJob, vector_store, metadata_store):
+        """Remove any partial writes left by a failed job, keyed on its doc_id.
+
+        Bounded to the failed job's own doc_id, so it is safe even if the rest
+        of the store is healthy. Both deletes are no-ops when nothing was
+        written for the doc_id yet (e.g. early failures).
+        """
+        doc_id = job.doc_id
+        if not doc_id:
+            return
+        try:
+            vector_store.delete_by_doc_id(doc_id)
+        except Exception as ce:
+            logger.warning(f"Partial-chunk cleanup failed for {job.filename} ({doc_id}): {ce}")
+        try:
+            await metadata_store.delete_document(doc_id)
+        except Exception as ce:
+            logger.warning(f"Partial-metadata cleanup failed for {job.filename} ({doc_id}): {ce}")
 
     async def _process_job(self, job: IngestJob, vector_store, metadata_store):
         import asyncio
@@ -160,6 +188,7 @@ class IngestQueue:
         from src.retrieval.models import ChunkMetadata
 
         doc_id = str(uuid.uuid4())
+        job.doc_id = doc_id  # record early so a failed job's partial writes can be cleaned up
         file_path = Path(job.file_path)
 
         # Duplicate check: hash file content before doing any work
