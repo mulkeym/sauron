@@ -11,10 +11,20 @@ import pytest
 from src.ingestion.parser import (
     _parse_plaintext,
     _parse_spreadsheet,
+    _sniff_workbook_format,
     parse_document,
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / ".." / "test_fixtures"
+
+
+def _write_xlsx_bytes(path: Path):
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Grade", "Step 1"])
+    ws.append(["GS-1", 20172])
+    wb.save(path)
 
 
 def test_xls_extension_routes_to_spreadsheet_parser():
@@ -67,6 +77,32 @@ def test_tsv_parses_as_delimited(tmp_path):
     p.write_text("Grade\tStep 1\nGS-1\t20172\n")
     parsed = _parse_spreadsheet(p)
     assert "Grade | Step 1" in parsed.text
+
+
+class TestContentBasedDetection:
+    """OPM serves OOXML workbooks under a .xls name; dispatch must follow
+    content (magic bytes), not the extension."""
+
+    def test_sniff_identifies_formats(self, tmp_path):
+        ooxml = tmp_path / "real.xlsx"
+        _write_xlsx_bytes(ooxml)
+        assert _sniff_workbook_format(ooxml) == "ooxml"
+
+        ole = (FIXTURES / "sample.xls").resolve()
+        assert _sniff_workbook_format(ole) == "ole"
+
+        txt = tmp_path / "x.csv"
+        txt.write_text("a,b\n1,2\n")
+        assert _sniff_workbook_format(txt) is None
+
+    def test_ooxml_content_named_xls_parses_via_openpyxl(self, tmp_path):
+        # The actual OPM bug: xlsx bytes, .xls extension.
+        mislabeled = tmp_path / "2021-general-schedule-pay-rates.xls"
+        _write_xlsx_bytes(mislabeled)
+        parsed = _parse_spreadsheet(mislabeled)
+        assert "\x00" not in parsed.text
+        assert "Grade" in parsed.text
+        assert "20172" in parsed.text
 
 
 def test_plaintext_rejects_binary(tmp_path):

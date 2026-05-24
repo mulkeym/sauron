@@ -2033,6 +2033,15 @@ async def cache_stats():
 @router.post("/api/settings/purge-knowledge-graph")
 async def purge_knowledge_graph():
     """Delete all LightRAG knowledge graph data and reinitialize."""
+    # Refuse while ingestion is in flight: a running pipeline holds the old
+    # in-memory LightRAG instance and would re-flush its state into the
+    # freshly-recreated directory, silently restoring the data we just deleted.
+    if ingest_queue.has_active_jobs():
+        return HTMLResponse(
+            '<span style="color:#c00;">Cannot purge while ingestion is in progress — '
+            'an in-flight job would re-write deleted graph data. '
+            'Wait for ingestion to finish, then retry.</span>'
+        )
     import shutil
     lightrag_dir = Path("data/lightrag")
     if lightrag_dir.exists():

@@ -166,24 +166,51 @@ def _parse_docx(path: Path) -> ParsedDocument:
     return ParsedDocument(filename=path.name, doc_type="docx", text=text)
 
 
-def _parse_spreadsheet(path: Path) -> ParsedDocument:
-    """Parse a spreadsheet to text, dispatching by format.
+def _sniff_workbook_format(path: Path) -> str | None:
+    """Detect a workbook's real format from its leading magic bytes.
 
-    openpyxl only reads OOXML (.xlsx/.xlsm); legacy .xls is an OLE binary that
-    needs xlrd, and .csv/.tsv are plain delimited text. Routing them all here
-    (rather than reading .xls as text) is what prevents binary mojibake from
-    being ingested.
+    Extensions lie: some sources (e.g. OPM) serve modern OOXML workbooks under
+    a legacy ``.xls`` name. Dispatching on content instead of extension is what
+    lets those parse correctly rather than failing or producing mojibake.
+
+    Returns "ooxml" (ZIP-based .xlsx/.xlsm), "ole" (legacy binary .xls), or
+    None (not a recognized binary workbook — treat as delimited text).
     """
-    suffix = path.suffix.lower()
-    if suffix in (".csv", ".tsv"):
-        return _parse_delimited(path)
-    if suffix == ".xls":
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if head[:4] == b"PK\x03\x04":
+        return "ooxml"
+    if head == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "ole"
+    return None
+
+
+def _parse_spreadsheet(path: Path) -> ParsedDocument:
+    """Parse a spreadsheet to text, dispatching on actual content.
+
+    openpyxl reads OOXML (.xlsx/.xlsm), xlrd reads legacy OLE .xls, and
+    .csv/.tsv are plain delimited text. We sniff magic bytes first so a
+    mislabeled file (e.g. OOXML content named .xls) is parsed by the right
+    reader instead of being read as binary mojibake.
+    """
+    fmt = _sniff_workbook_format(path)
+    if fmt == "ooxml":
+        return _parse_xlsx(path)
+    if fmt == "ole":
         return _parse_legacy_xls(path)
-    return _parse_xlsx(path)
+    # Not a binary workbook — delimited text (covers .csv/.tsv and any
+    # text content mislabeled with a spreadsheet extension).
+    return _parse_delimited(path)
 
 
 def _parse_xlsx(path: Path) -> ParsedDocument:
-    wb = load_workbook(str(path), read_only=True)
+    import io
+
+    # Read via BytesIO so openpyxl dispatches on content, not the filename —
+    # it otherwise refuses any path not ending in .xlsx/.xlsm, which breaks
+    # the common case of OOXML content served under a .xls name.
+    with open(path, "rb") as fh:
+        wb = load_workbook(io.BytesIO(fh.read()), read_only=True)
     sheet_names = list(wb.sheetnames)
     parts = []
     for sheet_name in sheet_names:
@@ -221,6 +248,12 @@ def _parse_delimited(path: Path) -> ParsedDocument:
     """Parse a .csv/.tsv file into ' | '-joined rows."""
     import csv
 
+    # Guard: a binary file that slipped past the workbook sniff must not be
+    # decoded into mojibake and ingested as "delimited text".
+    if b"\x00" in path.read_bytes()[:8192]:
+        raise ValueError(
+            f"{path.name}: appears to be a binary file, not delimited text; refusing to ingest"
+        )
     delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
     parts = []
     with open(path, newline="", encoding="utf-8", errors="replace") as f:

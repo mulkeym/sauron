@@ -77,6 +77,15 @@ class IngestQueue:
     def list_jobs(self) -> list[IngestJob]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
 
+    def has_active_jobs(self) -> bool:
+        """True if any job is queued or mid-processing (not in a terminal state).
+
+        Used to block destructive operations (e.g. purging the knowledge graph)
+        while an in-flight ingestion could still be writing to it.
+        """
+        terminal = (IngestStep.COMPLETE, IngestStep.FAILED)
+        return any(job.step not in terminal for job in self._jobs.values())
+
     def update_step(self, job_id: str, step: IngestStep, progress: str = ""):
         job = self._jobs.get(job_id)
         if job:
