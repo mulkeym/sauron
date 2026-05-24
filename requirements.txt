@@ -15,6 +15,7 @@ cryptography>=43.0.0
 unstructured[pdf,docx,xlsx]>=0.22.0
 python-docx>=1.2.0
 openpyxl>=3.1.0
+xlrd>=2.0.1  # legacy binary .xls parsing (openpyxl only reads .xlsx)
 
 # Embeddings & Vector DB
 sentence-transformers>=3.3.0

@@ -27,7 +27,7 @@ def parse_document(path: Path) -> ParsedDocument:
         return _parse_pdf(path)
     elif suffix == ".docx":
         return _parse_docx(path)
-    elif suffix in (".xlsx", ".csv"):
+    elif suffix in (".xlsx", ".xlsm", ".xls", ".csv", ".tsv"):
         return _parse_spreadsheet(path)
     elif suffix == ".md":
         return _parse_markdown(path)
@@ -35,7 +35,7 @@ def parse_document(path: Path) -> ParsedDocument:
         return _parse_transcript(path)
     elif suffix in (".conf", ".cfg", ".ini", ".yaml", ".yml", ".json",
                      ".xml", ".log", ".sh", ".bat", ".ps1", ".py",
-                     ".html", ".htm", ".rtf", ".tsv"):
+                     ".html", ".htm", ".rtf"):
         return _parse_plaintext(path)
     else:
         # Try as plain text for any unrecognized extension
@@ -44,7 +44,15 @@ def parse_document(path: Path) -> ParsedDocument:
 
 def _parse_plaintext(path: Path) -> ParsedDocument:
     """Parse any plain text file (config, log, script, etc.)."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    raw = path.read_bytes()
+    # Guard: refuse to ingest binary files as text. Without this, an
+    # unhandled binary format (e.g. a legacy .xls routed here) gets decoded
+    # into mojibake and silently embedded into the vector store.
+    if b"\x00" in raw[:8192]:
+        raise ValueError(
+            f"{path.name}: appears to be a binary file, not text; refusing to ingest as plaintext"
+        )
+    text = raw.decode("utf-8", errors="replace")
     doc_type = path.suffix.lstrip(".") or "text"
     return ParsedDocument(filename=path.name, doc_type=doc_type, text=text)
 
@@ -159,9 +167,26 @@ def _parse_docx(path: Path) -> ParsedDocument:
 
 
 def _parse_spreadsheet(path: Path) -> ParsedDocument:
+    """Parse a spreadsheet to text, dispatching by format.
+
+    openpyxl only reads OOXML (.xlsx/.xlsm); legacy .xls is an OLE binary that
+    needs xlrd, and .csv/.tsv are plain delimited text. Routing them all here
+    (rather than reading .xls as text) is what prevents binary mojibake from
+    being ingested.
+    """
+    suffix = path.suffix.lower()
+    if suffix in (".csv", ".tsv"):
+        return _parse_delimited(path)
+    if suffix == ".xls":
+        return _parse_legacy_xls(path)
+    return _parse_xlsx(path)
+
+
+def _parse_xlsx(path: Path) -> ParsedDocument:
     wb = load_workbook(str(path), read_only=True)
+    sheet_names = list(wb.sheetnames)
     parts = []
-    for sheet_name in wb.sheetnames:
+    for sheet_name in sheet_names:
         ws = wb[sheet_name]
         parts.append(f"Sheet: {sheet_name}")
         rows = list(ws.iter_rows(values_only=True))
@@ -173,7 +198,36 @@ def _parse_spreadsheet(path: Path) -> ParsedDocument:
             parts.append(" | ".join(str(c) if c is not None else "" for c in row))
     wb.close()
     text = "\n".join(parts)
-    return ParsedDocument(filename=path.name, doc_type="xlsx", text=text, metadata={"sheet_names": wb.sheetnames})
+    return ParsedDocument(filename=path.name, doc_type="xlsx", text=text, metadata={"sheet_names": sheet_names})
+
+
+def _parse_legacy_xls(path: Path) -> ParsedDocument:
+    """Parse a legacy binary .xls workbook via xlrd."""
+    import xlrd
+
+    book = xlrd.open_workbook(str(path))
+    sheet_names = book.sheet_names()
+    parts = []
+    for sheet in book.sheets():
+        parts.append(f"Sheet: {sheet.name}")
+        for r in range(sheet.nrows):
+            cells = sheet.row_values(r)
+            parts.append(" | ".join("" if c is None else str(c) for c in cells))
+    text = "\n".join(parts)
+    return ParsedDocument(filename=path.name, doc_type="xls", text=text, metadata={"sheet_names": sheet_names})
+
+
+def _parse_delimited(path: Path) -> ParsedDocument:
+    """Parse a .csv/.tsv file into ' | '-joined rows."""
+    import csv
+
+    delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
+    parts = []
+    with open(path, newline="", encoding="utf-8", errors="replace") as f:
+        for row in csv.reader(f, delimiter=delimiter):
+            parts.append(" | ".join(row))
+    text = "\n".join(parts)
+    return ParsedDocument(filename=path.name, doc_type=path.suffix.lstrip(".") or "csv", text=text)
 
 
 def _parse_transcript(path: Path) -> ParsedDocument:
