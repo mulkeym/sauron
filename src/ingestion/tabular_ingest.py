@@ -102,3 +102,27 @@ async def populate_schema_registry(metadata_store, schema_registry) -> int:
     for schema in schemas:
         schema_registry.register(schema)
     return len(schemas)
+
+
+_SPREADSHEET_DOC_TYPES = ("xlsx", "xls", "csv", "tsv")
+
+
+async def maybe_ingest_spreadsheet(file_path, doc_id, filename, doc_type, acl_groups,
+                                   category, vector_store, metadata_store) -> int:
+    """Run structured ingest if ``doc_type`` is a spreadsheet; otherwise a no-op.
+
+    Shared by EVERY ingestion entry point (the sync pipeline AND the async queue
+    worker) so the structured/DuckDB path can't be wired into one and missed in
+    the other. Fail-open: any error is logged and swallowed (returns 0), so a
+    structured-ingest failure never breaks document ingestion.
+    """
+    if doc_type not in _SPREADSHEET_DOC_TYPES:
+        return 0
+    try:
+        return await ingest_spreadsheet_tables(
+            file_path, doc_id, filename, doc_type, acl_groups, category,
+            vector_store, metadata_store,
+        )
+    except Exception as e:
+        logger.warning(f"Spreadsheet structured ingest failed for {filename}: {e}")
+        return 0

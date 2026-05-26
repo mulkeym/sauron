@@ -337,6 +337,14 @@ class IngestQueue:
                     name=category, description="", acl_groups=job.acl_groups, routing_keywords=[],
                 )
 
+        # Structured handling for spreadsheets: clean sheets -> DuckDB + row narratives.
+        # Same shared helper as the sync pipeline; fail-open inside the helper.
+        from src.ingestion.tabular_ingest import maybe_ingest_spreadsheet
+        await maybe_ingest_spreadsheet(
+            file_path, doc_id, parsed.filename, parsed.doc_type,
+            job.acl_groups, category, vector_store, metadata_store,
+        )
+
         # Step 6: Build knowledge graph via LightRAG
         if job.build_graph:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")

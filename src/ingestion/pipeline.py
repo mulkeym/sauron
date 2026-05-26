@@ -118,16 +118,13 @@ async def ingest_document(
         category=category,
     )
     # Structured handling for spreadsheets: clean sheets -> DuckDB + row narratives.
-    # Fail-open: a structured-ingest error must never break document ingestion.
-    if parsed.doc_type in ("xlsx", "xls", "csv", "tsv"):
-        try:
-            from src.ingestion.tabular_ingest import ingest_spreadsheet_tables
-            await ingest_spreadsheet_tables(
-                file_path, doc_id, parsed.filename, parsed.doc_type,
-                acl_groups, category, vector_store, metadata_store,
-            )
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Spreadsheet structured ingest failed: {e}")
+    # Shared helper (also called by the async queue worker) so both ingestion
+    # paths get the structured path; fail-open inside the helper.
+    from src.ingestion.tabular_ingest import maybe_ingest_spreadsheet
+    await maybe_ingest_spreadsheet(
+        file_path, doc_id, parsed.filename, parsed.doc_type,
+        acl_groups, category, vector_store, metadata_store,
+    )
     # Ensure category exists in categories table
     if category and category != "uncategorized":
         existing = await metadata_store.get_category(category)
