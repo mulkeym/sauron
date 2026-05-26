@@ -6,6 +6,8 @@ from src.ingestion.tabular import SheetGrid, SheetClassification
 from src.ingestion.tabular_store import duckdb_table_name, _safe_column_names
 from src.ingestion.tabular_store import _to_number, load_sheet_to_duckdb
 from src.ingestion.tabular_store import execute_duckdb_sql
+from src.ingestion.tabular_store import schema_from_sheet, DUCKDB_DATABASE
+from src.db.schema_registry import TableSchema
 
 
 def test_table_name_is_sql_safe_and_deterministic():
@@ -76,3 +78,16 @@ def test_execute_duckdb_sql_rejects_non_select(bad_sql):
     con = duckdb.connect()
     with pytest.raises(ValueError):
         execute_duckdb_sql(con, bad_sql)
+
+
+def test_schema_from_sheet_builds_registrable_tableschema():
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    assert isinstance(schema, TableSchema)
+    assert schema.database == DUCKDB_DATABASE
+    assert schema.table == "doc_doc1_pay"
+    assert [c.name for c in schema.columns] == ["grade", "step", "salary"]
+    assert [c.dtype for c in schema.columns] == ["VARCHAR", "DOUBLE", "DOUBLE"]
+    # original header text is preserved as the column description (Plan 2b enriches it)
+    assert [c.description for c in schema.columns] == ["grade", "step", "salary"]
+    assert schema.acl_groups == ["ALL"]

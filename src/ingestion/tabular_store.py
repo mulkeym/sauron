@@ -111,3 +111,30 @@ def execute_duckdb_sql(con, sql: str) -> list[dict]:
     cur = con.execute(sql)
     columns = [d[0] for d in cur.description]
     return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def schema_from_sheet(doc_id: str, sheet_name: str, classification: SheetClassification,
+                      grid: SheetGrid, acl_groups: list[str] | None = None) -> TableSchema:
+    """Build a registrable ``TableSchema`` from a clean sheet.
+
+    Column names match ``load_sheet_to_duckdb``; dtypes map number->DOUBLE and
+    everything else->VARCHAR; descriptions default to the original header text
+    (Plan 2b's profiler replaces these with richer descriptions).
+    """
+    header = grid.rows[classification.header_row_index]
+    col_names = _safe_column_names(header)
+    columns = [
+        ColumnSchema(
+            name=name,
+            dtype="DOUBLE" if dt == "number" else "VARCHAR",
+            description=str(orig).strip(),
+        )
+        for name, dt, orig in zip(col_names, classification.column_dtypes, header)
+    ]
+    return TableSchema(
+        database=DUCKDB_DATABASE,
+        table=duckdb_table_name(doc_id, sheet_name),
+        columns=columns,
+        description=f"Sheet '{sheet_name}' from document {doc_id}",
+        acl_groups=acl_groups or [],
+    )
