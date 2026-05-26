@@ -107,7 +107,7 @@ async def test_failed_map_is_retried_and_can_succeed():
         attempts[doc_id] = attempts.get(doc_id, 0) + 1
         # d2 fails on first attempt, succeeds on retry
         if doc_id == "d2" and attempts[doc_id] == 1:
-            return {"doc_id": doc_id, "filename": "f2", "extraction": "", "status": "failed"}
+            return {"doc_id": doc_id, "filename": "f2", "extraction": "", "status": "failed", "failure_kind": "transient"}
         return {"doc_id": doc_id, "filename": doc_id, "extraction": f"data-{doc_id}", "status": "ok"}
 
     results, failed = await _map_documents(
@@ -122,19 +122,35 @@ async def test_failed_map_is_retried_and_can_succeed():
 
 
 @pytest.mark.asyncio
-async def test_persistent_failures_are_reported_not_dropped():
+async def test_permanent_failure_is_reported_not_retried():
+    # A timeout-style (permanent) failure is reported, never retried.
+    attempts = {}
+
     async def map_one(doc_id):
+        attempts[doc_id] = attempts.get(doc_id, 0) + 1
         if doc_id == "bad":
-            return {"doc_id": doc_id, "filename": "bad", "extraction": "", "status": "failed"}
+            return {"doc_id": doc_id, "filename": "bad", "extraction": "", "status": "failed", "failure_kind": "permanent"}
         return {"doc_id": doc_id, "filename": doc_id, "extraction": "x", "status": "ok"}
 
     results, failed = await _map_documents(
-        ["good", "bad"], map_one, concurrency=2, retry_concurrency=1, max_retries=2
+        ["good", "bad"], map_one, concurrency=2, retry_concurrency=2, max_retries=2,
     )
 
     assert failed == ["bad"]
-    # The good doc's data is preserved.
+    assert attempts["bad"] == 1  # permanent failure was NOT retried
     assert any(r["doc_id"] == "good" and r["status"] == "ok" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_unrecovered_transient_failure_is_reported():
+    # A transient failure that never recovers is still reported, not dropped.
+    async def map_one(doc_id):
+        return {"doc_id": doc_id, "filename": doc_id, "extraction": "", "status": "failed", "failure_kind": "transient"}
+
+    results, failed = await _map_documents(
+        ["d1"], map_one, concurrency=1, retry_concurrency=1, max_retries=1,
+    )
+    assert failed == ["d1"]
 
 
 @pytest.mark.asyncio

@@ -153,13 +153,15 @@ async def _prefilter_by_summary(summaries, question, judge, concurrency: int) ->
 
 
 async def _map_documents(doc_ids, map_one, concurrency: int, retry_concurrency: int, max_retries: int = 1):
-    """Run ``map_one`` over ``doc_ids``, re-attempting failures at reduced
-    concurrency before returning.
+    """Run ``map_one`` over ``doc_ids``, re-attempting only *transient* failures
+    before returning.
 
     ``map_one(doc_id)`` must return a dict with a ``status`` of ``"ok"``,
-    ``"empty"`` (read fine, no relevant content), or ``"failed"`` (timeout/
-    error). Returns ``(results, still_failed_doc_ids)`` — failures that survive
-    every retry are reported, never silently counted as "no data".
+    ``"empty"`` (read fine, no relevant content), or ``"failed"``. A failed
+    result also carries ``failure_kind``: ``"transient"`` (worth retrying) or
+    ``"permanent"`` (timeout/size-driven — never retried, since re-running it
+    only wastes another full timeout). Returns ``(results, still_failed_ids)`` —
+    every surviving failure is reported, never silently counted as "no data".
     """
     async def run(ids, conc):
         sem = asyncio.Semaphore(max(1, conc))
@@ -169,20 +171,24 @@ async def _map_documents(doc_ids, map_one, concurrency: int, retry_concurrency: 
                 return await map_one(did)
         return await asyncio.gather(*[bounded(d) for d in ids])
 
+    def _transient(rs):
+        return [r["doc_id"] for r in rs if r["status"] == "failed" and r.get("failure_kind") == "transient"]
+
     results = await run(doc_ids, concurrency)
     by_id = {r["doc_id"]: r for r in results}
 
-    failed = [r["doc_id"] for r in results if r["status"] == "failed"]
+    retryable = _transient(results)
     retries = 0
-    while failed and retries < max_retries:
+    while retryable and retries < max_retries:
         retries += 1
-        logger.info(f"Map-reduce: retrying {len(failed)} failed docs (attempt {retries}) at concurrency {retry_concurrency}")
-        retry_results = await run(failed, retry_concurrency)
+        logger.info(f"Map-reduce: retrying {len(retryable)} transient-failure docs (attempt {retries}) at concurrency {retry_concurrency}")
+        retry_results = await run(retryable, retry_concurrency)
         for r in retry_results:
             by_id[r["doc_id"]] = r
-        failed = [r["doc_id"] for r in retry_results if r["status"] == "failed"]
+        retryable = _transient(retry_results)
 
-    return list(by_id.values()), failed
+    still_failed = [doc_id for doc_id, r in by_id.items() if r["status"] == "failed"]
+    return list(by_id.values()), still_failed
 
 
 async def retrieve_map_reduce(
@@ -432,13 +438,14 @@ async def retrieve_map_reduce(
             return {"doc_id": doc_id, "filename": filename, "extraction": "", "status": "empty"}
         return {"doc_id": doc_id, "filename": filename, "extraction": extraction.strip(), "status": "ok"}
 
-    # Run MAP with a retry queue: failures are re-attempted at reduced
-    # concurrency before reduce, so transient overload doesn't lose real data.
+    # Run MAP with a retry queue: only *transient* failures are re-attempted (at
+    # full concurrency) before reduce. Permanent failures (timeouts) are reported,
+    # not re-run, so a too-large doc can't waste a second full timeout.
     map_results, still_failed = await _map_documents(
         relevant_doc_ids,
         map_document,
         concurrency=_settings.llm_concurrency,
-        retry_concurrency=max(1, _settings.llm_concurrency // 2),
+        retry_concurrency=_settings.llm_concurrency,  # full concurrency; only transient failures are retried
         max_retries=1,
     )
 
