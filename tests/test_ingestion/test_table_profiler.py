@@ -1,7 +1,7 @@
 """Tests for src/ingestion/table_profiler.py — per-table profile + row narratives."""
 import json
 
-from src.ingestion.table_profiler import TableProfile, _heuristic_profile, profile_table, _fmt_cell, row_narrative
+from src.ingestion.table_profiler import TableProfile, _heuristic_profile, profile_table, _fmt_cell, row_narrative, build_row_narratives
 
 
 def test_heuristic_profile_splits_keys_and_measures_by_dtype():
@@ -111,3 +111,21 @@ def test_row_narrative_marks_missing_cells():
 def test_row_narrative_measures_only():
     profile = TableProfile(column_descriptions={"x": "X"}, key_columns=[], measure_columns=["x"])
     assert row_narrative(["x"], profile, [42]) == "X is 42"
+
+
+def test_build_row_narratives_one_per_row_with_context():
+    rows = [["GS-12", 5, 86415], ["GS-13", 5, 102000]]
+    out = build_row_narratives(["grade", "step", "salary"], _PROFILE, rows, context="GS pay")
+    assert out == [
+        "GS pay — Pay grade=GS-12, Step=5: Annual salary is 86415",
+        "GS pay — Pay grade=GS-13, Step=5: Annual salary is 102000",
+    ]
+
+
+def test_build_row_narratives_without_context():
+    out = build_row_narratives(["grade", "step", "salary"], _PROFILE, [["GS-12", 5, 86415]])
+    assert out == ["Pay grade=GS-12, Step=5: Annual salary is 86415"]
+
+
+def test_build_row_narratives_empty_rows():
+    assert build_row_narratives(["grade"], _PROFILE, []) == []

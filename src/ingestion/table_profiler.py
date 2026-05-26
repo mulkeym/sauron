@@ -124,3 +124,11 @@ def row_narrative(col_names: list[str], profile: TableProfile, row: list) -> str
     if key_str and measure_str:
         return f"{key_str}: {measure_str}"
     return key_str or measure_str
+
+
+def build_row_narratives(col_names: list[str], profile: TableProfile, data_rows: list,
+                         context: str = "") -> list[str]:
+    """One narrative string per data row, optionally prefixed with ``context``
+    (e.g. the table description) so a retrieved narrative is self-describing."""
+    prefix = f"{context} — " if context else ""
+    return [f"{prefix}{row_narrative(col_names, profile, row)}" for row in data_rows]
