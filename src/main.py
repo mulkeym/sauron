@@ -51,13 +51,12 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning(f"LightRAG init deferred: {e}")
     # Load persisted table schemas into the in-memory registry
     try:
+        import logging
         from src.api.routes_ingest import get_schema_registry
         from src.ingestion.tabular_ingest import populate_schema_registry
         n = await populate_schema_registry(store, get_schema_registry())
-        import logging
         logging.getLogger(__name__).info(f"Loaded {n} persisted table schema(s) into the registry")
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"Schema registry load deferred: {e}")
     yield
 

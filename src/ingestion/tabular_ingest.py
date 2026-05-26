@@ -7,6 +7,7 @@ stay authoritative in DuckDB). Fail-open per sheet — one bad sheet never abort
 the others or the surrounding document ingestion.
 """
 import logging
+from pathlib import Path
 
 from src.ingestion.tabular import read_sheets, classify_sheet
 from src.ingestion.tabular_store import (
@@ -22,13 +23,20 @@ logger = logging.getLogger(__name__)
 async def ingest_spreadsheet_tables(file_path, doc_id, filename, doc_type, acl_groups,
                                     category, vector_store, metadata_store,
                                     schema_registry=None, generate_fn=None) -> int:
-    """Process every CLEAN sheet of a spreadsheet. Returns the count processed."""
+    """Process every CLEAN sheet of a spreadsheet.
+
+    Returns the number of sheets FULLY processed (DuckDB rows + registered/
+    persisted schema + embedded narratives all succeeded). Fail-open per sheet:
+    a sheet that fails partway (e.g. an embedding error) is not counted, but any
+    DuckDB rows or persisted schema it already wrote remain — they are valid for
+    SQL querying and are overwritten idempotently on re-ingest.
+    """
     if schema_registry is None:
         from src.api.routes_ingest import get_schema_registry
         schema_registry = get_schema_registry()
 
     try:
-        grids = read_sheets(file_path)
+        grids = read_sheets(Path(file_path))
     except Exception as e:
         logger.warning(f"Tabular ingest: could not read sheets from {filename}: {e}")
         return 0

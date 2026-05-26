@@ -120,6 +120,9 @@ async def test_per_sheet_failure_is_contained(tmp_path, monkeypatch):
         str(xlsx), "doc3", "pay.xlsx", "xlsx", ["ALL"], "",
         vector_store, store, schema_registry=registry, generate_fn=_fake_profile_generate,
     )
+    # The sheet wrote DuckDB rows + a schema before embedding failed; that
+    # partial state is acceptable (valid for SQL, idempotent on re-ingest).
+    # `n` counts only FULLY-processed sheets, so it is 0 and no narratives upsert.
     assert n == 0  # the sheet failed at the embed step, so it was not counted
     vector_store.upsert.assert_not_called()
 

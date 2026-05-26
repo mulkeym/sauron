@@ -133,6 +133,12 @@ def connect_tabular(read_only: bool = False):
     Path comes from ``settings.tabular_duckdb_path`` (on the mounted data
     volume). Ingestion opens read-write (short-lived); query-time opens
     read_only. The parent directory is created if missing.
+
+    NOTE: DuckDB permits only one read-write connection to a file per process at
+    a time. Concurrent ingestion (settings.max_parallel_ingestion > 1) can
+    therefore contend on the write lock; keep it at 1 while tabular ingest is
+    enabled, or serialize writers. (A failed connect is fail-open: the caller
+    logs a warning and skips structured ingest for that document.)
     """
     import os
     import duckdb
