@@ -7,7 +7,30 @@ from src.ingestion.tabular_store import duckdb_table_name, _safe_column_names
 from src.ingestion.tabular_store import _to_number, load_sheet_to_duckdb
 from src.ingestion.tabular_store import execute_duckdb_sql
 from src.ingestion.tabular_store import schema_from_sheet, DUCKDB_DATABASE
+from src.ingestion.tabular_store import connect_tabular
 from src.db.schema_registry import TableSchema
+
+
+def test_connect_tabular_creates_writes_and_reads(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    con = connect_tabular()
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.execute("INSERT INTO t VALUES (1), (2)")
+    assert con.execute("SELECT SUM(x) FROM t").fetchone()[0] == 3
+    con.close()
+
+
+def test_connect_tabular_read_only_sees_committed_data(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    w = connect_tabular()
+    w.execute("CREATE TABLE t (x INTEGER)")
+    w.execute("INSERT INTO t VALUES (7)")
+    w.close()
+    r = connect_tabular(read_only=True)
+    assert r.execute("SELECT x FROM t").fetchone()[0] == 7
+    r.close()
 
 
 def test_table_name_is_sql_safe_and_deterministic():

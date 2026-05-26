@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     lancedb_path: str = "data/lancedb"
     lancedb_table_name: str = "chunks"
 
+    # Tabular store (structured spreadsheet querying)
+    tabular_duckdb_path: str = "data/tabular.duckdb"
+
     # Admin UI
     admin_username: str = "admin"
     admin_password: str = "password123"

@@ -127,6 +127,24 @@ def execute_duckdb_sql(con, sql: str) -> list[dict]:
     return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def connect_tabular(read_only: bool = False):
+    """Open a connection to the persistent tabular DuckDB database.
+
+    Path comes from ``settings.tabular_duckdb_path`` (on the mounted data
+    volume). Ingestion opens read-write (short-lived); query-time opens
+    read_only. The parent directory is created if missing.
+    """
+    import os
+    import duckdb
+    from src.config import settings
+
+    path = settings.tabular_duckdb_path
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    return duckdb.connect(path, read_only=read_only)
+
+
 def schema_from_sheet(doc_id: str, sheet_name: str, classification: SheetClassification,
                       grid: SheetGrid, acl_groups: list[str] | None = None) -> TableSchema:
     """Build a registrable ``TableSchema`` from a clean sheet.
