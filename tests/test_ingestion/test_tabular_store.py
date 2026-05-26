@@ -5,6 +5,7 @@ import duckdb
 from src.ingestion.tabular import SheetGrid, SheetClassification
 from src.ingestion.tabular_store import duckdb_table_name, _safe_column_names
 from src.ingestion.tabular_store import _to_number, load_sheet_to_duckdb
+from src.ingestion.tabular_store import execute_duckdb_sql
 
 
 def test_table_name_is_sql_safe_and_deterministic():
@@ -54,3 +55,24 @@ def test_load_sheet_coerces_bad_numbers_to_null():
     table, _ = load_sheet_to_duckdb(con, "d", "S", cls, grid := SheetGrid("S", rows))
     vals = [r[0] for r in con.execute(f'SELECT v FROM "{table}" ORDER BY k').fetchall()]
     assert vals == [1.0, None, 3.0]  # "oops" -> NULL, not a crash
+
+
+def test_execute_duckdb_sql_returns_dicts():
+    con = duckdb.connect()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    table, _ = load_sheet_to_duckdb(con, "doc1", "Pay", cls, _pay_grid())
+    rows = execute_duckdb_sql(con, f'SELECT grade, salary FROM "{table}" WHERE step = 5 ORDER BY salary')
+    assert rows[0] == {"grade": "GS-10", "salary": 80010.0}
+    assert len(rows) == 4
+
+
+@pytest.mark.parametrize("bad_sql", [
+    "DROP TABLE foo",
+    "INSERT INTO foo VALUES (1)",
+    "UPDATE foo SET x = 1",
+    "SELECT 1; DROP TABLE foo",
+])
+def test_execute_duckdb_sql_rejects_non_select(bad_sql):
+    con = duckdb.connect()
+    with pytest.raises(ValueError):
+        execute_duckdb_sql(con, bad_sql)

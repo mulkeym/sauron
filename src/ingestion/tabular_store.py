@@ -95,3 +95,19 @@ def load_sheet_to_duckdb(con, doc_id: str, sheet_name: str,
                 values.append(None if raw is None else str(raw))
         con.execute(f'INSERT INTO "{table}" VALUES ({placeholders})', values)
     return table, col_names
+
+
+def execute_duckdb_sql(con, sql: str) -> list[dict]:
+    """Run a single SELECT against a DuckDB connection; return list[dict].
+
+    Mirrors the guardrails in src/db/sql_executor.py: a single statement only,
+    and it must be a SELECT.
+    """
+    sql = sql.strip().rstrip(";")
+    if ";" in sql:
+        raise ValueError("Only a single SELECT statement is allowed")
+    if not re.match(r"^\s*SELECT\b", sql, re.IGNORECASE):
+        raise ValueError("Only SELECT queries are allowed")
+    cur = con.execute(sql)
+    columns = [d[0] for d in cur.description]
+    return [dict(zip(columns, row)) for row in cur.fetchall()]
