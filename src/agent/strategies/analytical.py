@@ -2,19 +2,7 @@ import asyncio
 
 from src.agent.state import AgentState
 from src.db.schema_registry import SchemaRegistry
-from src.generation.llm_client import generate
-
-TEXT_TO_SQL_PROMPT = """You are a SQL query generator. Given a natural language question and database schema, generate a single SELECT query.
-
-Rules:
-- Output ONLY the SQL query, no explanation
-- Only use tables and columns from the provided schema
-- Use the table name exactly as given, with no database/schema prefix
-- Always use SELECT (never INSERT, UPDATE, DELETE, DROP, etc.)
-- Keep queries simple and correct
-
-Schema:
-{schema}"""
+from src.agent.strategies.structured import structured_sql_rows
 
 
 async def retrieve_analytical(state: AgentState, vector_store, schema_registry: SchemaRegistry) -> dict:
@@ -26,31 +14,8 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         return await retrieve_map_reduce(state, vector_store=vector_store)
 
-    allowed_tables = {s.table for s in schemas}
-
-    def _generate_and_run():
-        # Build the schema prompt WITH categorical values (queried from DuckDB),
-        # generate SQL, and execute it — all on one read-only connection, off the
-        # event loop. generate() is blocking; that's fine inside this thread.
-        from src.ingestion.tabular_store import (
-            connect_tabular, execute_duckdb_sql, schema_prompt_with_values,
-        )
-        con = connect_tabular(read_only=True)
-        try:
-            schema_prompt = schema_prompt_with_values(schemas, con)
-            sql = generate(
-                system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
-                user_prompt=f"Question: {question}",
-                temperature=0.0,
-                max_tokens=2048,
-            )
-            sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
-            return execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
-        finally:
-            con.close()
-
     try:
-        rows = await asyncio.to_thread(_generate_and_run)
+        rows = await asyncio.to_thread(structured_sql_rows, question, schemas)
     except Exception:
         # No usable SQL (LLM error), blocked SQL, or execution error -> comprehensive retrieval.
         from src.agent.strategies.map_reduce import retrieve_map_reduce
