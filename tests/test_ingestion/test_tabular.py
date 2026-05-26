@@ -7,6 +7,7 @@ import pytest
 from src.ingestion.tabular import SheetGrid, read_sheets
 from src.ingestion.tabular import _cell_kind
 from src.ingestion.tabular import detect_header_row
+from src.ingestion.tabular import infer_column_dtypes
 
 
 def _write_xlsx(path: Path, sheets: dict[str, list[list]]):
@@ -80,3 +81,29 @@ def test_no_header_returns_negative_one():
 
 def test_empty_grid_returns_negative_one():
     assert detect_header_row([]) == -1
+
+
+def test_infer_dtypes_per_column():
+    rows = [
+        ["grade", "step", "salary"],
+        ["GS-12", 5, 86415],
+        ["GS-13", 5, 102000],
+        ["GS-14", 6, 120000],
+    ]
+    assert infer_column_dtypes(rows, header_row_index=0) == ["text", "number", "number"]
+
+
+def test_infer_dtypes_dominant_kind_wins_with_one_outlier():
+    rows = [
+        ["amount"],
+        [100],
+        [200],
+        ["N/A"],   # one text outlier in a numeric column
+        [300],
+    ]
+    assert infer_column_dtypes(rows, header_row_index=0) == ["number"]
+
+
+def test_infer_dtypes_all_empty_column_is_empty():
+    rows = [["a", "b"], [1, None], [2, None]]
+    assert infer_column_dtypes(rows, header_row_index=0) == ["number", "empty"]
