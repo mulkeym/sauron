@@ -18,10 +18,24 @@ IMPORTANT:
 Respond with ONLY valid JSON:
 {"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
 
-def classify_query(state: AgentState) -> dict:
+
+def format_available_tables(schemas) -> str:
+    """One '- <table>: <description>' line per schema, for the classifier prompt."""
+    return "\n".join(f"- {s.table}: {s.description}" for s in schemas)
+
+
+def classify_query(state: AgentState, available_tables: str = "") -> dict:
     question = state["question"]
+    system_prompt = CLASSIFICATION_PROMPT
+    if available_tables:
+        system_prompt += (
+            "\n\nAvailable structured tables (queryable with SQL):\n"
+            f"{available_tables}\n"
+            "If the question asks for specific values, totals, or filtered rows that "
+            "these tables contain, classify it as ANALYTICAL."
+        )
     response = generate(
-        system_prompt=CLASSIFICATION_PROMPT,
+        system_prompt=system_prompt,
         user_prompt=f"Question: {question}",
         temperature=0.0,
         max_tokens=1024,
