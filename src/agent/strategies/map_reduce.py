@@ -187,7 +187,7 @@ async def _map_documents(doc_ids, map_one, concurrency: int, retry_concurrency: 
             by_id[r["doc_id"]] = r
         retryable = _transient(retry_results)
 
-    still_failed = [doc_id for doc_id, r in by_id.items() if r["status"] == "failed"]
+    still_failed = [doc_id for doc_id in doc_ids if by_id[doc_id]["status"] == "failed"]
     return list(by_id.values()), still_failed
 
 
