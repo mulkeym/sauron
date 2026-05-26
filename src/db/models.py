@@ -219,3 +219,19 @@ class StrategyMemory(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class RegisteredSchema(Base):
+    __tablename__ = "registered_schemas"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    database: Mapped[str] = mapped_column(String, nullable=False)
+    table_name: Mapped[str] = mapped_column(String, nullable=False)
+    columns: Mapped[list] = mapped_column(JSON, default=list)   # [{"name","dtype","description"}]
+    description: Mapped[str] = mapped_column(String, default="")
+    acl_groups: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    __table_args__ = (UniqueConstraint("database", "table_name", name="uq_registered_schema"),)

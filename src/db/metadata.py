@@ -3,7 +3,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Dataset, WebConnector
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Dataset, WebConnector, RegisteredSchema
 
 
 class MetadataStore:
@@ -525,3 +525,46 @@ class MetadataStore:
                 orphan_ids = [e.id for e in orphans]
                 await session.execute(delete(Entity).where(Entity.id.in_(orphan_ids)))
                 await session.commit()
+
+    async def save_schema(self, schema) -> None:
+        """Persist a TableSchema, replacing any existing one with the same database.table."""
+        from sqlalchemy import delete as sa_delete
+        from src.db.models import RegisteredSchema
+        cols = [{"name": c.name, "dtype": c.dtype, "description": c.description} for c in schema.columns]
+        async with self.session_factory() as session:
+            await session.execute(sa_delete(RegisteredSchema).where(
+                RegisteredSchema.database == schema.database,
+                RegisteredSchema.table_name == schema.table,
+            ))
+            session.add(RegisteredSchema(
+                database=schema.database, table_name=schema.table,
+                columns=cols, description=schema.description, acl_groups=schema.acl_groups,
+            ))
+            await session.commit()
+
+    async def load_all_schemas(self) -> list:
+        """Load every persisted schema as a list of TableSchema."""
+        from src.db.models import RegisteredSchema
+        from src.db.schema_registry import TableSchema, ColumnSchema
+        async with self.session_factory() as session:
+            result = await session.execute(select(RegisteredSchema))
+            records = result.scalars().all()
+        schemas = []
+        for r in records:
+            columns = [ColumnSchema(name=c["name"], dtype=c["dtype"], description=c.get("description", ""))
+                       for c in (r.columns or [])]
+            schemas.append(TableSchema(database=r.database, table=r.table_name,
+                                       columns=columns, description=r.description,
+                                       acl_groups=r.acl_groups or []))
+        return schemas
+
+    async def delete_schema(self, database: str, table: str) -> None:
+        """Remove a persisted schema by database.table."""
+        from sqlalchemy import delete as sa_delete
+        from src.db.models import RegisteredSchema
+        async with self.session_factory() as session:
+            await session.execute(sa_delete(RegisteredSchema).where(
+                RegisteredSchema.database == database,
+                RegisteredSchema.table_name == table,
+            ))
+            await session.commit()
