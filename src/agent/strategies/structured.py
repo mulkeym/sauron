@@ -9,7 +9,7 @@ import asyncio
 import math
 
 from src.generation.llm_client import generate
-from src.ingestion.embedder import embed_query
+from src.ingestion.embedder import embed_query, embed_texts
 
 TEXT_TO_SQL_PROMPT = """You are a SQL query generator. Given a natural language question and database schema, generate a single SELECT query.
 
@@ -56,6 +56,8 @@ RELEVANCE_THRESHOLD = 0.30  # permissive: bias toward attempting SQL (a false po
 
 
 def _cosine(a, b) -> float:
+    if len(a) != len(b):
+        return 0.0  # dimension mismatch -> treat as unrelated
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
@@ -75,7 +77,6 @@ def tables_relevant_to(question: str, schemas, threshold: float = RELEVANCE_THRE
     """
     if not schemas:
         return []
-    from src.ingestion.embedder import embed_query, embed_texts
     eq = embed_query_fn or embed_query
     et = embed_texts_fn or embed_texts
     qv = eq(question)
@@ -93,8 +94,11 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
     question = state["question"]
     user_groups = state["user_groups"]
 
-    schemas = schema_registry.list_for_user(user_groups)
-    relevant = tables_relevant_to(question, schemas)
+    try:
+        schemas = schema_registry.list_for_user(user_groups)
+        relevant = tables_relevant_to(question, schemas)
+    except Exception:
+        return {}   # gate/registry error -> RAG-only sweep (fail-open)
     if not relevant:
         return {}
 

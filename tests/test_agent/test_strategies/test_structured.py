@@ -103,6 +103,20 @@ async def test_retrieve_structured_empty_when_gate_misses(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_retrieve_structured_fail_open_on_gate_error(monkeypatch):
+    """If the embedding gate raises (service down), retrieve_structured returns {} (RAG-only)."""
+    def boom(q, s, **k):
+        raise RuntimeError("embedding service down")
+    monkeypatch.setattr(structured, "tables_relevant_to", boom)
+    out = await retrieve_structured(
+        {"question": "pay?", "user_groups": ["ALL"]},
+        vector_store=MagicMock(),
+        schema_registry=_reg([_schema("doc_pay", "pay")]),
+    )
+    assert out == {}
+
+
+@pytest.mark.asyncio
 async def test_retrieve_structured_fail_open_on_sql_error(monkeypatch):
     schema = _schema("doc_pay", "GS pay rates")
     monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [schema])
