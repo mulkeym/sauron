@@ -9,6 +9,7 @@ from src.ingestion.tabular import _cell_kind
 from src.ingestion.tabular import detect_header_row
 from src.ingestion.tabular import infer_column_dtypes
 from src.ingestion.tabular import SheetClassification, classify_sheet
+from src.ingestion.tabular import analyze_spreadsheet
 
 
 def _write_xlsx(path: Path, sheets: dict[str, list[list]]):
@@ -143,3 +144,15 @@ def test_ragged_non_rectangular_is_messy():
     ]
     result = classify_sheet(SheetGrid("Messy", rows))
     assert result.route == "messy"
+
+
+def test_analyze_spreadsheet_routes_each_sheet(tmp_path):
+    p = tmp_path / "mixed.xlsx"
+    _write_xlsx(p, {
+        "Pay": [["grade", "step", "salary"]] + [[f"GS-{g}", 5, 80000 + g] for g in range(10, 20)],
+        "Readme": [["This workbook contains GS pay tables."], ["Updated 2024."]],
+    })
+    results = analyze_spreadsheet(p)
+    by_name = {r.sheet_name: r for r in results}
+    assert by_name["Pay"].route == "clean"
+    assert by_name["Readme"].route == "messy"
