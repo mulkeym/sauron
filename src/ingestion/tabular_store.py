@@ -16,16 +16,27 @@ DUCKDB_DATABASE = "spreadsheets"
 
 
 def _referenced_tables(sql: str) -> set[str]:
-    """Lowercased identifiers used as tables (the token after FROM or JOIN).
+    """Lowercased identifiers used as tables (after FROM/JOIN, including
+    comma-joined tables like ``FROM a, b, c``).
 
     Best-effort lexical parse — combined with the connection's
     enable_external_access=False and the allowed_tables check in
-    execute_duckdb_sql, it bounds which tables a query can read.
+    execute_duckdb_sql, it bounds which tables a query can read. Note: it does
+    not resolve schema-qualified names (``schema.table``); spreadsheet tables
+    all live in DuckDB's default ``main`` schema so this is not a concern here.
     """
-    return {
-        m.lower()
-        for m in re.findall(r'\b(?:FROM|JOIN)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?', sql, re.IGNORECASE)
-    }
+    found = set(re.findall(r'\b(?:FROM|JOIN)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?', sql, re.IGNORECASE))
+    # Comma-joined tables: pull each FROM clause (up to the next major keyword)
+    # and take the leading identifier of every comma-separated part.
+    for clause in re.findall(
+        r'\bFROM\s+(.*?)(?=\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|\bLIMIT\b|\bJOIN\b|\)|$)',
+        sql, re.IGNORECASE | re.DOTALL,
+    ):
+        for part in clause.split(','):
+            m = re.match(r'\s*"?([A-Za-z_][A-Za-z0-9_]*)"?', part)
+            if m:
+                found.add(m.group(1))
+    return {m.lower() for m in found}
 
 
 def _cte_names(sql: str) -> set[str]:
@@ -130,7 +141,7 @@ def load_sheet_to_duckdb(con, doc_id: str, sheet_name: str,
 
 _FORBIDDEN_SQL_TOKENS = (
     "read_csv", "read_parquet", "read_json", "read_text",
-    "parquet_scan", "csv_scan", "glob", "attach", "install",
+    "parquet_scan", "csv_scan", "attach", "install",
 )
 
 

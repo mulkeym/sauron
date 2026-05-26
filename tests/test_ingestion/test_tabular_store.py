@@ -208,3 +208,14 @@ def test_execute_without_allowlist_skips_table_check():
     con, table = _con_with_pay()
     rows = execute_duckdb_sql(con, f'SELECT COUNT(*) AS n FROM "{table}"')
     assert rows[0]["n"] == 4
+
+
+def test_referenced_tables_captures_comma_joins():
+    assert _referenced_tables("SELECT * FROM a, b, c WHERE a.id = b.id") == {"a", "b", "c"}
+    assert _referenced_tables('SELECT * FROM "t1", "t2"') == {"t1", "t2"}
+
+
+def test_execute_rejects_comma_joined_table_outside_allowlist():
+    con, table = _con_with_pay()
+    with pytest.raises(ValueError, match="outside the allowed set"):
+        execute_duckdb_sql(con, f'SELECT * FROM "{table}", "doc_other_secret"', allowed_tables={table})
