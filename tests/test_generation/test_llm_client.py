@@ -30,3 +30,22 @@ def test_typed_errors_are_runtimeerror_subclasses():
     assert issubclass(LLMTimeoutError, LLMError)
     assert issubclass(LLMConnectionError, LLMError)
     assert issubclass(LLMError, RuntimeError)
+
+
+def test_connect_timeout_raises_typed_timeout_error(monkeypatch):
+    # ConnectTimeout subclasses BOTH ConnectionError and Timeout; it must be
+    # classified as a (permanent) timeout, not a (transient) connection error.
+    def raise_connect_timeout(*args, **kwargs):
+        raise requests.ConnectTimeout()
+    monkeypatch.setattr(llm_client.requests, "post", raise_connect_timeout)
+    with pytest.raises(LLMTimeoutError):
+        llm_client._call_llm([{"role": "user", "content": "hi"}], "m", 0.0, 8)
+
+
+def test_http_error_raises_base_llm_error(monkeypatch):
+    def raise_http(*args, **kwargs):
+        raise requests.HTTPError()
+    monkeypatch.setattr(llm_client.requests, "post", raise_http)
+    with pytest.raises(LLMError) as exc_info:
+        llm_client._call_llm([{"role": "user", "content": "hi"}], "m", 0.0, 8)
+    assert type(exc_info.value) is LLMError  # base class, not a subclass

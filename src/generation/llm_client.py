@@ -47,10 +47,10 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -
         )
         resp.raise_for_status()
         response = resp.json()
-    except requests.ConnectionError as e:
-        raise LLMConnectionError(f"LLM connection failed: {e}")
     except requests.Timeout:
         raise LLMTimeoutError(f"LLM request timed out after {settings.vllm_request_timeout}s")
+    except requests.ConnectionError as e:
+        raise LLMConnectionError(f"LLM connection failed: {e}")
     except requests.HTTPError as e:
         raise LLMError(f"LLM HTTP error: {e}")
     except json.JSONDecodeError as e:
