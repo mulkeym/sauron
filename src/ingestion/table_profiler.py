@@ -36,3 +36,60 @@ def _heuristic_profile(col_names: list[str], column_dtypes: list[str]) -> TableP
         measure_columns=measure_columns,
         table_description="Table with columns: " + ", ".join(col_names),
     )
+
+
+_PROFILE_SYSTEM = (
+    "You label spreadsheet columns. Given a table's column names and a few "
+    "sample rows, return ONLY a JSON object with these keys:\n"
+    '  "column_descriptions": object mapping each column name to a short human label,\n'
+    '  "key_columns": array of the column names that identify a row (categories/dimensions),\n'
+    '  "measure_columns": array of the numeric value columns,\n'
+    '  "table_description": one sentence describing the table.\n'
+    "Use ONLY the provided column names. Output JSON only, no prose."
+)
+
+
+def profile_table(sheet_name: str, col_names: list[str], column_dtypes: list[str],
+                  sample_rows: list, generate_fn=None) -> TableProfile:
+    """Profile a clean table with a single LLM call; fall back to a heuristic.
+
+    ``generate_fn`` defaults to the real LLM client; tests inject a fake. Any
+    failure (LLM error, unparseable output, missing keys) yields the dtype
+    heuristic so ingestion never breaks. The returned profile's key/measure
+    columns are filtered to names actually present in ``col_names``, and every
+    column gets a description (defaulting to its own name).
+    """
+    if generate_fn is None:
+        from src.generation.llm_client import generate as generate_fn
+
+    try:
+        from src.generation.llm_client import parse_json_response
+        sample_text = "\n".join(" | ".join("" if c is None else str(c) for c in row)
+                                for row in sample_rows[:5])
+        raw = generate_fn(
+            system_prompt=_PROFILE_SYSTEM,
+            user_prompt=f"Sheet: {sheet_name}\nColumns: {col_names}\nSample rows:\n{sample_text}",
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        data = parse_json_response(raw)
+        valid = set(col_names)
+        key_columns = [c for c in data.get("key_columns", []) if c in valid]
+        measure_columns = [c for c in data.get("measure_columns", []) if c in valid]
+        raw_desc = data.get("column_descriptions", {}) or {}
+        descriptions = {c: str(raw_desc.get(c, c)) for c in col_names}
+        table_description = str(data.get("table_description", "")) or (
+            "Table with columns: " + ", ".join(col_names)
+        )
+        if not key_columns and not measure_columns:
+            # LLM gave us nothing usable about structure -> heuristic
+            return _heuristic_profile(col_names, column_dtypes)
+        return TableProfile(
+            column_descriptions=descriptions,
+            key_columns=key_columns,
+            measure_columns=measure_columns,
+            table_description=table_description,
+        )
+    except Exception as e:
+        logger.warning(f"Table profiling failed for '{sheet_name}', using heuristic: {e}")
+        return _heuristic_profile(col_names, column_dtypes)
