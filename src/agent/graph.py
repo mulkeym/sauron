@@ -52,6 +52,16 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 if key not in seen_keys:
                     merged_chunks.append(c)
                     seen_keys.add(key)
+            # Stamp map-reduce's normalized relevance onto the raw chunks so the
+            # playground and citations show a meaningful score instead of the
+            # 0.0 that fetched-by-doc-id chunks carry.
+            doc_relevance = mr_result.get("doc_relevance", {})
+            if doc_relevance:
+                SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
+                for c in merged_chunks:
+                    did = c.metadata.doc_id
+                    if did not in SYNTHETIC_IDS and did in doc_relevance:
+                        c.score = doc_relevance[did]
             retrieve_logger.info(f"Sweep+MapReduce merged: {len(merged_chunks)} total chunks")
             result = {"retrieved_chunks": merged_chunks, "retrieval_attempts": retry_state.get("retrieval_attempts", 0) + 1}
             # Add lightweight metadata context from documents not fully MAP'd
