@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from langgraph.graph import StateGraph, END
 from src.agent.state import AgentState, QueryType
-from src.agent.classifier import classify_query
+from src.agent.classifier import _classify_node_factory
 from src.agent.synthesizer import synthesize_answer
 from src.agent.strategies.lookup import retrieve_lookup
 from src.agent.strategies.sweep import retrieve_sweep
@@ -19,7 +19,7 @@ from src.retrieval.vector_store import VectorStore
 def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None):
     graph = StateGraph(AgentState)
 
-    graph.add_node("classify", classify_query)
+    graph.add_node("classify", _classify_node_factory(schema_registry))
 
     async def retrieve(state: AgentState) -> dict:
         import logging

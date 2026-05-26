@@ -48,3 +48,15 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
         query_type = QueryType.LOOKUP
         sub_tasks = [question]
     return {"query_type": query_type, "sub_tasks": sub_tasks}
+
+
+def _classify_node_factory(schema_registry):
+    """Build a LangGraph 'classify' node that injects the user's ACL-visible
+    registered tables into the classifier prompt."""
+    def classify_node(state: AgentState) -> dict:
+        available = ""
+        if schema_registry is not None:
+            schemas = schema_registry.list_for_user(state.get("user_groups", ["ALL"]))
+            available = format_available_tables(schemas)
+        return classify_query(state, available_tables=available)
+    return classify_node
