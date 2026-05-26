@@ -59,10 +59,9 @@ def profile_table(sheet_name: str, col_names: list[str], column_dtypes: list[str
     columns are filtered to names actually present in ``col_names``, and every
     column gets a description (defaulting to its own name).
     """
-    if generate_fn is None:
-        from src.generation.llm_client import generate as generate_fn
-
     try:
+        if generate_fn is None:
+            from src.generation.llm_client import generate as generate_fn
         from src.generation.llm_client import parse_json_response
         sample_text = "\n".join(" | ".join("" if c is None else str(c) for c in row)
                                 for row in sample_rows[:5])

@@ -81,6 +81,14 @@ def test_profile_table_falls_back_on_unparseable_output():
     assert p.measure_columns == ["step", "salary"]
 
 
+def test_profile_table_falls_back_on_non_dict_json():
+    # Valid JSON but a list, not an object -> data.get(...) fails -> heuristic.
+    gen = _fake_generate([{"key": "val"}])
+    p = profile_table("Pay", _COLS, _DTYPES, _SAMPLE, generate_fn=gen)
+    assert p.key_columns == ["grade"]
+    assert p.measure_columns == ["step", "salary"]
+
+
 _PROFILE = TableProfile(
     column_descriptions={"grade": "Pay grade", "step": "Step", "salary": "Annual salary"},
     key_columns=["grade", "step"],
@@ -95,6 +103,9 @@ def test_fmt_cell():
     assert _fmt_cell("  ") == "(not specified)"
     assert _fmt_cell("GS-12") == "GS-12"
     assert _fmt_cell(5) == "5"
+    assert _fmt_cell(0) == "0"
+    assert _fmt_cell(0.0) == "0.0"
+    assert _fmt_cell(False) == "False"
 
 
 def test_row_narrative_uses_labels_and_keys_then_measures():
