@@ -8,6 +8,7 @@ from src.ingestion.tabular_store import _to_number, load_sheet_to_duckdb
 from src.ingestion.tabular_store import execute_duckdb_sql
 from src.ingestion.tabular_store import schema_from_sheet, DUCKDB_DATABASE
 from src.ingestion.tabular_store import connect_tabular
+from src.ingestion.tabular_store import _referenced_tables, _cte_names
 from src.db.schema_registry import TableSchema
 
 
@@ -142,3 +143,22 @@ def test_connect_tabular_blocks_external_file_access(tmp_path, monkeypatch):
     with pytest.raises(Exception):
         con.execute("SELECT * FROM read_csv('/etc/hostname')").fetchall()
     con.close()
+
+
+def test_referenced_tables_from_and_join():
+    assert _referenced_tables('SELECT * FROM "doc_x_pay" WHERE step = 5') == {"doc_x_pay"}
+    refs = _referenced_tables("SELECT * FROM a JOIN b ON a.id = b.id")
+    assert refs == {"a", "b"}
+
+
+def test_referenced_tables_is_case_insensitive_and_unquoted():
+    assert _referenced_tables('select * from "Doc_X"') == {"doc_x"}
+
+
+def test_cte_names_collects_with_aliases():
+    sql = "WITH totals AS (SELECT 1), avgs AS (SELECT 2) SELECT * FROM totals"
+    assert _cte_names(sql) == {"totals", "avgs"}
+
+
+def test_cte_names_empty_when_no_with():
+    assert _cte_names('SELECT * FROM "doc_x_pay"') == set()

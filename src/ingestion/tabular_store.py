@@ -15,6 +15,28 @@ from src.ingestion.tabular import SheetClassification, SheetGrid
 DUCKDB_DATABASE = "spreadsheets"
 
 
+def _referenced_tables(sql: str) -> set[str]:
+    """Lowercased identifiers used as tables (the token after FROM or JOIN).
+
+    Best-effort lexical parse — combined with the connection's
+    enable_external_access=False and the allowed_tables check in
+    execute_duckdb_sql, it bounds which tables a query can read.
+    """
+    return {
+        m.lower()
+        for m in re.findall(r'\b(?:FROM|JOIN)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?', sql, re.IGNORECASE)
+    }
+
+
+def _cte_names(sql: str) -> set[str]:
+    """Lowercased CTE aliases defined via ``WITH <name> AS (`` so they count as
+    allowed 'tables' when validating references."""
+    return {
+        m.lower()
+        for m in re.findall(r'([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(', sql, re.IGNORECASE)
+    }
+
+
 def duckdb_table_name(doc_id: str, sheet_name: str) -> str:
     """Deterministic, SQL-safe table name for one doc's sheet."""
     safe_doc = re.sub(r"[^0-9a-zA-Z]+", "_", str(doc_id)).strip("_")
