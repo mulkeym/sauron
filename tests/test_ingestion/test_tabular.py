@@ -8,6 +8,7 @@ from src.ingestion.tabular import SheetGrid, read_sheets
 from src.ingestion.tabular import _cell_kind
 from src.ingestion.tabular import detect_header_row
 from src.ingestion.tabular import infer_column_dtypes
+from src.ingestion.tabular import SheetClassification, classify_sheet
 
 
 def _write_xlsx(path: Path, sheets: dict[str, list[list]]):
@@ -107,3 +108,38 @@ def test_infer_dtypes_dominant_kind_wins_with_one_outlier():
 def test_infer_dtypes_all_empty_column_is_empty():
     rows = [["a", "b"], [1, None], [2, None]]
     assert infer_column_dtypes(rows, header_row_index=0) == ["number", "empty"]
+
+
+def test_clean_table_is_classified_clean():
+    rows = [["grade", "step", "salary"]] + [[f"GS-{g}", 5, 80000 + g] for g in range(10, 20)]
+    result = classify_sheet(SheetGrid("Pay", rows))
+    assert isinstance(result, SheetClassification)
+    assert result.route == "clean"
+    assert result.header_row_index == 0
+    assert result.column_dtypes == ["text", "number", "number"]
+
+
+def test_too_few_rows_is_messy():
+    rows = [["grade", "salary"], ["GS-12", 86415]]  # only 1 data row (< MIN_DATA_ROWS)
+    result = classify_sheet(SheetGrid("Tiny", rows))
+    assert result.route == "messy"
+
+
+def test_no_header_is_messy():
+    rows = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]
+    result = classify_sheet(SheetGrid("Raw", rows))
+    assert result.route == "messy"
+    assert result.header_row_index == -1
+
+
+def test_ragged_non_rectangular_is_messy():
+    # Wildly varying row widths => not a rectangular table.
+    rows = [
+        ["a", "b", "c"],
+        ["note spanning"],
+        ["x", "y"],
+        ["only one"],
+        ["p", "q", "r", "s", "t"],
+    ]
+    result = classify_sheet(SheetGrid("Messy", rows))
+    assert result.route == "messy"
