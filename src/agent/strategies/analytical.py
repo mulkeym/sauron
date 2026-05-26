@@ -26,28 +26,28 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         return await retrieve_map_reduce(state, vector_store=vector_store)
 
-    sql = generate(
-        system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
-        user_prompt=f"Question: {question}",
-        temperature=0.0,
-        max_tokens=2048,
-    )
-    sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
-
-    allowed_tables = {s.table for s in schema_registry.list_for_user(user_groups)}
-
-    def _run_query():
-        from src.ingestion.tabular_store import connect_tabular, execute_duckdb_sql
-        con = connect_tabular(read_only=True)
-        try:
-            return execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
-        finally:
-            con.close()
-
     try:
+        sql = await asyncio.to_thread(
+            generate,
+            system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
+            user_prompt=f"Question: {question}",
+            temperature=0.0,
+            max_tokens=2048,
+        )
+        sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
+        allowed_tables = {s.table for s in schema_registry.list_for_user(user_groups)}
+
+        def _run_query():
+            from src.ingestion.tabular_store import connect_tabular, execute_duckdb_sql
+            con = connect_tabular(read_only=True)
+            try:
+                return execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
+            finally:
+                con.close()
+
         rows = await asyncio.to_thread(_run_query)
     except Exception:
-        # Bad/blocked/failed SQL -> fall back to comprehensive retrieval.
+        # No usable SQL (LLM error), blocked SQL, or execution error -> comprehensive retrieval.
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         return await retrieve_map_reduce(state, vector_store=vector_store)
 
