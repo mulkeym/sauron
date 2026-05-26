@@ -9,6 +9,19 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 
+class LLMError(RuntimeError):
+    """Base class for LLM call failures."""
+
+
+class LLMTimeoutError(LLMError):
+    """The LLM request exceeded vllm_request_timeout. Deterministic for a given
+    payload size — re-running it only wastes another full timeout."""
+
+
+class LLMConnectionError(LLMError):
+    """Could not reach the LLM endpoint. Transient — worth retrying."""
+
+
 def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -> str:
     """Call LLM via requests to an OpenAI-compatible endpoint."""
     logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}")
@@ -35,11 +48,11 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -
         resp.raise_for_status()
         response = resp.json()
     except requests.ConnectionError as e:
-        raise RuntimeError(f"LLM connection failed: {e}")
+        raise LLMConnectionError(f"LLM connection failed: {e}")
     except requests.Timeout:
-        raise RuntimeError(f"LLM request timed out after {settings.vllm_request_timeout}s")
+        raise LLMTimeoutError(f"LLM request timed out after {settings.vllm_request_timeout}s")
     except requests.HTTPError as e:
-        raise RuntimeError(f"LLM HTTP error: {e}")
+        raise LLMError(f"LLM HTTP error: {e}")
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Invalid JSON from LLM: {e}\nResponse: {resp.text[:500]}")
 
