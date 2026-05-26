@@ -41,3 +41,57 @@ def _safe_column_names(header: list) -> list[str]:
             name = f"{base}_{suffix}"
         names.append(name)
     return names
+
+
+def _to_number(value) -> float | None:
+    """Coerce a cell to float, or None if it isn't numeric.
+
+    Handles native numbers and numeric strings with $, comma, % formatting.
+    Bools are treated as non-numeric (consistent with tabular._cell_kind).
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    cleaned = str(value).replace("$", "").replace(",", "").replace("%", "").strip()
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def load_sheet_to_duckdb(con, doc_id: str, sheet_name: str,
+                         classification: SheetClassification, grid: SheetGrid) -> tuple[str, list[str]]:
+    """Create a typed DuckDB table for a clean sheet and insert its data rows.
+
+    ``number`` columns become DOUBLE (cells coerced via ``_to_number``); all
+    other columns become VARCHAR. Returns ``(table_name, column_names)``.
+    Replaces any existing table with the same name (re-ingest is idempotent).
+    """
+    header_idx = classification.header_row_index
+    header = grid.rows[header_idx]
+    col_names = _safe_column_names(header)
+    dtypes = classification.column_dtypes
+    table = duckdb_table_name(doc_id, sheet_name)
+
+    col_defs = ", ".join(
+        f'"{name}" {"DOUBLE" if dt == "number" else "VARCHAR"}'
+        for name, dt in zip(col_names, dtypes)
+    )
+    con.execute(f'DROP TABLE IF EXISTS "{table}"')
+    con.execute(f'CREATE TABLE "{table}" ({col_defs})')
+
+    ncols = len(col_names)
+    placeholders = ", ".join(["?"] * ncols)
+    for row in grid.rows[header_idx + 1:]:
+        values = []
+        for c in range(ncols):
+            raw = row[c] if c < len(row) else None
+            if dtypes[c] == "number":
+                values.append(_to_number(raw))
+            else:
+                values.append(None if raw is None else str(raw))
+        con.execute(f'INSERT INTO "{table}" VALUES ({placeholders})', values)
+    return table, col_names
