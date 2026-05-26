@@ -148,7 +148,9 @@ def connect_tabular(read_only: bool = False):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    return duckdb.connect(path, read_only=read_only)
+    # enable_external_access=False blocks read_csv/read_parquet/ATTACH/COPY/httpfs,
+    # so untrusted (LLM-generated) SELECTs cannot reach the filesystem or network.
+    return duckdb.connect(path, read_only=read_only, config={"enable_external_access": False})
 
 
 def schema_from_sheet(doc_id: str, sheet_name: str, classification: SheetClassification,

@@ -129,3 +129,16 @@ def test_schema_from_sheet_raises_on_dtype_mismatch():
     cls = SheetClassification("S", "clean", 0, ["number", "number"], "clean table")
     with pytest.raises(ValueError, match="header has 3 columns but classification has 2"):
         schema_from_sheet("d", "S", cls, SheetGrid("S", rows))
+
+
+def test_connect_tabular_blocks_external_file_access(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    con = connect_tabular()
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.execute("INSERT INTO t VALUES (1)")
+    assert con.execute("SELECT SUM(x) FROM t").fetchone()[0] == 1  # normal queries still work
+    # external file access is disabled -> read_csv on a real file is refused
+    with pytest.raises(Exception):
+        con.execute("SELECT * FROM read_csv('/etc/hostname')").fetchall()
+    con.close()
