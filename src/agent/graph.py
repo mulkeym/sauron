@@ -8,6 +8,7 @@ from src.agent.strategies.lookup import retrieve_lookup
 from src.agent.strategies.sweep import retrieve_sweep
 from src.agent.strategies.map_reduce import retrieve_map_reduce
 from src.agent.strategies.analytical import retrieve_analytical
+from src.agent.strategies.structured import retrieve_structured
 from src.agent.strategies.cross_reference import retrieve_cross_reference
 from src.db.metadata import MetadataStore
 from src.db.schema_registry import SchemaRegistry
@@ -40,14 +41,20 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         elif query_type == QueryType.SWEEP:
             # Run both sweep (raw chunks) and map-reduce (per-doc extraction), merge results
             import asyncio as _asyncio
-            sweep_result, mr_result = await _asyncio.gather(
+            sweep_result, mr_result, struct_result = await _asyncio.gather(
                 retrieve_sweep(retry_state, vector_store=vector_store),
                 retrieve_map_reduce(retry_state, vector_store=vector_store),
+                retrieve_structured(retry_state, vector_store=vector_store, schema_registry=schema_registry),
             )
             # Merge: map-reduce synthetic chunk + sweep raw chunks (deduplicated)
             merged_chunks = mr_result.get("retrieved_chunks", [])
             seen_keys = {(c.metadata.doc_id, c.metadata.chunk_index) for c in merged_chunks}
             for c in sweep_result.get("retrieved_chunks", []):
+                key = (c.metadata.doc_id, c.metadata.chunk_index)
+                if key not in seen_keys:
+                    merged_chunks.append(c)
+                    seen_keys.add(key)
+            for c in struct_result.get("retrieved_chunks", []):
                 key = (c.metadata.doc_id, c.metadata.chunk_index)
                 if key not in seen_keys:
                     merged_chunks.append(c)
@@ -64,6 +71,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                         c.score = doc_relevance[did]
             retrieve_logger.info(f"Sweep+MapReduce merged: {len(merged_chunks)} total chunks")
             result = {"retrieved_chunks": merged_chunks, "retrieval_attempts": retry_state.get("retrieval_attempts", 0) + 1}
+            if struct_result.get("sql_results"):
+                result["sql_results"] = struct_result["sql_results"]
             # Add lightweight metadata context from documents not fully MAP'd
             try:
                 from src.api.routes_ingest import get_metadata_store
