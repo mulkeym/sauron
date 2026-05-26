@@ -70,3 +70,55 @@ async def test_ingest_clean_sheet_stores_rows_schema_and_narratives(tmp_path, mo
     cnt = con.execute(f'SELECT COUNT(*) FROM "{duckdb_table_name("doc1", "Pay")}"').fetchone()[0]
     con.close()
     assert cnt == 4
+
+
+@pytest.mark.asyncio
+async def test_messy_only_workbook_stores_nothing(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    import src.ingestion.tabular_ingest as ti
+    monkeypatch.setattr(ti, "embed_texts", lambda texts: [[0.1] for _ in texts])
+
+    xlsx = tmp_path / "notes.xlsx"
+    _write_xlsx(xlsx, {"Readme": [["This is a narrative note."], ["Updated 2024."]]})
+
+    vector_store = MagicMock()
+    store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await store.init()
+    registry = SchemaRegistry()
+
+    from src.ingestion.tabular_ingest import ingest_spreadsheet_tables
+    n = await ingest_spreadsheet_tables(
+        str(xlsx), "doc2", "notes.xlsx", "xlsx", ["ALL"], "",
+        vector_store, store, schema_registry=registry, generate_fn=_fake_profile_generate,
+    )
+    assert n == 0
+    vector_store.upsert.assert_not_called()
+    assert await store.load_all_schemas() == []
+
+
+@pytest.mark.asyncio
+async def test_per_sheet_failure_is_contained(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    import src.ingestion.tabular_ingest as ti
+    # embedding blows up -> the clean sheet fails, but the call must not raise
+    monkeypatch.setattr(ti, "embed_texts", lambda texts: (_ for _ in ()).throw(RuntimeError("embed down")))
+
+    xlsx = tmp_path / "pay.xlsx"
+    _write_xlsx(xlsx, {
+        "Pay": [["grade", "step", "salary"]] + [[f"GS-{g}", 5, 80000 + g] for g in range(10, 14)],
+    })
+
+    vector_store = MagicMock()
+    store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await store.init()
+    registry = SchemaRegistry()
+
+    from src.ingestion.tabular_ingest import ingest_spreadsheet_tables
+    n = await ingest_spreadsheet_tables(  # must NOT raise
+        str(xlsx), "doc3", "pay.xlsx", "xlsx", ["ALL"], "",
+        vector_store, store, schema_registry=registry, generate_fn=_fake_profile_generate,
+    )
+    assert n == 0  # the sheet failed at the embed step, so it was not counted
+    vector_store.upsert.assert_not_called()
