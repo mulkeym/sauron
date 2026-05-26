@@ -14,7 +14,10 @@ from src.agent.strategies.map_reduce import (
     _map_documents,
     _prefilter_by_summary,
     retrieve_map_reduce,
+    _classify_failure,
+    _cap_content,
 )
+from src.generation.llm_client import LLMTimeoutError, LLMConnectionError
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
 
 
@@ -210,3 +213,29 @@ async def test_retrieve_map_reduce_gates_then_maps_relevant_docs():
     rel = result["doc_relevance"]
     assert rel["d1"] == pytest.approx(1.0)   # top-ranked
     assert rel["d1"] > rel.get("d2", 0.0)
+
+
+# --- Failure classification & payload cap ---------------------------------
+
+def test_timeout_failure_is_permanent():
+    assert _classify_failure(LLMTimeoutError("x")) == "permanent"
+
+
+def test_connection_failure_is_transient():
+    assert _classify_failure(LLMConnectionError("x")) == "transient"
+
+
+def test_unknown_error_is_permanent():
+    # Unknown errors default to permanent — never retried, to avoid wasted timeouts.
+    assert _classify_failure(ValueError("x")) == "permanent"
+
+
+def test_cap_content_truncates_over_budget():
+    capped = _cap_content("a" * 100, 10)
+    assert capped.startswith("a" * 10)
+    assert "[truncated]" in capped
+    assert len(capped) < 100
+
+
+def test_cap_content_leaves_small_content_untouched():
+    assert _cap_content("short", 100) == "short"

@@ -11,7 +11,7 @@ import logging
 import math
 
 from src.agent.state import AgentState
-from src.generation.llm_client import generate
+from src.generation.llm_client import generate, LLMConnectionError
 from src.ingestion.embedder import embed_query
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
@@ -113,6 +113,24 @@ def _normalize_relevance(scores: dict) -> dict:
     if top <= 0:
         return {d: 0.0 for d in scores}
     return {d: s / top for d, s in scores.items()}
+
+
+def _classify_failure(exc: Exception) -> str:
+    """Whether a failed MAP call is worth retrying.
+
+    Connection errors are transient (the endpoint may recover); timeouts and
+    everything else are permanent — a timeout on an oversized doc is
+    deterministic and re-running it only wastes another full timeout.
+    """
+    return "transient" if isinstance(exc, LLMConnectionError) else "permanent"
+
+
+def _cap_content(content: str, budget: int) -> str:
+    """Truncate per-document MAP content to a char budget so no single call can
+    run to the request timeout."""
+    if len(content) > budget:
+        return content[:budget] + "\n... [truncated]"
+    return content
 
 
 async def _prefilter_by_summary(summaries, question, judge, concurrency: int) -> list:
@@ -388,9 +406,7 @@ async def retrieve_map_reduce(
         content = "\n\n".join(c.text for c in chunks)
 
         # Truncate if too long for a single LLM call
-        max_content = _settings.llm_max_context
-        if len(content) > max_content:
-            content = content[:max_content] + "\n... [truncated]"
+        content = _cap_content(content, _settings.map_doc_char_budget)
 
         try:
             extraction = await asyncio.to_thread(
@@ -405,10 +421,12 @@ async def retrieve_map_reduce(
                 max_tokens=8192,
             )
         except Exception as e:
-            # A timeout/error is NOT "no data" — flag it so it can be retried
-            # and, if it still fails, reported instead of silently dropped.
-            logger.warning(f"Map failed for {filename}: {e}")
-            return {"doc_id": doc_id, "filename": filename, "extraction": "", "status": "failed"}
+            # A timeout/error is NOT "no data" — flag its kind so transient
+            # failures are retried and permanent ones (timeouts) are reported
+            # instead of being re-run into another timeout.
+            kind = _classify_failure(e)
+            logger.warning(f"Map {kind} failure for {filename}: {e}")
+            return {"doc_id": doc_id, "filename": filename, "extraction": "", "status": "failed", "failure_kind": kind}
 
         if "NO_RELEVANT_DATA" in extraction:
             return {"doc_id": doc_id, "filename": filename, "extraction": "", "status": "empty"}

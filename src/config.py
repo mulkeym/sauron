@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # LLM context limits (adjust based on your model's context window)
     llm_max_context: int = 200000  # max chars sent to LLM for synthesis (~50K tokens for 256K context models)
     llm_max_output_tokens: int = 32768  # max tokens the LLM can generate in a response
+    map_doc_char_budget: int = 80000  # max chars per MAP extraction call (~20K tokens); tighter than llm_max_context so one oversized doc can't run to the request timeout
 
     # Relevance feedback
     feedback_enabled: bool = True
