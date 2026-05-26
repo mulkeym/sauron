@@ -180,6 +180,44 @@ def execute_duckdb_sql(con, sql: str, allowed_tables=None) -> list[dict]:
     return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def distinct_values(con, table: str, column: str, max_distinct: int = 100) -> list | None:
+    """Distinct non-null values of a column, or None if it has more than
+    ``max_distinct`` (i.e. it's high-cardinality, not a useful categorical hint).
+
+    ``table``/``column`` are our own sanitized identifiers, so the f-string is
+    safe. Used to show the LLM the actual category codes (e.g. locality codes)
+    so it filters on real values instead of guessing human phrasings.
+    """
+    rows = con.execute(
+        f'SELECT DISTINCT "{column}" FROM "{table}" '
+        f'WHERE "{column}" IS NOT NULL LIMIT {int(max_distinct) + 1}'
+    ).fetchall()
+    if len(rows) > max_distinct:
+        return None
+    return [r[0] for r in rows]
+
+
+def schema_prompt_with_values(schemas, con, max_distinct: int = 100) -> str:
+    """Render registered schemas for the text-to-SQL prompt, appending the
+    distinct values of low-cardinality VARCHAR columns so the LLM filters on
+    real category codes (the gap that made 'Rest of U.S.' match 0 rows).
+    """
+    parts = []
+    for s in schemas:
+        col_lines = []
+        for c in s.columns:
+            line = f"  - {c.name} ({c.dtype}): {c.description}"
+            if c.dtype == "VARCHAR":
+                vals = distinct_values(con, s.table, c.name, max_distinct)
+                if vals:
+                    line += " | values: " + ", ".join(str(v) for v in vals)
+            col_lines.append(line)
+        parts.append(
+            f"Table: {s.table}\nDescription: {s.description}\nColumns:\n" + "\n".join(col_lines)
+        )
+    return "\n\n".join(parts)
+
+
 def connect_tabular(read_only: bool = False):
     """Open a connection to the persistent tabular DuckDB database.
 

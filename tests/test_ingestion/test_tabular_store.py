@@ -9,6 +9,7 @@ from src.ingestion.tabular_store import execute_duckdb_sql
 from src.ingestion.tabular_store import schema_from_sheet, DUCKDB_DATABASE
 from src.ingestion.tabular_store import connect_tabular
 from src.ingestion.tabular_store import _referenced_tables, _cte_names
+from src.ingestion.tabular_store import distinct_values, schema_prompt_with_values
 from src.db.schema_registry import TableSchema
 
 
@@ -208,6 +209,29 @@ def test_execute_without_allowlist_skips_table_check():
     con, table = _con_with_pay()
     rows = execute_duckdb_sql(con, f'SELECT COUNT(*) AS n FROM "{table}"')
     assert rows[0]["n"] == 4
+
+
+def test_distinct_values_returns_low_cardinality():
+    con, table = _con_with_pay()
+    assert sorted(distinct_values(con, table, "grade", max_distinct=100)) == [
+        "GS-10", "GS-11", "GS-12", "GS-13"]
+
+
+def test_distinct_values_none_when_high_cardinality():
+    con, table = _con_with_pay()
+    assert distinct_values(con, table, "grade", max_distinct=2) is None
+
+
+def test_schema_prompt_lists_categorical_values():
+    con, table = _con_with_pay()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    prompt = schema_prompt_with_values([schema], con)
+    # VARCHAR 'grade' gets its real values listed in the prompt.
+    grade_line = next(l for l in prompt.splitlines() if l.strip().startswith("- grade"))
+    salary_line = next(l for l in prompt.splitlines() if l.strip().startswith("- salary"))
+    assert "values:" in grade_line and "GS-12" in grade_line
+    assert "values:" not in salary_line  # numeric column: no value list
 
 
 def test_referenced_tables_captures_comma_joins():

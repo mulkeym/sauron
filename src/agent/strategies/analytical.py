@@ -21,31 +21,36 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     question = state["question"]
     user_groups = state["user_groups"]
 
-    schema_prompt = schema_registry.schemas_to_prompt(user_groups)
-    if schema_prompt == "No database schemas available.":
+    schemas = schema_registry.list_for_user(user_groups)
+    if not schemas:
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         return await retrieve_map_reduce(state, vector_store=vector_store)
 
-    try:
-        sql = await asyncio.to_thread(
-            generate,
-            system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
-            user_prompt=f"Question: {question}",
-            temperature=0.0,
-            max_tokens=2048,
+    allowed_tables = {s.table for s in schemas}
+
+    def _generate_and_run():
+        # Build the schema prompt WITH categorical values (queried from DuckDB),
+        # generate SQL, and execute it — all on one read-only connection, off the
+        # event loop. generate() is blocking; that's fine inside this thread.
+        from src.ingestion.tabular_store import (
+            connect_tabular, execute_duckdb_sql, schema_prompt_with_values,
         )
-        sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
-        allowed_tables = {s.table for s in schema_registry.list_for_user(user_groups)}
+        con = connect_tabular(read_only=True)
+        try:
+            schema_prompt = schema_prompt_with_values(schemas, con)
+            sql = generate(
+                system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
+                user_prompt=f"Question: {question}",
+                temperature=0.0,
+                max_tokens=2048,
+            )
+            sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
+            return execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
+        finally:
+            con.close()
 
-        def _run_query():
-            from src.ingestion.tabular_store import connect_tabular, execute_duckdb_sql
-            con = connect_tabular(read_only=True)
-            try:
-                return execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
-            finally:
-                con.close()
-
-        rows = await asyncio.to_thread(_run_query)
+    try:
+        rows = await asyncio.to_thread(_generate_and_run)
     except Exception:
         # No usable SQL (LLM error), blocked SQL, or execution error -> comprehensive retrieval.
         from src.agent.strategies.map_reduce import retrieve_map_reduce
