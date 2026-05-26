@@ -6,6 +6,7 @@ DuckDB connection. No LLM, no embeddings — that is Plan 2b.
 """
 from __future__ import annotations
 
+import math
 import re
 
 from src.db.schema_registry import ColumnSchema, TableSchema
@@ -57,9 +58,12 @@ def _to_number(value) -> float | None:
     if not cleaned:
         return None
     try:
-        return float(cleaned)
+        result = float(cleaned)
     except ValueError:
         return None
+    if math.isnan(result) or math.isinf(result):
+        return None  # "nan"/"inf" would silently corrupt DuckDB aggregates
+    return result
 
 
 def load_sheet_to_duckdb(con, doc_id: str, sheet_name: str,
@@ -74,6 +78,11 @@ def load_sheet_to_duckdb(con, doc_id: str, sheet_name: str,
     header = grid.rows[header_idx]
     col_names = _safe_column_names(header)
     dtypes = classification.column_dtypes
+    if len(col_names) != len(dtypes):
+        raise ValueError(
+            f"Sheet '{sheet_name}': header has {len(col_names)} columns but "
+            f"classification has {len(dtypes)} dtypes"
+        )
     table = duckdb_table_name(doc_id, sheet_name)
 
     col_defs = ", ".join(
@@ -102,6 +111,11 @@ def execute_duckdb_sql(con, sql: str) -> list[dict]:
 
     Mirrors the guardrails in src/db/sql_executor.py: a single statement only,
     and it must be a SELECT.
+
+    NOTE: this guard does NOT sandbox DuckDB's file-reading table functions
+    (read_csv/read_parquet/read_json/etc.). It is safe for trusted/internal SQL
+    only; before exposing this to LLM- or user-generated SQL (Plan 3), add a
+    table-name allowlist.
     """
     sql = sql.strip().rstrip(";")
     if ";" in sql:
@@ -123,6 +137,11 @@ def schema_from_sheet(doc_id: str, sheet_name: str, classification: SheetClassif
     """
     header = grid.rows[classification.header_row_index]
     col_names = _safe_column_names(header)
+    if len(col_names) != len(classification.column_dtypes):
+        raise ValueError(
+            f"Sheet '{sheet_name}': header has {len(col_names)} columns but "
+            f"classification has {len(classification.column_dtypes)} dtypes"
+        )
     columns = [
         ColumnSchema(
             name=name,

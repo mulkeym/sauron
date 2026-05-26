@@ -27,6 +27,7 @@ def test_safe_column_names_sanitizes_and_dedupes():
 @pytest.mark.parametrize("value,expected", [
     (5, 5.0), (3.14, 3.14), ("86415", 86415.0), ("$86,415", 86415.0),
     ("12%", 12.0), ("", None), (None, None), ("N/A", None),
+    ("nan", None), ("inf", None), ("-inf", None),
 ])
 def test_to_number(value, expected):
     assert _to_number(value) == expected
