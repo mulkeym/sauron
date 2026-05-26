@@ -159,3 +159,24 @@ async def test_ingest_document_invokes_tabular_branch_for_spreadsheet(tmp_path, 
     txt.write_text("just some text\n", encoding="utf-8")
     await pipe.ingest_document(str(txt), ["ALL"], "tester", vector_store, store)
     assert len(calls) == 1  # NOT invoked again for a non-spreadsheet
+
+
+@pytest.mark.asyncio
+async def test_populate_schema_registry_loads_persisted(tmp_path):
+    from src.db.schema_registry import TableSchema, ColumnSchema
+    from src.ingestion.tabular_ingest import populate_schema_registry
+
+    store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await store.init()
+    await store.save_schema(TableSchema(
+        database="spreadsheets", table="doc_x_pay",
+        columns=[ColumnSchema(name="grade", dtype="VARCHAR", description="Pay grade")],
+        description="GS pay", acl_groups=["ALL"],
+    ))
+
+    registry = SchemaRegistry()
+    await populate_schema_registry(store, registry)
+
+    loaded = registry.list_for_user(["ALL"])
+    assert len(loaded) == 1
+    assert loaded[0].table == "doc_x_pay"
