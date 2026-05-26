@@ -59,3 +59,59 @@ def test_gate_keeps_only_matching_tables():
 
 def test_gate_empty_when_no_schemas():
     assert tables_relevant_to("anything", []) == []
+
+
+from unittest.mock import MagicMock
+from src.agent.strategies.structured import retrieve_structured
+from src.retrieval.models import RetrievedChunk, ChunkMetadata
+
+
+def _narr_chunk():
+    return RetrievedChunk(text="GS pay grade=GS-12: salary is 86415", score=0.9,
+                          metadata=ChunkMetadata(doc_id="d", filename="f", doc_type="xlsx",
+                          chunk_index=0, start_char=0, acl_groups=["ALL"], chunk_size_tier="table_row"))
+
+
+def _reg(schemas):
+    r = MagicMock()
+    r.list_for_user.return_value = schemas
+    return r
+
+
+@pytest.mark.asyncio
+async def test_retrieve_structured_returns_sql_and_narratives(monkeypatch):
+    schema = _schema("doc_pay", "GS pay rates")
+    monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [schema])
+    monkeypatch.setattr(structured, "structured_sql_rows", lambda q, s: [{"salary": 86415.0}])
+    monkeypatch.setattr(structured, "embed_query", lambda q: [0.1], raising=False)
+    vs = MagicMock()
+    vs.search.return_value = [_narr_chunk()]
+    out = await retrieve_structured({"question": "pay?", "user_groups": ["ALL"]},
+                                    vector_store=vs, schema_registry=_reg([schema]))
+    assert out["sql_results"] == [{"salary": 86415.0}]
+    assert len(out["retrieved_chunks"]) == 1
+    # narratives searched on the table_row tier
+    assert vs.search.call_args.kwargs.get("tier") == "table_row"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_structured_empty_when_gate_misses(monkeypatch):
+    monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [])
+    out = await retrieve_structured({"question": "weather?", "user_groups": ["ALL"]},
+                                    vector_store=MagicMock(), schema_registry=_reg([_schema("doc_pay", "pay")]))
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_retrieve_structured_fail_open_on_sql_error(monkeypatch):
+    schema = _schema("doc_pay", "GS pay rates")
+    monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [schema])
+    def boom(q, s):
+        raise RuntimeError("sql gen down")
+    monkeypatch.setattr(structured, "structured_sql_rows", boom)
+    monkeypatch.setattr(structured, "embed_query", lambda q: [0.1], raising=False)
+    vs = MagicMock(); vs.search.return_value = [_narr_chunk()]
+    out = await retrieve_structured({"question": "pay?", "user_groups": ["ALL"]},
+                                    vector_store=vs, schema_registry=_reg([schema]))
+    assert out["sql_results"] == []                 # SQL failed -> empty, no raise
+    assert len(out["retrieved_chunks"]) == 1        # narratives still returned
