@@ -219,3 +219,60 @@ async def test_maybe_ingest_is_fail_open(monkeypatch):
     monkeypatch.setattr(ti, "ingest_spreadsheet_tables", boom)
     n = await ti.maybe_ingest_spreadsheet("/x", "d", "f.xlsx", "xlsx", ["ALL"], "", MagicMock(), MagicMock())
     assert n == 0
+
+
+def test_schema_registry_remove():
+    from src.db.schema_registry import SchemaRegistry, TableSchema, ColumnSchema
+    reg = SchemaRegistry()
+    s = TableSchema(database="spreadsheets", table="doc_x",
+                    columns=[ColumnSchema("a", "DOUBLE", "")], description="", acl_groups=["ALL"])
+    reg.register(s)
+    assert reg.get_schema("spreadsheets", "doc_x") is not None
+    reg.remove("spreadsheets", "doc_x")
+    assert reg.get_schema("spreadsheets", "doc_x") is None
+    reg.remove("spreadsheets", "doc_x")  # idempotent: no error on missing key
+
+
+@pytest.mark.asyncio
+async def test_cleanup_spreadsheet_tables_drops_tables_and_schemas(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    from src.ingestion.tabular import SheetGrid, SheetClassification
+    from src.ingestion.tabular_store import load_sheet_to_duckdb, schema_from_sheet
+    from src.ingestion.tabular_ingest import cleanup_spreadsheet_tables
+
+    grid = SheetGrid("Pay", [["grade", "salary"], ["GS-12", 86415], ["GS-13", 102000], ["GS-14", 120000]])
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number"], "clean table")
+    con = connect_tabular(read_only=False)
+    table, _ = load_sheet_to_duckdb(con, "doc1", "Pay", cls, grid)
+    con.close()
+
+    store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await store.init()
+    schema = schema_from_sheet("doc1", "Pay", cls, grid, acl_groups=["ALL"])
+    await store.save_schema(schema)
+    reg = SchemaRegistry()
+    reg.register(schema)
+    assert reg.get_schema(schema.database, table) is not None  # precondition
+
+    dropped = await cleanup_spreadsheet_tables("doc1", store, schema_registry=reg)
+
+    assert dropped == 1
+    assert await store.load_all_schemas() == []               # persisted schema gone
+    assert reg.get_schema(schema.database, table) is None      # live registry cleared
+    con = connect_tabular(read_only=True)
+    remaining = con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [table]).fetchone()[0]
+    con.close()
+    assert remaining == 0                                      # DuckDB table dropped
+
+
+@pytest.mark.asyncio
+async def test_cleanup_spreadsheet_tables_noop_for_unknown_doc(tmp_path, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    from src.ingestion.tabular_ingest import cleanup_spreadsheet_tables
+    store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await store.init()
+    n = await cleanup_spreadsheet_tables("nonexistent-doc", store, schema_registry=SchemaRegistry())
+    assert n == 0

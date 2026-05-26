@@ -126,3 +126,48 @@ async def maybe_ingest_spreadsheet(file_path, doc_id, filename, doc_type, acl_gr
     except Exception as e:
         logger.warning(f"Spreadsheet structured ingest failed for {filename}: {e}")
         return 0
+
+
+async def cleanup_spreadsheet_tables(doc_id, metadata_store, schema_registry=None) -> int:
+    """Drop a document's DuckDB tables and delete/unregister its schemas.
+
+    Symmetric with ``maybe_ingest_spreadsheet`` — called from EVERY document-delete
+    path, because the standard delete (metadata + chunks + KG) does NOT otherwise
+    clean the structured store, leaving orphaned DuckDB tables and stale schemas
+    (which would reload into the registry on restart). Fail-open. Returns the
+    number of DuckDB tables dropped. A no-op for non-spreadsheet docs (no tables
+    match the prefix).
+    """
+    if schema_registry is None:
+        from src.api.routes_ingest import get_schema_registry
+        schema_registry = get_schema_registry()
+
+    from src.ingestion.tabular_store import connect_tabular, duckdb_table_name
+    prefix = duckdb_table_name(doc_id, "")  # "doc_<safe_doc_id>_"
+
+    # Remove this doc's schemas from the persistent store AND the live registry.
+    try:
+        for sc in await metadata_store.load_all_schemas():
+            if sc.table.startswith(prefix):
+                await metadata_store.delete_schema(sc.database, sc.table)
+                schema_registry.remove(sc.database, sc.table)
+    except Exception as e:
+        logger.warning(f"Schema cleanup failed for doc {doc_id}: {e}")
+
+    # Drop this doc's DuckDB tables.
+    dropped = 0
+    try:
+        con = connect_tabular(read_only=False)
+        try:
+            tables = [r[0] for r in con.execute(
+                "SELECT table_name FROM information_schema.tables").fetchall()]
+            for t in tables:
+                if t.startswith(prefix):
+                    con.execute(f'DROP TABLE IF EXISTS "{t}"')
+                    dropped += 1
+        finally:
+            con.close()
+    except Exception as e:
+        logger.warning(f"DuckDB table cleanup failed for doc {doc_id}: {e}")
+
+    return dropped

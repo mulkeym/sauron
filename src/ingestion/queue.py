@@ -178,6 +178,11 @@ class IngestQueue:
             await metadata_store.delete_document(doc_id)
         except Exception as ce:
             logger.warning(f"Partial-metadata cleanup failed for {job.filename} ({doc_id}): {ce}")
+        try:
+            from src.ingestion.tabular_ingest import cleanup_spreadsheet_tables
+            await cleanup_spreadsheet_tables(doc_id, metadata_store)
+        except Exception as ce:
+            logger.warning(f"Partial-tabular cleanup failed for {job.filename} ({doc_id}): {ce}")
 
     async def _process_job(self, job: IngestJob, vector_store, metadata_store):
         import asyncio

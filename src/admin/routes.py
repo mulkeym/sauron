@@ -521,6 +521,9 @@ async def delete_document(doc_id: str):
     # Remove vector chunks from LanceDB
     vector_store = get_vector_store()
     vector_store.delete_by_doc_id(doc_id)
+    # Remove any structured (DuckDB) tables + registered schemas for this doc
+    from src.ingestion.tabular_ingest import cleanup_spreadsheet_tables
+    await cleanup_spreadsheet_tables(doc_id, store, get_schema_registry())
     # Queue KG cleanup in background — adelete_by_doc_id is slow (rebuilds entities)
     _kg_delete_queue.append(doc_id)
     asyncio.create_task(_process_kg_deletes())

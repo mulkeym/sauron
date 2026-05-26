@@ -26,6 +26,10 @@ class SchemaRegistry:
         key = f"{schema.database}.{schema.table}"
         self._schemas[key] = schema
 
+    def remove(self, database: str, table: str) -> None:
+        """Unregister a table from the live registry (e.g. on document deletion)."""
+        self._schemas.pop(f"{database}.{table}", None)
+
     def get_schema(self, database: str, table: str) -> TableSchema | None:
         return self._schemas.get(f"{database}.{table}")
 
