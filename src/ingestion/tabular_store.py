@@ -128,22 +128,42 @@ def load_sheet_to_duckdb(con, doc_id: str, sheet_name: str,
     return table, col_names
 
 
-def execute_duckdb_sql(con, sql: str) -> list[dict]:
-    """Run a single SELECT against a DuckDB connection; return list[dict].
+_FORBIDDEN_SQL_TOKENS = (
+    "read_csv", "read_parquet", "read_json", "read_text",
+    "parquet_scan", "csv_scan", "glob", "attach", "install",
+)
 
-    Mirrors the guardrails in src/db/sql_executor.py: a single statement only,
-    and it must be a SELECT.
 
-    NOTE: this guard does NOT sandbox DuckDB's file-reading table functions
-    (read_csv/read_parquet/read_json/etc.). It is safe for trusted/internal SQL
-    only; before exposing this to LLM- or user-generated SQL (Plan 3), add a
-    table-name allowlist.
+def execute_duckdb_sql(con, sql: str, allowed_tables=None) -> list[dict]:
+    """Run a single read-only SELECT/WITH against a DuckDB connection.
+
+    Guards (in addition to the connection's enable_external_access=False):
+      - single statement only, must start with SELECT or WITH;
+      - reject DuckDB file/extension functions (read_csv, attach, install, ...);
+      - if ``allowed_tables`` is given, every FROM/JOIN identifier must be in it
+        (plus any CTE alias defined in the query). This is the ACL boundary —
+        callers pass the set of tables the user may read. ``None`` skips the
+        check (trusted/internal callers only).
+
+    Returns ``list[dict]``.
     """
     sql = sql.strip().rstrip(";")
     if ";" in sql:
         raise ValueError("Only a single SELECT statement is allowed")
-    if not re.match(r"^\s*SELECT\b", sql, re.IGNORECASE):
+    if not re.match(r"^\s*(SELECT|WITH)\b", sql, re.IGNORECASE):
         raise ValueError("Only SELECT queries are allowed")
+
+    lowered = sql.lower()
+    for tok in _FORBIDDEN_SQL_TOKENS:
+        if re.search(r"\b" + re.escape(tok) + r"\b", lowered):
+            raise ValueError(f"Disallowed SQL construct: {tok}")
+
+    if allowed_tables is not None:
+        allowed = {t.lower() for t in allowed_tables} | _cte_names(sql)
+        extra = _referenced_tables(sql) - allowed
+        if extra:
+            raise ValueError(f"Query references tables outside the allowed set: {sorted(extra)}")
+
     cur = con.execute(sql)
     columns = [d[0] for d in cur.description]
     return [dict(zip(columns, row)) for row in cur.fetchall()]

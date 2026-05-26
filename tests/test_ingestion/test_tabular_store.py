@@ -162,3 +162,49 @@ def test_cte_names_collects_with_aliases():
 
 def test_cte_names_empty_when_no_with():
     assert _cte_names('SELECT * FROM "doc_x_pay"') == set()
+
+
+def _con_with_pay():
+    con = duckdb.connect()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    load_sheet_to_duckdb(con, "doc1", "Pay", cls, _pay_grid())
+    return con, "doc_doc1_pay"
+
+
+def test_execute_allows_query_on_allowed_table():
+    con, table = _con_with_pay()
+    rows = execute_duckdb_sql(con, f'SELECT grade FROM "{table}" ORDER BY grade',
+                              allowed_tables={table})
+    assert rows[0]["grade"] == "GS-10"
+
+
+def test_execute_rejects_table_outside_allowlist():
+    con, table = _con_with_pay()
+    with pytest.raises(ValueError, match="outside the allowed set"):
+        execute_duckdb_sql(con, 'SELECT * FROM "doc_other_secret"', allowed_tables={table})
+
+
+def test_execute_allows_cte_referencing_allowed_table():
+    con, table = _con_with_pay()
+    sql = f'WITH hi AS (SELECT * FROM "{table}" WHERE salary > 80011) SELECT grade FROM hi'
+    rows = execute_duckdb_sql(con, sql, allowed_tables={table})
+    assert len(rows) >= 1  # CTE alias "hi" is allowed; the real table is in the allowlist
+
+
+@pytest.mark.parametrize("bad_sql", [
+    "SELECT * FROM read_csv('/etc/hostname')",
+    "SELECT * FROM read_parquet('/tmp/x.parquet')",
+    "ATTACH 'other.db' AS o",
+    "INSTALL httpfs",
+])
+def test_execute_rejects_forbidden_constructs(bad_sql):
+    con = duckdb.connect()
+    with pytest.raises(ValueError):
+        execute_duckdb_sql(con, bad_sql, allowed_tables={"whatever"})
+
+
+def test_execute_without_allowlist_skips_table_check():
+    # allowed_tables=None preserves the internal/back-compat behavior (no ACL check).
+    con, table = _con_with_pay()
+    rows = execute_duckdb_sql(con, f'SELECT COUNT(*) AS n FROM "{table}"')
+    assert rows[0]["n"] == 4
