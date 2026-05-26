@@ -92,3 +92,17 @@ def test_schema_from_sheet_builds_registrable_tableschema():
     # original header text is preserved as the column description (Plan 2b enriches it)
     assert [c.description for c in schema.columns] == ["grade", "step", "salary"]
     assert schema.acl_groups == ["ALL"]
+
+
+def test_load_sheet_raises_on_dtype_mismatch():
+    rows = [["a", "b", "c"], [1, 2, 3]]
+    cls = SheetClassification("S", "clean", 0, ["number", "number"], "clean table")  # 2 dtypes, 3 cols
+    with pytest.raises(ValueError, match="header has 3 columns but classification has 2"):
+        load_sheet_to_duckdb(duckdb.connect(), "d", "S", cls, SheetGrid("S", rows))
+
+
+def test_schema_from_sheet_raises_on_dtype_mismatch():
+    rows = [["a", "b", "c"], [1, 2, 3]]
+    cls = SheetClassification("S", "clean", 0, ["number", "number"], "clean table")
+    with pytest.raises(ValueError, match="header has 3 columns but classification has 2"):
+        schema_from_sheet("d", "S", cls, SheetGrid("S", rows))
