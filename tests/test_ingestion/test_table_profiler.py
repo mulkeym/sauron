@@ -1,7 +1,7 @@
 """Tests for src/ingestion/table_profiler.py — per-table profile + row narratives."""
 import json
 
-from src.ingestion.table_profiler import TableProfile, _heuristic_profile, profile_table
+from src.ingestion.table_profiler import TableProfile, _heuristic_profile, profile_table, _fmt_cell, row_narrative
 
 
 def test_heuristic_profile_splits_keys_and_measures_by_dtype():
@@ -79,3 +79,35 @@ def test_profile_table_falls_back_on_unparseable_output():
     p = profile_table("Pay", _COLS, _DTYPES, _SAMPLE, generate_fn=junk)
     assert p.key_columns == ["grade"]
     assert p.measure_columns == ["step", "salary"]
+
+
+_PROFILE = TableProfile(
+    column_descriptions={"grade": "Pay grade", "step": "Step", "salary": "Annual salary"},
+    key_columns=["grade", "step"],
+    measure_columns=["salary"],
+    table_description="GS pay",
+)
+
+
+def test_fmt_cell():
+    assert _fmt_cell(None) == "(not specified)"
+    assert _fmt_cell("") == "(not specified)"
+    assert _fmt_cell("  ") == "(not specified)"
+    assert _fmt_cell("GS-12") == "GS-12"
+    assert _fmt_cell(5) == "5"
+
+
+def test_row_narrative_uses_labels_and_keys_then_measures():
+    text = row_narrative(["grade", "step", "salary"], _PROFILE, ["GS-12", 5, 86415])
+    assert text == "Pay grade=GS-12, Step=5: Annual salary is 86415"
+
+
+def test_row_narrative_marks_missing_cells():
+    # row shorter than the columns -> missing cells are explicit, never fabricated
+    text = row_narrative(["grade", "step", "salary"], _PROFILE, ["GS-12"])
+    assert text == "Pay grade=GS-12, Step=(not specified): Annual salary is (not specified)"
+
+
+def test_row_narrative_measures_only():
+    profile = TableProfile(column_descriptions={"x": "X"}, key_columns=[], measure_columns=["x"])
+    assert row_narrative(["x"], profile, [42]) == "X is 42"

@@ -93,3 +93,34 @@ def profile_table(sheet_name: str, col_names: list[str], column_dtypes: list[str
     except Exception as e:
         logger.warning(f"Table profiling failed for '{sheet_name}', using heuristic: {e}")
         return _heuristic_profile(col_names, column_dtypes)
+
+
+def _fmt_cell(value) -> str:
+    """Render a cell for a narrative; missing values are explicit, never faked."""
+    if value is None:
+        return "(not specified)"
+    s = str(value).strip()
+    return s if s else "(not specified)"
+
+
+def row_narrative(col_names: list[str], profile: TableProfile, row: list) -> str:
+    """One deterministic sentence for a row: keys as context, then measures.
+
+    Uses the profile's column descriptions as human labels. Cells absent from
+    the row (shorter row) render as "(not specified)" — nothing is fabricated.
+    """
+    index = {name: i for i, name in enumerate(col_names)}
+
+    def cell(name: str) -> str:
+        i = index.get(name)
+        if i is None or i >= len(row):
+            return "(not specified)"
+        return _fmt_cell(row[i])
+
+    keys = [f"{profile.column_descriptions.get(k, k)}={cell(k)}" for k in profile.key_columns]
+    measures = [f"{profile.column_descriptions.get(m, m)} is {cell(m)}" for m in profile.measure_columns]
+    key_str = ", ".join(keys)
+    measure_str = "; ".join(measures)
+    if key_str and measure_str:
+        return f"{key_str}: {measure_str}"
+    return key_str or measure_str
