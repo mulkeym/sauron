@@ -6,6 +6,7 @@ import pytest
 
 from src.ingestion.tabular import SheetGrid, read_sheets
 from src.ingestion.tabular import _cell_kind
+from src.ingestion.tabular import detect_header_row
 
 
 def _write_xlsx(path: Path, sheets: dict[str, list[list]]):
@@ -54,3 +55,28 @@ def test_read_sheets_csv_returns_single_grid(tmp_path):
 ])
 def test_cell_kind(value, expected):
     assert _cell_kind(value) == expected
+
+
+def test_header_is_first_row_when_clean():
+    rows = [["grade", "step", "salary"], ["GS-12", 5, 86415], ["GS-13", 5, 102000]]
+    assert detect_header_row(rows) == 0
+
+
+def test_header_after_title_and_blank_rows():
+    rows = [
+        ["2024 General Schedule"],     # title banner
+        [None, None, None],            # blank
+        ["grade", "step", "salary"],   # real header at index 2
+        ["GS-12", 5, 86415],
+    ]
+    assert detect_header_row(rows) == 2
+
+
+def test_no_header_returns_negative_one():
+    # All-numeric grid with no labels => no detectable header.
+    rows = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    assert detect_header_row(rows) == -1
+
+
+def test_empty_grid_returns_negative_one():
+    assert detect_header_row([]) == -1
