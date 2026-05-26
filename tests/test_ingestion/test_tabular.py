@@ -5,6 +5,7 @@ import openpyxl
 import pytest
 
 from src.ingestion.tabular import SheetGrid, read_sheets
+from src.ingestion.tabular import _cell_kind
 
 
 def _write_xlsx(path: Path, sheets: dict[str, list[list]]):
@@ -37,3 +38,19 @@ def test_read_sheets_csv_returns_single_grid(tmp_path):
     assert grids[0].sheet_name == "data"
     assert grids[0].rows[0] == ["grade", "step", "salary"]
     assert grids[0].rows[1] == ["GS-12", "5", "86415"]  # csv cells are strings
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, "empty"),
+    ("", "empty"),
+    ("   ", "empty"),
+    (5, "number"),
+    (3.14, "number"),
+    ("86415", "number"),
+    ("$86,415", "number"),
+    ("12%", "number"),
+    ("GS-12", "text"),
+    ("grade", "text"),
+])
+def test_cell_kind(value, expected):
+    assert _cell_kind(value) == expected
