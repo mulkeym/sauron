@@ -122,3 +122,40 @@ async def test_per_sheet_failure_is_contained(tmp_path, monkeypatch):
     )
     assert n == 0  # the sheet failed at the embed step, so it was not counted
     vector_store.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_invokes_tabular_branch_for_spreadsheet(tmp_path, monkeypatch):
+    import src.ingestion.pipeline as pipe
+    import src.ingestion.tabular_ingest as ti
+    import src.generation.llm_client as llm
+    import src.knowledge.graph_rag as kg
+
+    # Patch heavy collaborators so we exercise only the branch logic.
+    monkeypatch.setattr(pipe, "embed_texts", lambda texts: [[0.1] for _ in texts])
+    monkeypatch.setattr(llm, "generate", lambda **kw: "summary")
+
+    async def _noop_insert(*a, **k):
+        return None
+    monkeypatch.setattr(kg, "insert_document", _noop_insert)
+
+    calls = []
+
+    async def _fake_orch(*args, **kwargs):
+        calls.append(args)
+        return 1
+    monkeypatch.setattr(ti, "ingest_spreadsheet_tables", _fake_orch)
+
+    store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
+    await store.init()
+    vector_store = MagicMock()
+
+    xlsx = tmp_path / "pay.xlsx"
+    _write_xlsx(xlsx, {"Pay": [["grade", "salary"], ["GS-12", 86415], ["GS-13", 102000], ["GS-14", 120000]]})
+    await pipe.ingest_document(str(xlsx), ["ALL"], "tester", vector_store, store)
+    assert len(calls) == 1  # orchestrator invoked for the spreadsheet
+
+    txt = tmp_path / "note.txt"
+    txt.write_text("just some text\n", encoding="utf-8")
+    await pipe.ingest_document(str(txt), ["ALL"], "tester", vector_store, store)
+    assert len(calls) == 1  # NOT invoked again for a non-spreadsheet

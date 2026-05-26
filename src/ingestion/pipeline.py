@@ -32,7 +32,7 @@ async def ingest_document(
     original_filename="",
 ):
     doc_id = str(uuid.uuid4())
-    parsed = parse_document(file_path)
+    parsed = parse_document(Path(file_path))
     if original_filename:
         parsed.filename = original_filename
 
@@ -117,6 +117,17 @@ async def ingest_document(
         uploaded_by=uploaded_by,
         category=category,
     )
+    # Structured handling for spreadsheets: clean sheets -> DuckDB + row narratives.
+    # Fail-open: a structured-ingest error must never break document ingestion.
+    if parsed.doc_type in ("xlsx", "xls", "csv", "tsv"):
+        try:
+            from src.ingestion.tabular_ingest import ingest_spreadsheet_tables
+            await ingest_spreadsheet_tables(
+                file_path, doc_id, parsed.filename, parsed.doc_type,
+                acl_groups, category, vector_store, metadata_store,
+            )
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Spreadsheet structured ingest failed: {e}")
     # Ensure category exists in categories table
     if category and category != "uncategorized":
         existing = await metadata_store.get_category(category)
