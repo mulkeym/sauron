@@ -1,58 +1,64 @@
+"""Tests for analytical retrieval routed to DuckDB."""
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+
+from src.agent.strategies import analytical
 from src.agent.strategies.analytical import retrieve_analytical
-from src.agent.state import AgentState, QueryType
 from src.db.schema_registry import SchemaRegistry, TableSchema, ColumnSchema
+from src.ingestion.tabular import SheetGrid, SheetClassification
+from src.ingestion.tabular_store import connect_tabular, load_sheet_to_duckdb, schema_from_sheet
 
 
-@pytest.fixture
-def registry():
-    r = SchemaRegistry()
-    r.register(TableSchema(
-        database="finance_db",
-        table="quarterly_results",
-        columns=[
-            ColumnSchema(name="quarter", dtype="varchar", description="Q1-Q4"),
-            ColumnSchema(name="revenue", dtype="numeric", description="Revenue in USD"),
-            ColumnSchema(name="year", dtype="integer", description="Fiscal year"),
-        ],
-        description="Quarterly financial results",
-        acl_groups=["finance"],
-    ))
-    return r
-
-
-@pytest.mark.asyncio
-async def test_analytical_generates_and_executes_sql(registry):
-    mock_vector_store = MagicMock()
-    with patch("src.agent.strategies.analytical.generate", return_value="SELECT revenue FROM quarterly_results WHERE quarter = 'Q3' AND year = 2026"):
-        with patch("src.agent.strategies.analytical.execute_sql", new_callable=AsyncMock, return_value=[{"revenue": 1500000}]):
-            state = AgentState(
-                question="What was Q3 2026 revenue?",
-                user_groups=["finance"],
-                query_type=QueryType.ANALYTICAL,
-                retrieved_chunks=[],
-                sql_results=[],
-                retrieval_attempts=0,
-            )
-            result = await retrieve_analytical(state, vector_store=mock_vector_store, schema_registry=registry)
-    assert len(result["sql_results"]) == 1
-    assert result["sql_results"][0]["revenue"] == 1500000
+def _make_pay_duckdb(tmp_path, monkeypatch):
+    """Create a tabular.duckdb with a doc_doc1_pay table; return (registry, table)."""
+    from src.config import settings
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    grid = SheetGrid("Pay", [["grade", "step", "salary"]] + [[f"GS-{g}", 5, 80000 + g] for g in range(10, 14)])
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    con = connect_tabular(read_only=False)
+    table, _ = load_sheet_to_duckdb(con, "doc1", "Pay", cls, grid)
+    con.close()
+    reg = SchemaRegistry()
+    reg.register(schema_from_sheet("doc1", "Pay", cls, grid, acl_groups=["ALL"]))
+    return reg, table
 
 
 @pytest.mark.asyncio
-async def test_analytical_no_schemas_available():
-    mock_vector_store = MagicMock()
-    mock_vector_store.search = MagicMock(return_value=[])
-    empty_registry = SchemaRegistry()
-    state = AgentState(
-        question="What was Q3 revenue?",
-        user_groups=["engineering"],
-        query_type=QueryType.ANALYTICAL,
-        retrieved_chunks=[],
-        sql_results=[],
-        retrieval_attempts=0,
-    )
-    result = await retrieve_analytical(state, vector_store=mock_vector_store, schema_registry=empty_registry)
-    assert result["sql_results"] == []
-    assert "retrieved_chunks" in result
+async def test_analytical_runs_sql_against_duckdb(tmp_path, monkeypatch):
+    reg, table = _make_pay_duckdb(tmp_path, monkeypatch)
+    monkeypatch.setattr(analytical, "generate",
+                        lambda **kw: f'SELECT grade, salary FROM "{table}" WHERE step = 5 ORDER BY salary')
+
+    state = {"question": "engineer pay", "user_groups": ["ALL"], "retrieval_attempts": 0}
+    result = await retrieve_analytical(state, vector_store=MagicMock(), schema_registry=reg)
+
+    assert result["sql_results"][0] == {"grade": "GS-10", "salary": 80010.0}
+    assert len(result["sql_results"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_analytical_falls_back_when_no_schemas(monkeypatch):
+    import src.agent.strategies.map_reduce as mr
+    async def fake_mr(state, vector_store):
+        return {"retrieved_chunks": [], "fellback": True}
+    monkeypatch.setattr(mr, "retrieve_map_reduce", fake_mr)
+
+    state = {"question": "x", "user_groups": ["ALL"], "retrieval_attempts": 0}
+    result = await retrieve_analytical(state, vector_store=MagicMock(), schema_registry=SchemaRegistry())
+    assert result.get("fellback") is True
+
+
+@pytest.mark.asyncio
+async def test_analytical_falls_back_when_sql_references_disallowed_table(tmp_path, monkeypatch):
+    reg, table = _make_pay_duckdb(tmp_path, monkeypatch)
+    # LLM emits SQL referencing a table the user is NOT allowed -> allowlist rejects -> fallback
+    monkeypatch.setattr(analytical, "generate", lambda **kw: 'SELECT * FROM "doc_other_secret"')
+    import src.agent.strategies.map_reduce as mr
+    async def fake_mr(state, vector_store):
+        return {"retrieved_chunks": [], "fellback": True}
+    monkeypatch.setattr(mr, "retrieve_map_reduce", fake_mr)
+
+    state = {"question": "x", "user_groups": ["ALL"], "retrieval_attempts": 0}
+    result = await retrieve_analytical(state, vector_store=MagicMock(), schema_registry=reg)
+    assert result.get("fellback") is True
