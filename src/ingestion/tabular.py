@@ -82,14 +82,17 @@ def _read_ooxml(path: Path) -> list[SheetGrid]:
     from openpyxl import load_workbook
 
     with open(path, "rb") as fh:
-        wb = load_workbook(io.BytesIO(fh.read()), read_only=True, data_only=True)
-    grids = []
-    for name in wb.sheetnames:
-        ws = wb[name]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
-        grids.append(SheetGrid(sheet_name=name, rows=rows))
-    wb.close()
-    return grids
+        data = io.BytesIO(fh.read())
+    wb = load_workbook(data, read_only=True, data_only=True)
+    try:
+        grids = []
+        for name in wb.sheetnames:
+            ws = wb[name]
+            rows = [list(r) for r in ws.iter_rows(values_only=True)]
+            grids.append(SheetGrid(sheet_name=name, rows=rows))
+        return grids
+    finally:
+        wb.close()
 
 
 def _read_ole(path: Path) -> list[SheetGrid]:

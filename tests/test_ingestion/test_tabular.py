@@ -156,3 +156,33 @@ def test_analyze_spreadsheet_routes_each_sheet(tmp_path):
     by_name = {r.sheet_name: r for r in results}
     assert by_name["Pay"].route == "clean"
     assert by_name["Readme"].route == "messy"
+
+
+def test_clean_xlsx_round_trips_to_clean_classification(tmp_path):
+    # A real xlsx read back through read_sheets must still classify clean,
+    # confirming openpyxl read_only None-padding doesn't break the happy path.
+    p = tmp_path / "pay.xlsx"
+    _write_xlsx(p, {
+        "Pay": [["grade", "step", "salary"]] + [[f"GS-{g}", 5, 80000 + g] for g in range(10, 20)],
+    })
+    results = analyze_spreadsheet(p)
+    assert len(results) == 1
+    assert results[0].route == "clean"
+    assert results[0].column_dtypes == ["text", "number", "number"]
+
+
+def test_ragged_xlsx_round_trips_to_messy_classification(tmp_path):
+    # A genuinely ragged sheet (varying real row widths) must classify messy
+    # after a real read, even with openpyxl read_only padding.
+    p = tmp_path / "messy.xlsx"
+    _write_xlsx(p, {
+        "Junk": [
+            ["Annual Report"],
+            ["section", "value"],
+            ["intro paragraph that is quite long and narrative"],
+            ["a", "b", "c", "d", "e"],
+            ["another note"],
+        ],
+    })
+    results = analyze_spreadsheet(p)
+    assert results[0].route == "messy"
