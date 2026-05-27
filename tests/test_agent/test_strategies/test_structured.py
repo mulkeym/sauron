@@ -129,3 +129,36 @@ async def test_retrieve_structured_fail_open_on_sql_error(monkeypatch):
                                     vector_store=vs, schema_registry=_reg([schema]))
     assert out["sql_results"] == []                 # SQL failed -> empty, no raise
     assert len(out["retrieved_chunks"]) == 1        # narratives still returned
+
+
+# --- _extract_sql: robust SQL extraction from LLM responses ---
+
+def test_extract_sql_from_prose_with_fenced_block():
+    """The real failure mode: model hedges in prose, then emits a ```sql fence."""
+    resp = (
+        'Wait, "TAMPA" is not in the locname values. However, if I must:\n\n'
+        "```sql\nSELECT * FROM t WHERE locname = 'TU'\n```"
+    )
+    assert structured._extract_sql(resp) == "SELECT * FROM t WHERE locname = 'TU'"
+
+
+def test_extract_sql_bare_statement():
+    assert structured._extract_sql("SELECT * FROM t") == "SELECT * FROM t"
+
+
+def test_extract_sql_fenced_without_language():
+    assert structured._extract_sql("```\nSELECT 1\n```") == "SELECT 1"
+
+
+def test_extract_sql_sql_fenced_block():
+    assert structured._extract_sql("```sql\nSELECT 1\n```") == "SELECT 1"
+
+
+def test_extract_sql_takes_last_fenced_block():
+    resp = "```sql\nSELECT 1\n```\nthen reconsidering:\n```sql\nSELECT 2 FROM t\n```"
+    assert structured._extract_sql(resp) == "SELECT 2 FROM t"
+
+
+def test_extract_sql_from_prose_without_fence():
+    resp = "Sure, here is the query: SELECT a FROM t WHERE x = 1"
+    assert structured._extract_sql(resp) == "SELECT a FROM t WHERE x = 1"

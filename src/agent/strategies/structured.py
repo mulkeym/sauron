@@ -8,6 +8,7 @@ combines them, fail-open, for the SWEEP strategy.
 import asyncio
 import logging
 import math
+import re
 
 from src.generation.llm_client import generate
 from src.ingestion.embedder import embed_query, embed_texts
@@ -25,6 +26,27 @@ Rules:
 
 Schema:
 {schema}"""
+
+
+_SQL_START = re.compile(r"(?is)\b(?:WITH|SELECT)\b")
+
+
+def _extract_sql(response: str) -> str:
+    """Pull the SQL statement out of an LLM response that may wrap it in prose
+    and/or markdown code fences. Prefers the LAST fenced code block (models often
+    emit their final answer last); within the chosen text, starts at the first
+    WITH/SELECT keyword so leading prose is dropped. Falls back to the stripped
+    response. Defends against the observed failure where the model hedges in prose
+    and then emits a ```sql block — the old strip-only logic passed that whole blob
+    to DuckDB and the query errored."""
+    text = response.strip()
+    fences = re.findall(r"```(?:sql)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    candidates = [f.strip() for f in fences if f.strip()]
+    block = candidates[-1] if candidates else text
+    m = _SQL_START.search(block)
+    if m:
+        block = block[m.start():]
+    return block.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
 
 
 def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
@@ -49,7 +71,7 @@ def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
             temperature=0.0,
             max_tokens=2048,
         )
-        sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
+        sql = _extract_sql(sql)
         logger.info("Text-to-SQL for %r -> %s", question, sql)
         rows = execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
         logger.info("Text-to-SQL returned %d row(s) for %r", len(rows), question)
