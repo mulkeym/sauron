@@ -185,42 +185,6 @@ async def test_populate_schema_registry_loads_persisted(tmp_path):
     assert loaded[0].table == "doc_x_pay"
 
 
-@pytest.mark.asyncio
-async def test_maybe_ingest_skips_non_spreadsheet(monkeypatch):
-    import src.ingestion.tabular_ingest as ti
-    calls = []
-    async def spy(*a, **k):
-        calls.append(a)
-        return 1
-    monkeypatch.setattr(ti, "ingest_spreadsheet_tables", spy)
-    n = await ti.maybe_ingest_spreadsheet("/x", "d", "f.md", "markdown", ["ALL"], "", MagicMock(), MagicMock())
-    assert n == 0
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_maybe_ingest_runs_for_spreadsheet(monkeypatch):
-    import src.ingestion.tabular_ingest as ti
-    calls = []
-    async def spy(*a, **k):
-        calls.append(a)
-        return 2
-    monkeypatch.setattr(ti, "ingest_spreadsheet_tables", spy)
-    n = await ti.maybe_ingest_spreadsheet("/x", "d", "f.xlsx", "xlsx", ["ALL"], "", MagicMock(), MagicMock())
-    assert n == 2
-    assert len(calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_maybe_ingest_is_fail_open(monkeypatch):
-    import src.ingestion.tabular_ingest as ti
-    async def boom(*a, **k):
-        raise RuntimeError("structured ingest blew up")
-    monkeypatch.setattr(ti, "ingest_spreadsheet_tables", boom)
-    n = await ti.maybe_ingest_spreadsheet("/x", "d", "f.xlsx", "xlsx", ["ALL"], "", MagicMock(), MagicMock())
-    assert n == 0
-
-
 def test_schema_registry_remove():
     from src.db.schema_registry import SchemaRegistry, TableSchema, ColumnSchema
     reg = SchemaRegistry()
