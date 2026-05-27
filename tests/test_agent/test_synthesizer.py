@@ -50,6 +50,38 @@ def test_synthesize_with_sql_results():
     assert "1,500,000" in result["answer"] or "1500000" in result["answer"]
 
 
+def test_build_synthesis_context_includes_sql_block():
+    from src.agent.synthesizer import build_synthesis_context
+    state = AgentState(
+        question="GS rates in Tampa", user_groups=["finance"],
+        query_type=QueryType.ANALYTICAL, retrieved_chunks=[],
+        sql_results=[{"annual1": 23440.0}],
+        structured_trace={
+            "status": "ran", "row_count": 15,
+            "sql": "SELECT * FROM all_gs WHERE locname = 'RUS'",
+            "schema_context": "Table all_gs — GS pay\nValue meanings:\n  - locname: RUS = Rest of U.S.",
+        },
+    )
+    ctx = build_synthesis_context(state)
+    assert "WHERE locname = 'RUS'" in ctx
+    assert "RUS = Rest of U.S." in ctx
+    assert "23440" in ctx
+
+
+def test_build_citations_dedupes_chunks_by_document():
+    from src.agent.synthesizer import build_citations
+    state = AgentState(
+        question="policy?", user_groups=["finance"], query_type=QueryType.LOOKUP,
+        retrieved_chunks=[_make_chunk("a", doc_id="d1", score=0.8),
+                          _make_chunk("b", doc_id="d1", score=0.95)],
+        sql_results=[],
+    )
+    cits = build_citations(state)
+    assert len(cits) == 1                      # one per document
+    assert cits[0].doc_id == "d1"
+    assert cits[0].relevance == 0.95           # best score kept
+
+
 def test_synthesize_no_context():
     state = AgentState(
         question="Something with no results",
