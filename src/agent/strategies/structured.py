@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from src.generation.llm_client import generate
 from src.ingestion.embedder import embed_query, embed_texts
+from src.agent.strategies.hint_resolver import resolve_hints
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def run_sql(con, sql: str, allowed_tables: set) -> list[dict]:
 
 
 def run_structured_lookup(question: str, schemas, query_type: str,
-                          gate: list | None = None, generate_fn=None) -> StructuredLookupTrace:
+                          gate: list | None = None, generate_fn=None, hints=None) -> StructuredLookupTrace:
     """Generate + run SQL and capture a full trace. Never raises: a failure is
     recorded as status='error' (with the SQL, if generated) and fell_back=True so
     the caller can fall back. Sync (run via asyncio.to_thread from async callers)."""
@@ -113,7 +114,7 @@ def run_structured_lookup(question: str, schemas, query_type: str,
     trace = StructuredLookupTrace(query_type=query_type, gate=gate)
     con = connect_tabular(read_only=True)
     try:
-        trace.sql = generate_sql(schema_prompt_with_values(schemas, con), question,
+        trace.sql = generate_sql(schema_prompt_with_values(schemas, con, hints=hints), question,
                                  generate_fn=generate_fn)
         rows = run_sql(con, trace.sql, {s.table for s in schemas})
         trace.status = "ran"
@@ -129,7 +130,7 @@ def run_structured_lookup(question: str, schemas, query_type: str,
     return trace
 
 
-def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
+def structured_sql_rows(question: str, schemas, generate_fn=None, hints=None) -> list[dict]:
     """Generate SQL from the (value-enriched) schema prompt and run it against
     the tabular DuckDB, restricted to ``schemas`` as the allowlist.
 
@@ -140,7 +141,7 @@ def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
     from src.ingestion.tabular_store import connect_tabular, schema_prompt_with_values
     con = connect_tabular(read_only=True)
     try:
-        sql = generate_sql(schema_prompt_with_values(schemas, con), question,
+        sql = generate_sql(schema_prompt_with_values(schemas, con, hints=hints), question,
                            generate_fn=generate_fn)
         return run_sql(con, sql, {s.table for s in schemas})
     finally:
@@ -185,6 +186,27 @@ def tables_relevant_to(question: str, schemas, threshold: float = RELEVANCE_THRE
     ``threshold``. Thin wrapper over ``tables_relevant_scored``."""
     return [s for s, _score, passed in tables_relevant_scored(
         question, schemas, threshold, embed_query_fn, embed_texts_fn) if passed]
+
+
+async def resolve_hints_for_schemas(schemas, hint_store, metadata_store) -> dict:
+    """Map each schema's table name -> ResolvedHints, by finding its owning
+    document (table name prefix == duckdb_table_name(doc_id, "")) and resolving
+    that document's category/dataset-scoped hints. Fail-open: returns {} on any
+    error; tables with no owning doc or no hints are omitted."""
+    from src.ingestion.tabular_store import duckdb_table_name
+    try:
+        docs = await metadata_store.list_documents()
+    except Exception:
+        return {}
+    out = {}
+    for s in schemas:
+        owner = next((d for d in docs if s.table.startswith(duckdb_table_name(d.doc_id, ""))), None)
+        if owner is None:
+            continue
+        rh = resolve_hints(s, owner, hint_store)
+        if rh.column_glossaries or rh.column_notes or rh.table_notes:
+            out[s.table] = rh
+    return out
 
 
 async def retrieve_structured(state, vector_store, schema_registry) -> dict:
