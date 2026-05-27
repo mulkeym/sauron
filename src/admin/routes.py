@@ -40,6 +40,43 @@ def _require_login(request: Request):
     return None
 
 
+def _format_structured_lookup(trace: dict) -> str:
+    """Render a StructuredLookupTrace dict as playground step-detail HTML.
+    Shared by the live-polling and final-trace render paths."""
+    import html as _h, json as _json
+    if not trace:
+        return "<em>No structured lookup</em>"
+    gate = trace.get("gate")
+    parts = [f"<strong>Decision:</strong> {_h.escape(str(trace.get('query_type', '')))} → "
+             + ("gate ran" if gate else "no gate (analytical)")]
+    if gate:
+        rows = "".join(
+            f"<div>{_h.escape(str(t))} &nbsp; {float(score):.2f} {'&#10003;' if passed else '&#10007;'}</div>"
+            for t, score, passed in gate)
+        parts.append(f"<strong>Tables:</strong>{rows}")
+    sql = trace.get("sql", "")
+    if sql:
+        parts.append("<strong>SQL:</strong><pre style=\"white-space:pre-wrap; background:#0f172a; "
+                     f"padding:0.5rem; border-radius:4px;\">{_h.escape(sql)}</pre>")
+    status = trace.get("status", "ran")
+    if status == "skipped":
+        parts.append(f"<strong>Result:</strong> skipped — {_h.escape(trace.get('skip_reason', ''))}")
+    elif status == "error":
+        fb = " (fell back to map-reduce)" if trace.get("fell_back") else ""
+        parts.append(f"<strong>Result:</strong> error — {_h.escape(trace.get('error', ''))}{fb}")
+    else:
+        rc = trace.get("row_count", 0)
+        if not rc:
+            parts.append("<strong>Result:</strong> 0 rows (filter matched nothing)")
+        else:
+            sample = _h.escape(_json.dumps(trace.get("sample_rows", []), indent=2, default=str))
+            parts.append(
+                f"<strong>Result:</strong> {rc} rows"
+                "<details style=\"margin-top:0.3rem;\"><summary style=\"cursor:pointer;\">view sample</summary>"
+                f"<pre style=\"white-space:pre-wrap; background:#0f172a; padding:0.5rem; border-radius:4px;\">{sample}</pre></details>")
+    return "<br>".join(parts)
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse(request, "login.html", {"error": ""})
@@ -853,6 +890,14 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
 
                     # Skip the merge node in UI — it's a no-op
                     if node_name != "merge":
+                        # Structured lookup is computed inside the retrieve node; emit it as
+                        # its own step (displayed before Retrieve) when a trace is present.
+                        if node_name == "retrieve" and output.get("structured_trace"):
+                            st = output["structured_trace"]
+                            sl_detail = _format_structured_lookup(st)
+                            steps_data.append({"step": "structured_lookup", "time": 0.0, "output": {"structured_trace": st}})
+                            _playground_jobs[query_id]["completed_steps"].append(
+                                {"step": "structured_lookup", "time": 0.0, "detail": sl_detail})
                         step_entry = {"step": node_name, "time": node_elapsed, "detail": _format_live_step(node_name, node_output, final_state)}
                         steps_data.append({"step": node_name, "time": node_elapsed, "output": output})
                         _playground_jobs[query_id]["completed_steps"].append(step_entry)
@@ -914,7 +959,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 answer = _playground_jobs[query_id]["streamed_answer"]
 
             # Build trace with expandable step details
-            step_labels = {"cache_check": "Check Cache", "classify": "Classify Query", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph", "synthesize": "Generate Answer"}
+            step_labels = {"cache_check": "Check Cache", "classify": "Classify Query", "structured_lookup": "Structured Lookup", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph", "synthesize": "Generate Answer"}
 
             def format_step_detail(step_name, output):
                 """Format step output for display."""
@@ -923,6 +968,8 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     if result == "miss":
                         return "<strong>Cache:</strong> No match found — running full pipeline"
                     return f"<strong>Cache:</strong> {result}"
+                elif step_name == "structured_lookup":
+                    return _format_structured_lookup(output.get("structured_trace", {}))
                 elif step_name == "classify":
                     qt = output.get("query_type", "")
                     subs = output.get("sub_tasks", [])
