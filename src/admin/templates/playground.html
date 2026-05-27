@@ -58,8 +58,10 @@ const STEPS = [
 function initProgressPanel() {
     let html = '<div class="trace-panel"><div class="trace-steps" id="trace-steps">';
     for (const step of STEPS) {
-        const hidden = step.id === 'structured_lookup' ? ' display:none;' : '';
-        html += `<div id="step-row-${step.id}" class="trace-step" style="opacity:0.4;${hidden}">
+        const conditional = step.id === 'structured_lookup';
+        const hidden = conditional ? ' display:none;' : '';
+        const attrs = conditional ? ' data-conditional="1"' : '';
+        html += `<div id="step-row-${step.id}" class="trace-step"${attrs} style="opacity:0.4;${hidden}">
             <span id="step-icon-${step.id}">&#11036;</span>
             <span> Step ${step.num} of 4: ${step.label}</span>
             <span id="step-arrow-${step.id}" style="display:none;"> &#9660;</span>
@@ -105,7 +107,7 @@ function updateActiveTimer(stepId, elapsed) {
 function markStepPending(stepId) {
     const row = document.getElementById(`step-row-${stepId}`);
     if (!row || row.dataset.done) return;
-    row.style = 'opacity:0.4;';
+    row.style = row.dataset.conditional ? 'opacity:0.4; display:none;' : 'opacity:0.4;';
     row.onclick = null;
     document.getElementById(`step-icon-${stepId}`).innerHTML = '&#11036;';
     document.getElementById(`step-time-${stepId}`).textContent = '';
