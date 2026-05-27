@@ -175,7 +175,8 @@ def tables_relevant_scored(question: str, schemas, threshold: float = RELEVANCE_
     et = embed_texts_fn or embed_texts
     qv = eq(question)
     tvs = et([_table_text(s) for s in schemas])
-    return [(s, _cosine(qv, tv), _cosine(qv, tv) >= threshold) for s, tv in zip(schemas, tvs)]
+    scored = [(s, _cosine(qv, tv)) for s, tv in zip(schemas, tvs)]
+    return [(s, c, c >= threshold) for s, c in scored]
 
 
 def tables_relevant_to(question: str, schemas, threshold: float = RELEVANCE_THRESHOLD,
