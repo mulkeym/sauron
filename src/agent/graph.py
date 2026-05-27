@@ -17,7 +17,7 @@ from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 
 
-def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None):
+def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None, include_synthesize: bool = True):
     graph = StateGraph(AgentState)
 
     graph.add_node("classify", _classify_node_factory(schema_registry))
@@ -220,7 +220,6 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         return {}
 
     graph.add_node("merge", merge_results)
-    graph.add_node("synthesize", synthesize_answer)
 
     graph.set_entry_point("classify")
     # After classify, run retrieve and enrich IN PARALLEL
@@ -229,8 +228,14 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     # Both feed into merge, then synthesize
     graph.add_edge("retrieve", "merge")
     graph.add_edge("enrich", "merge")
-    graph.add_edge("merge", "synthesize")
-    graph.add_edge("synthesize", END)
+    # The playground streams the answer separately, so it builds the graph with
+    # include_synthesize=False and finishes at merge (no answer produced in-graph).
+    if include_synthesize:
+        graph.add_node("synthesize", synthesize_answer)
+        graph.add_edge("merge", "synthesize")
+        graph.add_edge("synthesize", END)
+    else:
+        graph.add_edge("merge", END)
     return graph.compile()
 
 
