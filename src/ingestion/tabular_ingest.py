@@ -107,6 +107,10 @@ async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_gr
         return [], [], set()
 
     classifications = [classify_sheet(g) for g in grids]
+    for g, c in zip(grids, classifications):
+        logger.info(
+            f"Tabular ingest [{filename}]: sheet '{g.sheet_name}' classified {c.route.upper()} "
+            f"({len(g.rows)} rows, header_row={c.header_row_index})")
     ingested: set[str] = set()
     chunk_index = 0
     con = None
@@ -122,6 +126,10 @@ async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_gr
                         data_rows, doc_id, filename, doc_type, acl_groups, category,
                         chunk_index)
                     ingested.add(grid.sheet_name)
+                    logger.info(
+                        f"Tabular ingest [{filename}]: sheet '{grid.sheet_name}' CLEAN -> "
+                        f"structured ({len(data_rows)} data rows to DuckDB + schema + "
+                        f"narratives); full-text chunks suppressed")
                 except Exception as e:
                     logger.warning(
                         f"Tabular ingest: failed on clean sheet '{grid.sheet_name}' "
@@ -131,10 +139,20 @@ async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_gr
                 try:
                     region = find_table_region(grid.rows)
                     if region is None:
+                        logger.info(
+                            f"Tabular ingest [{filename}]: sheet '{grid.sheet_name}' MESSY -> "
+                            f"no table-like region; full-text chunks only")
                         continue
                     narratives = messy_region_narratives(grid, region)
                     if not narratives:
+                        logger.info(
+                            f"Tabular ingest [{filename}]: sheet '{grid.sheet_name}' MESSY -> "
+                            f"region {region} produced no narratives; full-text chunks only")
                         continue
+                    logger.info(
+                        f"Tabular ingest [{filename}]: sheet '{grid.sheet_name}' MESSY -> "
+                        f"region rows {region}, {len(narratives)} region narrative(s) + "
+                        f"full-text chunks")
                     vectors = embed_texts(narratives)
                     metadatas = [ChunkMetadata(
                         doc_id=doc_id, filename=filename, doc_type=doc_type,
