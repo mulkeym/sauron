@@ -242,8 +242,12 @@ async def purge_orphan_schemas(metadata_store, schema_registry=None) -> int:
 
     from src.ingestion.tabular_store import connect_tabular, duckdb_table_name
 
-    live_docs = await metadata_store.list_documents()
-    live_prefixes = [duckdb_table_name(d.doc_id, "") for d in live_docs]
+    try:
+        live_docs = await metadata_store.list_documents()
+        live_prefixes = [duckdb_table_name(d.doc_id, "") for d in live_docs]
+    except Exception as e:
+        logger.warning(f"Orphan schema purge aborted (could not list live docs): {e}")
+        return 0
 
     def _is_orphan(table_name: str) -> bool:
         # Only our namespace; orphan if no live doc prefix matches.

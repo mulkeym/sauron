@@ -384,3 +384,30 @@ async def test_purge_orphan_schemas_removes_only_orphans(monkeypatch):
     assert any(ghost_tbl in d for d in fake_con.dropped)
     assert not any(live_tbl in d for d in fake_con.dropped)
     assert not any("system_meta" in d for d in fake_con.dropped)
+
+
+@pytest.mark.asyncio
+async def test_purge_orphan_schemas_fails_open_when_list_documents_raises(monkeypatch):
+    from src.ingestion.tabular_ingest import purge_orphan_schemas
+
+    class BoomMS:
+        async def list_documents(self, user_groups=None):
+            raise RuntimeError("db down")
+
+    class FakeReg:
+        def __init__(self):
+            self.removed = []
+
+        def remove(self, database, table):
+            self.removed.append((database, table))
+
+    # connect_tabular must never be reached when listing docs fails.
+    def boom_connect(read_only=False):
+        raise AssertionError("connect_tabular should not be called on abort")
+
+    monkeypatch.setattr("src.ingestion.tabular_store.connect_tabular", boom_connect)
+
+    reg = FakeReg()
+    removed = await purge_orphan_schemas(BoomMS(), schema_registry=reg)
+    assert removed == 0
+    assert reg.removed == []
