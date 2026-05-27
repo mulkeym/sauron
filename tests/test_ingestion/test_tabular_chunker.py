@@ -1,7 +1,9 @@
 """Tests for src/ingestion/tabular_chunker.py — sheet-aware chunking + region narratives."""
 from src.ingestion.chunker import Chunk
 from src.ingestion.tabular import SheetGrid, SheetClassification
-from src.ingestion.tabular_chunker import structure_aware_chunks, find_table_region
+from src.ingestion.tabular_chunker import (
+    structure_aware_chunks, find_table_region, messy_region_narratives,
+)
 
 
 def test_structure_aware_chunks_repeats_header_and_marks_sheet():
@@ -68,3 +70,35 @@ def test_find_table_region_returns_none_when_no_block():
 def test_find_table_region_requires_min_data_rows():
     rows = [["a", "b"], ["1", "2"]]  # only one data row beneath header
     assert find_table_region(rows) is None
+
+
+def test_messy_region_narratives_restates_rows_no_llm():
+    rows = [
+        ["2026 GS Pay Table"],
+        ["locality", "grade", "salary"],
+        ["Tampa", "GS-12", "86415"],
+        ["Boston", "GS-12", "92000"],
+        ["Denver", "GS-13", "99000"],
+    ]
+    grid = SheetGrid(sheet_name="Pay", rows=rows)
+    region = find_table_region(rows)
+    assert region is not None
+    narratives = messy_region_narratives(grid, region)
+    assert len(narratives) == 3  # one per data row in the region
+    # keys (text cols) as context, measures (number cols) restated; raw values, no math
+    joined = " ".join(narratives)
+    assert "Tampa" in joined and "86415" in joined
+    assert "Pay" in narratives[0]  # context defaults to sheet name
+
+
+def test_messy_region_narratives_missing_cell_not_fabricated():
+    rows = [
+        ["locality", "grade", "salary"],
+        ["Tampa", "GS-12", "86415"],
+        ["Boston", "GS-12"],            # missing salary cell
+        ["Denver", "GS-13", "99000"],
+    ]
+    grid = SheetGrid(sheet_name="Pay", rows=rows)
+    region = find_table_region(rows)
+    narratives = messy_region_narratives(grid, region)
+    assert any("(not specified)" in n for n in narratives)
