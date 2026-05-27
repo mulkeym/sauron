@@ -139,3 +139,69 @@ def test_no_mapreduce_keeps_raw_chunks():
         )
         synthesize_answer(state)
     assert "RAWSWEEPBLOB" in captured["user_prompt"]
+
+
+def _sql_doc_ms(doc_id="docpay", filename="2026-pay.xlsx"):
+    class _Doc:
+        def __init__(self):
+            self.doc_id = doc_id
+            self.filename = filename
+            self.doc_type = "xlsx"
+            self.source_url = ""
+
+    class _MS:
+        async def list_documents(self, user_groups=None):
+            return [_Doc()]
+
+        async def get_document(self, did):
+            return _Doc() if did == doc_id else None
+
+    return _MS()
+
+
+def test_sql_answer_cites_source_document(monkeypatch):
+    from src.ingestion.tabular_store import duckdb_table_name
+    tbl = duckdb_table_name("docpay", "pay")
+    monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
+    with patch("src.agent.synthesizer.generate", lambda **k: "answer"):
+        state = AgentState(
+            question="pay?", user_groups=["finance"], query_type=QueryType.ANALYTICAL,
+            retrieved_chunks=[], sql_results=[{"salary": 91162}],
+            structured_trace={"status": "ran", "row_count": 15, "sql": f'SELECT * FROM "{tbl}"'},
+        )
+        result = synthesize_answer(state)
+    cits = [c for c in result["citations"] if c.doc_id == "docpay"]
+    assert len(cits) == 1
+    assert cits[0].filename == "2026-pay.xlsx"
+    assert "15 rows" in cits[0].snippet
+    assert cits[0].relevance == 1.0
+
+
+def test_sql_citation_deduped_with_chunk(monkeypatch):
+    from src.ingestion.tabular_store import duckdb_table_name
+    tbl = duckdb_table_name("docpay", "pay")
+    monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
+    chunk = _chunk("locality=Tampa: salary 91162", doc_id="docpay", tier="table_row")
+    with patch("src.agent.synthesizer.generate", lambda **k: "answer"):
+        state = AgentState(
+            question="pay?", user_groups=["finance"], query_type=QueryType.SWEEP,
+            retrieved_chunks=[chunk], sql_results=[{"salary": 91162}],
+            structured_trace={"status": "ran", "row_count": 15, "sql": f'SELECT * FROM "{tbl}"'},
+        )
+        result = synthesize_answer(state)
+    assert len([c for c in result["citations"] if c.doc_id == "docpay"]) == 1
+
+
+def test_no_sql_citation_when_zero_rows(monkeypatch):
+    from src.ingestion.tabular_store import duckdb_table_name
+    tbl = duckdb_table_name("docpay", "pay")
+    monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
+    chunk = _chunk("some prose", doc_id="d1", tier="large")
+    with patch("src.agent.synthesizer.generate", lambda **k: "answer"):
+        state = AgentState(
+            question="pay?", user_groups=["finance"], query_type=QueryType.ANALYTICAL,
+            retrieved_chunks=[chunk], sql_results=[],
+            structured_trace={"status": "ran", "row_count": 0, "sql": f'SELECT * FROM "{tbl}"'},
+        )
+        result = synthesize_answer(state)
+    assert all(c.doc_id != "docpay" for c in result["citations"])

@@ -55,6 +55,22 @@ def duckdb_table_name(doc_id: str, sheet_name: str) -> str:
     return f"doc_{safe_doc}_{safe_sheet}".lower()
 
 
+def referenced_source_docs(sql: str, live_doc_ids: list[str]) -> list[str]:
+    """Source document ids whose DuckDB tables the SQL references.
+
+    Parses table names via ``_referenced_tables`` (minus CTE aliases) and matches
+    each against the per-doc table-name prefix ``duckdb_table_name(doc_id, "")``.
+    Order-stable by ``live_doc_ids``; deduped; referenced tables with no live doc
+    (e.g. since-deleted docs, or non-doc names) are skipped. Pure — no I/O."""
+    tables = _referenced_tables(sql) - _cte_names(sql)   # both already lowercased
+    out: list[str] = []
+    for doc_id in live_doc_ids:
+        prefix = duckdb_table_name(doc_id, "")
+        if doc_id not in out and any(t.startswith(prefix) for t in tables):
+            out.append(doc_id)
+    return out
+
+
 def _safe_column_names(header: list) -> list[str]:
     """SQL-safe, unique column identifiers from a header row.
 
