@@ -63,6 +63,36 @@ def test_find_table_region_in_messy_sheet():
     assert region == (1, 5)  # header at row 1, data rows [2,5)
 
 
+def test_find_table_region_excludes_trailing_note_on_padded_grid():
+    # read_sheets pads every row to the sheet width, so a single-cell banner/note
+    # arrives as ["...", None, None] and matches the header width. The region must
+    # reject it by POPULATED-cell count, not row width, or it gets absorbed as a
+    # bogus data row that narrates as all-"(not specified)".
+    rows = [
+        ["2026 GS Pay Table", None, None],            # 0 banner (padded)
+        ["grade", "step", "salary"],                  # 1 header
+        ["GS-12", "5", "86415"],                      # 2 data
+        ["GS-13", "1", "90000"],                      # 3 data
+        ["GS-14", "2", "99000"],                      # 4 data
+        ["note: rates effective Jan 1", None, None],  # 5 trailing note (padded)
+    ]
+    region = find_table_region(rows)
+    assert region == (1, 5)  # note row excluded despite matching the header width
+
+
+def test_find_table_region_keeps_data_row_missing_only_measures_on_padded_grid():
+    # A genuine data row with the key filled but a measure missing (>=2 populated
+    # cells) must STAY — only single-populated-cell banner/note rows are dropped.
+    rows = [
+        ["locality", "grade", "salary"],
+        ["Tampa", "GS-12", "86415"],
+        ["Boston", "GS-12", None],   # missing salary, but locality+grade populated
+        ["Denver", "GS-13", "99000"],
+    ]
+    region = find_table_region(rows)
+    assert region == (0, 4)  # all three data rows kept
+
+
 def test_find_table_region_returns_none_when_no_block():
     rows = [["just"], ["some"], ["prose"], ["lines"]]
     assert find_table_region(rows) is None

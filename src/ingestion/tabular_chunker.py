@@ -72,7 +72,8 @@ def _consistent_run(rows: list, header_idx: int) -> int:
     """Greedily extend a data run beneath ``rows[header_idx]`` and return its
     exclusive end. A row joins the run only while it keeps EVERY column
     type-consistent (cumulative dominant-kind ratio >= ``COLUMN_CONSISTENCY``)
-    and is structurally data-like (more than one cell, no wider than the header).
+    and is structurally data-like (more than one POPULATED cell — so a note/banner
+    padded to the sheet width still bounds it — and no wider than the header).
     The first conflicting-type or structurally-broken row bounds the run — this
     is what lets a clean block be carved out of a messy sheet whose later rows
     (totals, prose footnotes) would poison a whole-sheet consistency check."""
@@ -81,8 +82,11 @@ def _consistent_run(rows: list, header_idx: int) -> int:
     end = header_idx + 1
     while end < len(rows):
         row = rows[end]
-        if not (1 < len(row) <= ncols):
-            break  # ragged-narrow note/banner or wider-than-header row bounds it
+        filled = sum(1 for c in row if _cell_kind(c) != "empty")
+        if filled <= 1 or len(row) > ncols:
+            break  # single-populated-cell note/banner (even when padded to the
+            # sheet width) or wider-than-header row bounds the run; a data row
+            # missing only some measures still has >= 2 populated cells
         trial = [dict(c) for c in counts]
         for col in range(ncols):
             kind = _cell_kind(row[col]) if col < len(row) else "empty"
