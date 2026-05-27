@@ -49,3 +49,24 @@ def test_http_error_raises_base_llm_error(monkeypatch):
     with pytest.raises(LLMError) as exc_info:
         llm_client._call_llm([{"role": "user", "content": "hi"}], "m", 0.0, 8)
     assert type(exc_info.value) is LLMError  # base class, not a subclass
+
+
+def test_call_llm_includes_seed(monkeypatch):
+    """_call_llm sends a deterministic seed in the request payload."""
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def fake_post(url, json, headers, timeout, verify):
+        captured["payload"] = json
+        return FakeResp()
+
+    monkeypatch.setattr("src.generation.llm_client.requests.post", fake_post)
+    from src.generation.llm_client import _call_llm
+    _call_llm([{"role": "user", "content": "hi"}], model="m", temperature=0.0, max_tokens=10)
+    assert captured["payload"]["seed"] == 0
