@@ -132,7 +132,7 @@ def synthesize_answer(state: AgentState) -> dict:
             )
         part = f"{source}\n{text}"
         if total_chars + len(part) > MAX_CONTEXT_CHARS:
-            logger.info(f"Context cap reached at {total_chars:,} chars, dropping remaining {len(regular_chunks) + len(priority_chunks) - len(context_parts)} chunks")
+            logger.info(f"Context cap reached at {total_chars:,} chars, dropping remaining {len(synthetic_chunks) + len(regular_chunks) - len(context_parts)} chunks")
             break
         context_parts.append(part)
         total_chars += len(part)

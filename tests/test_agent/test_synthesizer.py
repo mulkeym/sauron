@@ -61,3 +61,24 @@ def test_synthesize_no_context():
     result = synthesize_answer(state)
     assert "could not find" in result["answer"].lower()
     assert result["citations"] == []
+
+
+def test_synthesize_handles_context_cap_without_nameerror():
+    """When the assembled context exceeds llm_max_context, the synthesizer logs a
+    'Context cap reached' line and stops adding chunks. That branch referenced an
+    undefined `priority_chunks` (NameError) — regression guard. With a tiny cap,
+    the first chunk overflows and the branch must run cleanly."""
+    with patch("src.agent.synthesizer.generate", return_value="ok"), \
+         patch("src.config.settings.llm_max_context", 50):
+        state = AgentState(
+            question="What are the pay rates?",
+            user_groups=["finance"],
+            query_type=QueryType.LOOKUP,
+            retrieved_chunks=[
+                _make_chunk("x" * 200, doc_id="d1", score=0.95),
+                _make_chunk("y" * 200, doc_id="d2", score=0.90),
+            ],
+            sql_results=[],
+        )
+        result = synthesize_answer(state)  # must not raise NameError
+    assert result["answer"] == "ok"
