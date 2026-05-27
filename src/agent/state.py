@@ -40,3 +40,4 @@ class AgentState(TypedDict, total=False):
     skip_graph: bool
     allowed_doc_ids: list[str]  # restrict retrieval to these doc_ids (app filter)
     dataset_id: int  # dataset filter for KG queries
+    structured_trace: dict  # playground: structured/SQL lookup decision + result

@@ -12,3 +12,9 @@ def test_query_type_enum():
     assert QueryType.ANALYTICAL == "analytical"
     assert QueryType.CROSS_REFERENCE == "cross_reference"
     assert QueryType.TEMPORAL == "temporal"
+
+def test_agent_state_accepts_structured_trace():
+    from src.agent.state import AgentState
+    st: AgentState = {"question": "q", "structured_trace": {"status": "ran", "query_type": "sweep"}}
+    assert st["structured_trace"]["status"] == "ran"
+    assert "structured_trace" in AgentState.__annotations__
