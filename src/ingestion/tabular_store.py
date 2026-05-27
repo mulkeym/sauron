@@ -190,7 +190,7 @@ def distinct_values(con, table: str, column: str, max_distinct: int = 100) -> li
     """
     rows = con.execute(
         f'SELECT DISTINCT "{column}" FROM "{table}" '
-        f'WHERE "{column}" IS NOT NULL LIMIT {int(max_distinct) + 1}'
+        f'WHERE "{column}" IS NOT NULL ORDER BY "{column}" LIMIT {int(max_distinct) + 1}'
     ).fetchall()
     if len(rows) > max_distinct:
         return None
