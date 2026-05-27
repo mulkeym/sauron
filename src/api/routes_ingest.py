@@ -26,6 +26,7 @@ def get_metadata_store():
     return _metadata_store
 
 from src.db.schema_registry import SchemaRegistry
+from src.db.hint_store import HintStore
 
 _schema_registry = None
 
@@ -34,6 +35,14 @@ def get_schema_registry():
     if _schema_registry is None:
         _schema_registry = SchemaRegistry()
     return _schema_registry
+
+_hint_store = None
+
+def get_hint_store():
+    global _hint_store
+    if _hint_store is None:
+        _hint_store = HintStore()
+    return _hint_store
 
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_file(file: UploadFile = File(...), acl_groups: str = Form(default="[]"), category: str = Form(default=""), user: UserContext = Depends(require_auth)):

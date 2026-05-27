@@ -182,6 +182,14 @@ async def populate_schema_registry(metadata_store, schema_registry) -> int:
     return len(schemas)
 
 
+async def populate_hint_store(metadata_store, hint_store) -> int:
+    """Load all persisted SchemaHints into the in-memory HintStore. Returns count."""
+    hints = await metadata_store.load_all_hints()
+    for h in hints:
+        hint_store.register(h)
+    return len(hints)
+
+
 SPREADSHEET_DOC_TYPES = ("xlsx", "xls", "csv", "tsv")
 
 
