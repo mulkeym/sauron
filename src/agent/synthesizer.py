@@ -106,10 +106,18 @@ def synthesize_answer(state: AgentState) -> dict:
     has_map_reduce = any(c.metadata.doc_id == "map-reduce" for c in chunks)
 
     if has_map_reduce:
-        # Map-reduce already extracted relevant facts from each document.
-        # Raw chunks are redundant — skip them to save context space.
-        regular_chunks = []
-        logger.info("Synthesizer: using map-reduce synthesis only (raw chunks skipped as redundant)")
+        # Map-reduce distilled the prose docs; raw doc chunks are redundant.
+        # Structured table_row narratives are precise and compact — keep them so
+        # SWEEP never discards retrieved structured data.
+        regular_chunks = sorted(
+            [c for c in chunks
+             if c.metadata.doc_id not in SYNTHETIC_IDS
+             and c.metadata.chunk_size_tier == "table_row"],
+            key=lambda c: c.score, reverse=True,
+        )
+        logger.info(
+            "Synthesizer: map-reduce synthesis + %d structured narratives "
+            "(raw sweep chunks skipped)", len(regular_chunks))
     else:
         regular_chunks = sorted(
             [c for c in chunks if c.metadata.doc_id not in SYNTHETIC_IDS],
