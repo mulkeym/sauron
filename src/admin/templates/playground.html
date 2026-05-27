@@ -48,6 +48,7 @@
 const STEPS = [
     {id: "cache_check", label: "Check Cache", num: 1},
     {id: "classify", label: "Classify Query", num: 2},
+    {id: "structured_lookup", label: "Structured Lookup", num: 3},
     {id: "retrieve", label: "Retrieve Documents", num: 3},
     {id: "enrich", label: "Knowledge Graph", num: 3},
     {id: "synthesize", label: "Generate Answer", num: 4},
@@ -57,7 +58,8 @@ const STEPS = [
 function initProgressPanel() {
     let html = '<div class="trace-panel"><div class="trace-steps" id="trace-steps">';
     for (const step of STEPS) {
-        html += `<div id="step-row-${step.id}" class="trace-step" style="opacity:0.4;">
+        const hidden = step.id === 'structured_lookup' ? ' display:none;' : '';
+        html += `<div id="step-row-${step.id}" class="trace-step" style="opacity:0.4;${hidden}">
             <span id="step-icon-${step.id}">&#11036;</span>
             <span> Step ${step.num} of 4: ${step.label}</span>
             <span id="step-arrow-${step.id}" style="display:none;"> &#9660;</span>
