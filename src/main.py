@@ -58,6 +58,14 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).info(f"Loaded {n} persisted table schema(s) into the registry")
     except Exception as e:
         logging.getLogger(__name__).warning(f"Schema registry load deferred: {e}")
+    # Load persisted table hints into the in-memory hint store
+    try:
+        from src.api.routes_ingest import get_hint_store
+        from src.ingestion.tabular_ingest import populate_hint_store
+        hn = await populate_hint_store(store, get_hint_store())
+        logging.getLogger(__name__).info(f"Loaded {hn} table hint(s) into the hint store")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Hint store load deferred: {e}")
     yield
 
 def create_app() -> FastAPI:

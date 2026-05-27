@@ -245,6 +245,36 @@ def test_execute_rejects_comma_joined_table_outside_allowlist():
         execute_duckdb_sql(con, f'SELECT * FROM "{table}", "doc_other_secret"', allowed_tables={table})
 
 
+from src.agent.strategies.hint_resolver import ResolvedHints
+
+
+def test_schema_prompt_hints_none_is_unchanged():
+    con, table = _con_with_pay()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    assert schema_prompt_with_values([schema], con, hints=None) == schema_prompt_with_values([schema], con)
+
+
+def test_schema_prompt_annotates_glossary_values():
+    con, table = _con_with_pay()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    hints = {schema.table: ResolvedHints(column_glossaries={"grade": {"GS-12": "Senior"}})}
+    prompt = schema_prompt_with_values([schema], con, hints=hints)
+    assert "GS-12 (Senior)" in prompt
+
+
+def test_schema_prompt_adds_column_and_table_notes():
+    con, table = _con_with_pay()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    hints = {schema.table: ResolvedHints(
+        column_notes={"grade": "GS pay grade"}, table_notes=["OPM 2022 GS pay"])}
+    prompt = schema_prompt_with_values([schema], con, hints=hints)
+    assert "GS pay grade" in prompt
+    assert "Notes: OPM 2022 GS pay" in prompt
+
+
 from src.ingestion.tabular_store import referenced_source_docs
 
 

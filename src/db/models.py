@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -235,3 +235,21 @@ class RegisteredSchema(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     __table_args__ = (UniqueConstraint("database", "table_name", name="uq_registered_schema"),)
+
+
+class SchemaHintRecord(Base):
+    __tablename__ = "schema_hints"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scope_type: Mapped[str] = mapped_column(String, nullable=False)   # "category" | "dataset"
+    scope_value: Mapped[str] = mapped_column(String, nullable=False)
+    hint_type: Mapped[str] = mapped_column(String, nullable=False)    # value_glossary | column_note | table_note
+    target_column: Mapped[str] = mapped_column(String, default="")    # "" == applies to table (table_note)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    provenance: Mapped[str] = mapped_column(String, default="curated")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    created_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )

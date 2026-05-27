@@ -479,6 +479,80 @@ async def delete_category(name: str):
     return HTMLResponse("")
 
 
+# ---- Table hints (extensible text-to-SQL domain knowledge) ----
+# Impl functions are the testable core; routes are thin wrappers. Like the other
+# admin /api routes, these rely on the /admin-prefix protection (no per-route auth).
+
+async def create_hint_impl(scope_type, scope_value, hint_type, target_column,
+                           payload, provenance="curated", confidence=1.0, created_by=""):
+    """Persist one SchemaHint and register it live. Returns its id."""
+    from src.api.routes_ingest import get_metadata_store, get_hint_store
+    from src.db.hint_store import SchemaHint
+    ms = get_metadata_store()
+    hint = SchemaHint(scope_type=scope_type, scope_value=scope_value, hint_type=hint_type,
+                      target_column=target_column, payload=payload or {},
+                      provenance=provenance, confidence=confidence, created_by=created_by)
+    hint.id = await ms.save_hint(hint)
+    get_hint_store().register(hint)
+    return hint.id
+
+
+async def bulk_import_hints_impl(items, created_by=""):
+    """Persist + register a list of hint dicts (see create_hint_impl args).
+    Returns the count imported. Skips malformed entries."""
+    n = 0
+    for it in items:
+        try:
+            await create_hint_impl(
+                scope_type=it["scope_type"], scope_value=it["scope_value"],
+                hint_type=it["hint_type"], target_column=it.get("target_column"),
+                payload=it.get("payload") or {}, provenance=it.get("provenance", "curated"),
+                confidence=it.get("confidence", 1.0), created_by=created_by)
+            n += 1
+        except Exception:
+            continue
+    return n
+
+
+async def delete_hint_impl(hint_id):
+    """Delete a hint by id and rebuild the live HintStore from persistence."""
+    from src.api.routes_ingest import get_metadata_store, get_hint_store
+    from src.ingestion.tabular_ingest import populate_hint_store
+    await get_metadata_store().delete_hint(int(hint_id))
+    store = get_hint_store()
+    store.clear()
+    await populate_hint_store(get_metadata_store(), store)
+
+
+@router.post("/api/hints")
+async def create_hint_route(body: dict):
+    hid = await create_hint_impl(
+        scope_type=body["scope_type"], scope_value=body["scope_value"],
+        hint_type=body["hint_type"], target_column=body.get("target_column"),
+        payload=body.get("payload") or {}, provenance=body.get("provenance", "curated"),
+        confidence=body.get("confidence", 1.0), created_by=body.get("created_by", "admin"))
+    return {"id": hid}
+
+
+@router.post("/api/hints/bulk")
+async def bulk_import_hints_route(body: dict):
+    return {"imported": await bulk_import_hints_impl(body.get("hints", []),
+                                                     created_by=body.get("created_by", "admin"))}
+
+
+@router.get("/api/hints")
+async def list_hints_route():
+    from src.api.routes_ingest import get_metadata_store
+    hints = await get_metadata_store().load_all_hints()
+    return {"hints": [vars(h) | {"created_at": str(h.created_at)} for h in hints]}
+
+
+@router.delete("/api/hints/{hint_id}")
+async def delete_hint_route(hint_id: int):
+    await delete_hint_impl(hint_id)
+    return {"ok": True}
+
+
 @router.get("/api/documents/{doc_id}/edit")
 async def edit_document_form(doc_id: str):
     store = get_metadata_store()

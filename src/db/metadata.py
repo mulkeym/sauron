@@ -3,8 +3,9 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Dataset, WebConnector, RegisteredSchema
+from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Dataset, WebConnector, RegisteredSchema, SchemaHintRecord
 from src.db.schema_registry import TableSchema, ColumnSchema
+from src.db.hint_store import SchemaHint
 
 
 class MetadataStore:
@@ -562,4 +563,46 @@ class MetadataStore:
                 RegisteredSchema.database == database,
                 RegisteredSchema.table_name == table,
             ))
+            await session.commit()
+
+    def _hint_from_record(self, r) -> SchemaHint:
+        return SchemaHint(
+            id=r.id, scope_type=r.scope_type, scope_value=r.scope_value,
+            hint_type=r.hint_type, target_column=(r.target_column or None),
+            payload=r.payload or {}, provenance=r.provenance,
+            confidence=r.confidence, created_by=r.created_by, created_at=r.created_at,
+        )
+
+    async def save_hint(self, hint: SchemaHint) -> int:
+        """Persist a SchemaHint; returns its row id."""
+        async with self.session_factory() as session:
+            rec = SchemaHintRecord(
+                scope_type=hint.scope_type, scope_value=hint.scope_value,
+                hint_type=hint.hint_type, target_column=hint.target_column or "",
+                payload=hint.payload or {}, provenance=hint.provenance,
+                confidence=hint.confidence, created_by=hint.created_by,
+            )
+            session.add(rec)
+            await session.commit()
+            await session.refresh(rec)
+            return rec.id
+
+    async def load_all_hints(self) -> list[SchemaHint]:
+        async with self.session_factory() as session:
+            result = await session.execute(select(SchemaHintRecord))
+            return [self._hint_from_record(r) for r in result.scalars().all()]
+
+    async def list_hints_for_scope(self, scope_type: str, scope_value: str) -> list[SchemaHint]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(SchemaHintRecord).where(
+                    SchemaHintRecord.scope_type == scope_type,
+                    SchemaHintRecord.scope_value == scope_value,
+                )
+            )
+            return [self._hint_from_record(r) for r in result.scalars().all()]
+
+    async def delete_hint(self, hint_id: int) -> None:
+        async with self.session_factory() as session:
+            await session.execute(delete(SchemaHintRecord).where(SchemaHintRecord.id == hint_id))
             await session.commit()
