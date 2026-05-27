@@ -73,6 +73,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             result = {"retrieved_chunks": merged_chunks, "retrieval_attempts": retry_state.get("retrieval_attempts", 0) + 1}
             if struct_result.get("sql_results"):
                 result["sql_results"] = struct_result["sql_results"]
+            if struct_result.get("structured_trace"):
+                result["structured_trace"] = struct_result["structured_trace"]
             # Add lightweight metadata context from documents not fully MAP'd
             try:
                 from src.api.routes_ingest import get_metadata_store
