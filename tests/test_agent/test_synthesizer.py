@@ -141,6 +141,35 @@ def test_no_mapreduce_keeps_raw_chunks():
     assert "RAWSWEEPBLOB" in captured["user_prompt"]
 
 
+def test_sql_context_includes_executed_sql_and_schema_reference():
+    """The answer LLM must receive the executed SQL and the table/column
+    reference (meanings + value glossary) alongside the raw rows — otherwise it
+    sees only bare column keys/codes and cannot interpret them (the GS-rates
+    failure: rows of step salaries with no grade/locality context)."""
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured["user_prompt"] = kwargs.get("user_prompt", "")
+        return "answer"
+
+    with patch("src.agent.synthesizer.generate", fake_generate):
+        state = AgentState(
+            question="What are the GS salary rates in Tampa?",
+            user_groups=["finance"], query_type=QueryType.ANALYTICAL,
+            retrieved_chunks=[], sql_results=[{"annual1": 23440.0}],
+            structured_trace={
+                "status": "ran", "row_count": 15,
+                "sql": "SELECT * FROM all_gs WHERE locname = 'RUS'",
+                "schema_context": "Table all_gs — GS pay\nValue meanings:\n  - locname: RUS = Rest of U.S.",
+            },
+        )
+        synthesize_answer(state)
+    ctx = captured["user_prompt"]
+    assert "WHERE locname = 'RUS'" in ctx        # #1: executed SQL is in context
+    assert "RUS = Rest of U.S." in ctx           # #2: schema/value reference is in context
+    assert "23440" in ctx                         # rows still present
+
+
 def _sql_doc_ms(doc_id="docpay", filename="2026-pay.xlsx"):
     class _Doc:
         def __init__(self):
