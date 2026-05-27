@@ -894,7 +894,10 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                         # its own step (displayed before Retrieve) when a trace is present.
                         if node_name == "retrieve" and output.get("structured_trace"):
                             st = output["structured_trace"]
-                            sl_detail = _format_structured_lookup(st)
+                            try:
+                                sl_detail = _format_structured_lookup(st)
+                            except Exception:
+                                sl_detail = "<em>(structured lookup render error)</em>"
                             steps_data.append({"step": "structured_lookup", "time": 0.0, "output": {"structured_trace": st}})
                             _playground_jobs[query_id]["completed_steps"].append(
                                 {"step": "structured_lookup", "time": 0.0, "detail": sl_detail})
@@ -969,7 +972,10 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                         return "<strong>Cache:</strong> No match found — running full pipeline"
                     return f"<strong>Cache:</strong> {result}"
                 elif step_name == "structured_lookup":
-                    return _format_structured_lookup(output.get("structured_trace", {}))
+                    try:
+                        return _format_structured_lookup(output.get("structured_trace", {}))
+                    except Exception:
+                        return "<em>(structured lookup render error)</em>"
                 elif step_name == "classify":
                     qt = output.get("query_type", "")
                     subs = output.get("sub_tasks", [])
