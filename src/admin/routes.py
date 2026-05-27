@@ -1036,11 +1036,12 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     from src.agent.synthesizer import (
                         SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts)
                     from src.generation.llm_client import generate as _gen
+                    from src.config import settings as _cfg
                     ctx = _playground_jobs[query_id]["stream_context"]["context"]
                     answer = _strip_reasoning_artifacts(_gen(
                         system_prompt=SYSTEM_PROMPT,
                         user_prompt=USER_PROMPT_TEMPLATE.format(context=ctx, question=question),
-                        max_tokens=4096))
+                        max_tokens=_cfg.llm_max_output_tokens))
 
             # Synthesize wasn't a graph node; build citations + a trace step here.
             from src.agent.synthesizer import build_citations
@@ -1339,6 +1340,7 @@ async def playground_stream(query_id: str):
 
         from src.generation.llm_client import generate_stream
         from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts
+        from src.config import settings as _cfg
 
         try:
             full_text = ""
@@ -1348,7 +1350,7 @@ async def playground_stream(query_id: str):
                     context=context_data["context"],
                     question=context_data["question"],
                 ),
-                max_tokens=4096,
+                max_tokens=_cfg.llm_max_output_tokens,
             ):
                 full_text += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
