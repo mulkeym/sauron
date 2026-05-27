@@ -243,3 +243,41 @@ def test_execute_rejects_comma_joined_table_outside_allowlist():
     con, table = _con_with_pay()
     with pytest.raises(ValueError, match="outside the allowed set"):
         execute_duckdb_sql(con, f'SELECT * FROM "{table}", "doc_other_secret"', allowed_tables={table})
+
+
+from src.ingestion.tabular_store import referenced_source_docs
+
+
+def test_referenced_source_docs_single():
+    sql = f'SELECT * FROM "{duckdb_table_name("live1", "pay")}" WHERE x = 1'
+    assert referenced_source_docs(sql, ["live1", "other"]) == ["live1"]
+
+
+def test_referenced_source_docs_join_two_order_stable():
+    t1 = duckdb_table_name("a", "s")
+    t2 = duckdb_table_name("b", "s")
+    sql = f'SELECT * FROM "{t1}" JOIN "{t2}" ON 1=1'
+    assert referenced_source_docs(sql, ["a", "b"]) == ["a", "b"]
+
+
+def test_referenced_source_docs_skips_unmatched():
+    sql = f'SELECT * FROM "{duckdb_table_name("ghost", "pay")}"'
+    assert referenced_source_docs(sql, ["live1"]) == []
+
+
+def test_referenced_source_docs_ignores_cte():
+    t = duckdb_table_name("live1", "pay")
+    sql = f'WITH tmp AS (SELECT 1) SELECT * FROM "{t}", tmp'
+    assert referenced_source_docs(sql, ["live1"]) == ["live1"]
+
+
+def test_distinct_values_sorted_independent_of_insertion_order():
+    # distinct_values feeds the categorical value list in the text-to-SQL schema
+    # prompt; a stable (sorted) order keeps that prompt byte-identical run-to-run
+    # so seed+temperature=0 yields deterministic SQL. DISTINCT without ORDER BY
+    # has no order guarantee in DuckDB.
+    con = duckdb.connect()
+    con.execute('CREATE TABLE t (loc VARCHAR)')
+    for v in ["TU", "AK", "SF", "ATL", "RUS"]:
+        con.execute('INSERT INTO t VALUES (?)', [v])
+    assert distinct_values(con, "t", "loc", max_distinct=100) == ["AK", "ATL", "RUS", "SF", "TU"]

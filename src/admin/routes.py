@@ -1055,28 +1055,12 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 {steps_html}
             </div>"""
 
-            # Deduplicate citations
-            from src.retrieval.models import Citation
-            seen_docs = {}
-            for c in chunks:
-                doc_id = c.metadata.doc_id
-                if doc_id == "knowledge-graph":
-                    continue
-                if doc_id not in seen_docs or c.score > seen_docs[doc_id].score:
-                    seen_docs[doc_id] = c
-            # Look up source URLs for crawled documents
-            url_map = {}
-            for doc_id in seen_docs:
-                doc_rec = await ms.get_document(doc_id)
-                if doc_rec and getattr(doc_rec, 'source_url', ''):
-                    url_map[doc_id] = doc_rec.source_url
-
-            citations = [
-                Citation(doc_id=c.metadata.doc_id, filename=c.metadata.filename, doc_type=c.metadata.doc_type,
-                         chunk_index=c.metadata.chunk_index, page=c.metadata.page, snippet=c.text[:200], relevance=c.score,
-                         source_url=url_map.get(c.metadata.doc_id, ""))
-                for c in seen_docs.values()
-            ]
+            # Citations: use the synthesizer's list (final_state["citations"]) as the
+            # single source of truth — it already dedupes by doc, looks up source_url,
+            # excludes synthetic chunks, AND adds structured/SQL source-document
+            # citations. ANALYTICAL answers carry no chunks, so rebuilding from
+            # `chunks` here (as this handler used to) dropped those SQL citations.
+            citations = final_state.get("citations", [])
 
             citations_html = ""
             for i, c in enumerate(citations, 1):

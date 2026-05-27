@@ -206,4 +206,47 @@ def synthesize_answer(state: AgentState) -> dict:
         )
         for c in seen_docs.values()
     ]
+
+    # Structured/SQL answers: cite the source document(s) of the table(s) the
+    # executed SQL referenced. ANALYTICAL returns no chunks, so without this the
+    # answer would carry zero citations. Fully additive + fail-open.
+    trace = state.get("structured_trace") or {}
+    if trace.get("status") == "ran" and trace.get("row_count", 0) > 0 and trace.get("sql"):
+        try:
+            import asyncio
+            from src.api.routes_ingest import get_metadata_store
+            from src.ingestion.tabular_store import referenced_source_docs
+            _ms = get_metadata_store()
+
+            async def _fetch_sql_docs():
+                docs = await _ms.list_documents()
+                src_ids = referenced_source_docs(trace["sql"], [d.doc_id for d in docs])
+                by_id = {d.doc_id: d for d in docs}
+                return [by_id[i] for i in src_ids if i in by_id]
+
+            try:
+                sql_docs = asyncio.run(_fetch_sql_docs())
+            except RuntimeError:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    sql_docs = pool.submit(asyncio.run, _fetch_sql_docs()).result()
+
+            existing = {c.doc_id for c in citations}
+            for rec in sql_docs:
+                if rec.doc_id in existing:
+                    continue
+                citations.append(Citation(
+                    doc_id=rec.doc_id,
+                    filename=rec.filename,
+                    doc_type=getattr(rec, "doc_type", "") or "",
+                    chunk_index=0,
+                    page=None,
+                    snippet=f"Structured query returned {trace['row_count']} rows from this table.",
+                    relevance=1.0,
+                    source_url=getattr(rec, "source_url", "") or "",
+                ))
+                existing.add(rec.doc_id)
+        except Exception as e:
+            logger.debug(f"SQL-source citations skipped: {e}")
+
     return {"answer": answer, "citations": citations}
