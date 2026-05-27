@@ -9,6 +9,7 @@ import asyncio
 import logging
 import math
 import re
+from dataclasses import dataclass, field
 
 from src.generation.llm_client import generate
 from src.ingestion.embedder import embed_query, embed_texts
@@ -49,6 +50,85 @@ def _extract_sql(response: str) -> str:
     return block.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
 
 
+@dataclass
+class StructuredLookupTrace:
+    """Per-query record of the structured/SQL retrieval attempt, for the
+    playground 'Structured Lookup' step. ``rows`` is the transient full result
+    set (used to populate sql_results); it is excluded from ``to_dict``."""
+    query_type: str
+    gate: list | None = None            # list of [table, score, passed]; None when no gate (analytical)
+    sql: str = ""
+    status: str = "ran"                 # "ran" | "skipped" | "error"
+    skip_reason: str = ""
+    error: str = ""
+    row_count: int = 0
+    sample_rows: list = field(default_factory=list)
+    fell_back: bool = False
+    rows: list = field(default_factory=list, repr=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "query_type": self.query_type,
+            "gate": self.gate,
+            "sql": self.sql,
+            "status": self.status,
+            "skip_reason": self.skip_reason,
+            "error": self.error,
+            "row_count": self.row_count,
+            "sample_rows": self.sample_rows,
+            "fell_back": self.fell_back,
+        }
+
+
+def generate_sql(schema_prompt: str, question: str, generate_fn=None) -> str:
+    """LLM text-to-SQL for one question + rendered schema prompt; returns the
+    extracted SQL string (robust to prose/code-fence wrapping)."""
+    gen = generate_fn or generate
+    raw = gen(
+        system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
+        user_prompt=f"Question: {question}",
+        temperature=0.0,
+        max_tokens=2048,
+    )
+    sql = _extract_sql(raw)
+    logger.info("Text-to-SQL for %r -> %s", question, sql)
+    return sql
+
+
+def run_sql(con, sql: str, allowed_tables: set) -> list[dict]:
+    """Execute SELECT-only SQL against the tabular DuckDB, restricted to
+    ``allowed_tables``. Raises on blocked/invalid SQL or execution error."""
+    from src.ingestion.tabular_store import execute_duckdb_sql
+    rows = execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
+    logger.info("Text-to-SQL returned %d row(s)", len(rows))
+    return rows
+
+
+def run_structured_lookup(question: str, schemas, query_type: str,
+                          gate: list | None = None, generate_fn=None) -> StructuredLookupTrace:
+    """Generate + run SQL and capture a full trace. Never raises: a failure is
+    recorded as status='error' (with the SQL, if generated) and fell_back=True so
+    the caller can fall back. Sync (run via asyncio.to_thread from async callers)."""
+    from src.ingestion.tabular_store import connect_tabular, schema_prompt_with_values
+    trace = StructuredLookupTrace(query_type=query_type, gate=gate)
+    con = connect_tabular(read_only=True)
+    try:
+        trace.sql = generate_sql(schema_prompt_with_values(schemas, con), question,
+                                 generate_fn=generate_fn)
+        rows = run_sql(con, trace.sql, {s.table for s in schemas})
+        trace.status = "ran"
+        trace.rows = rows
+        trace.row_count = len(rows)
+        trace.sample_rows = rows[:5]
+    except Exception as e:
+        trace.status = "error"
+        trace.error = str(e)
+        trace.fell_back = True
+    finally:
+        con.close()
+    return trace
+
+
 def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
     """Generate SQL from the (value-enriched) schema prompt and run it against
     the tabular DuckDB, restricted to ``schemas`` as the allowlist.
@@ -57,25 +137,12 @@ def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
     execution) — callers decide the fallback. Synchronous (run via
     ``asyncio.to_thread`` from async callers).
     """
-    from src.ingestion.tabular_store import (
-        connect_tabular, execute_duckdb_sql, schema_prompt_with_values,
-    )
-    gen = generate_fn or generate
-    allowed_tables = {s.table for s in schemas}
+    from src.ingestion.tabular_store import connect_tabular, schema_prompt_with_values
     con = connect_tabular(read_only=True)
     try:
-        schema_prompt = schema_prompt_with_values(schemas, con)
-        sql = gen(
-            system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
-            user_prompt=f"Question: {question}",
-            temperature=0.0,
-            max_tokens=2048,
-        )
-        sql = _extract_sql(sql)
-        logger.info("Text-to-SQL for %r -> %s", question, sql)
-        rows = execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
-        logger.info("Text-to-SQL returned %d row(s) for %r", len(rows), question)
-        return rows
+        sql = generate_sql(schema_prompt_with_values(schemas, con), question,
+                           generate_fn=generate_fn)
+        return run_sql(con, sql, {s.table for s in schemas})
     finally:
         con.close()
 
@@ -97,19 +164,26 @@ def _table_text(schema) -> str:
     return f"{schema.table}. {schema.description}. Columns: {cols}"
 
 
-def tables_relevant_to(question: str, schemas, threshold: float = RELEVANCE_THRESHOLD,
-                       embed_query_fn=None, embed_texts_fn=None) -> list:
-    """Cheap, no-LLM gate: keep tables whose text is embedding-similar to the
-    question above ``threshold``. Operates only on the ACL-filtered schema list
-    passed in. ``embed_*_fn`` are injectable for tests.
-    """
+def tables_relevant_scored(question: str, schemas, threshold: float = RELEVANCE_THRESHOLD,
+                           embed_query_fn=None, embed_texts_fn=None) -> list:
+    """Score every ACL-filtered table against the question. Returns
+    ``[(schema, score, passed), ...]`` so callers can show all scores (the gate)
+    and pick the passers. No-LLM; ``embed_*_fn`` injectable for tests."""
     if not schemas:
         return []
     eq = embed_query_fn or embed_query
     et = embed_texts_fn or embed_texts
     qv = eq(question)
     tvs = et([_table_text(s) for s in schemas])
-    return [s for s, tv in zip(schemas, tvs) if _cosine(qv, tv) >= threshold]
+    return [(s, _cosine(qv, tv), _cosine(qv, tv) >= threshold) for s, tv in zip(schemas, tvs)]
+
+
+def tables_relevant_to(question: str, schemas, threshold: float = RELEVANCE_THRESHOLD,
+                       embed_query_fn=None, embed_texts_fn=None) -> list:
+    """Cheap, no-LLM gate: tables whose text is embedding-similar above
+    ``threshold``. Thin wrapper over ``tables_relevant_scored``."""
+    return [s for s, _score, passed in tables_relevant_scored(
+        question, schemas, threshold, embed_query_fn, embed_texts_fn) if passed]
 
 
 async def retrieve_structured(state, vector_store, schema_registry) -> dict:

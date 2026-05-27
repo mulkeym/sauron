@@ -17,11 +17,12 @@ def _pay_schema_and_db(tmp_path, monkeypatch):
     con = connect_tabular(read_only=False)
     load_sheet_to_duckdb(con, "doc1", "Pay", cls, grid)
     con.close()
-    return schema_from_sheet("doc1", "Pay", cls, grid, acl_groups=["ALL"])
+    db = str(tmp_path / "t.duckdb")
+    return schema_from_sheet("doc1", "Pay", cls, grid, acl_groups=["ALL"]), db
 
 
 def test_structured_sql_rows_generates_and_runs(tmp_path, monkeypatch):
-    schema = _pay_schema_and_db(tmp_path, monkeypatch)
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
     monkeypatch.setattr(structured, "generate",
                         lambda **kw: f'SELECT grade, salary FROM "{schema.table}" WHERE step = 5 ORDER BY salary')
     rows = structured_sql_rows("engineer pay", [schema])
@@ -30,7 +31,7 @@ def test_structured_sql_rows_generates_and_runs(tmp_path, monkeypatch):
 
 
 def test_structured_sql_rows_raises_on_disallowed_table(tmp_path, monkeypatch):
-    schema = _pay_schema_and_db(tmp_path, monkeypatch)
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
     monkeypatch.setattr(structured, "generate", lambda **kw: 'SELECT * FROM "doc_other_secret"')
     with pytest.raises(Exception):
         structured_sql_rows("x", [schema])  # allowlist rejects -> raises (caller falls back)
@@ -162,3 +163,62 @@ def test_extract_sql_takes_last_fenced_block():
 def test_extract_sql_from_prose_without_fence():
     resp = "Sure, here is the query: SELECT a FROM t WHERE x = 1"
     assert structured._extract_sql(resp) == "SELECT a FROM t WHERE x = 1"
+
+
+from src.agent.strategies.structured import (
+    StructuredLookupTrace, run_structured_lookup, tables_relevant_scored,
+)
+
+
+def test_run_structured_lookup_success(tmp_path, monkeypatch):
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        structured, "generate",
+        lambda **kw: f'SELECT grade, salary FROM "{schema.table}" ORDER BY grade',
+    )
+    trace = run_structured_lookup("engineer pay", [schema], query_type="analytical")
+    assert trace.status == "ran"
+    assert trace.query_type == "analytical"
+    assert trace.gate is None
+    assert trace.row_count == 4
+    assert trace.sample_rows == trace.rows[:5]
+    assert "SELECT" in trace.sql
+    d = trace.to_dict()
+    assert d["status"] == "ran" and d["row_count"] == 4 and "rows" not in d
+
+
+def test_run_structured_lookup_error_captures_sql(tmp_path, monkeypatch):
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(structured, "generate", lambda **kw: 'SELECT * FROM "doc_other_secret"')
+    trace = run_structured_lookup("x", [schema], query_type="analytical")
+    assert trace.status == "error"
+    assert trace.error
+    assert trace.fell_back is True
+    assert 'doc_other_secret' in trace.sql
+
+
+def test_run_structured_lookup_zero_rows(tmp_path, monkeypatch):
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        structured, "generate",
+        lambda **kw: f'SELECT * FROM "{schema.table}" WHERE grade = \'NOPE\'',
+    )
+    trace = run_structured_lookup("x", [schema], query_type="sweep", gate=[["t", 0.5, True]])
+    assert trace.status == "ran"
+    assert trace.row_count == 0
+    assert trace.sample_rows == []
+    assert trace.gate == [["t", 0.5, True]]
+
+
+def test_tables_relevant_scored_reports_all_scores(monkeypatch):
+    from types import SimpleNamespace
+    schemas = [
+        SimpleNamespace(table="t_hi", description="pay", columns=[SimpleNamespace(name="salary")]),
+        SimpleNamespace(table="t_lo", description="weather", columns=[SimpleNamespace(name="temp")]),
+    ]
+    monkeypatch.setattr(structured, "embed_query", lambda q: [1.0, 0.0])
+    monkeypatch.setattr(structured, "embed_texts", lambda texts: [[1.0, 0.0], [0.0, 1.0]])
+    scored = tables_relevant_scored("pay?", schemas)
+    assert scored[0][0].table == "t_hi" and scored[0][2] is True
+    assert scored[1][0].table == "t_lo" and scored[1][2] is False
+    assert scored[0][1] > scored[1][1]
