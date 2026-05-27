@@ -269,3 +269,15 @@ def test_referenced_source_docs_ignores_cte():
     t = duckdb_table_name("live1", "pay")
     sql = f'WITH tmp AS (SELECT 1) SELECT * FROM "{t}", tmp'
     assert referenced_source_docs(sql, ["live1"]) == ["live1"]
+
+
+def test_distinct_values_sorted_independent_of_insertion_order():
+    # distinct_values feeds the categorical value list in the text-to-SQL schema
+    # prompt; a stable (sorted) order keeps that prompt byte-identical run-to-run
+    # so seed+temperature=0 yields deterministic SQL. DISTINCT without ORDER BY
+    # has no order guarantee in DuckDB.
+    con = duckdb.connect()
+    con.execute('CREATE TABLE t (loc VARCHAR)')
+    for v in ["TU", "AK", "SF", "ATL", "RUS"]:
+        con.execute('INSERT INTO t VALUES (?)', [v])
+    assert distinct_values(con, "t", "loc", max_distinct=100) == ["AK", "ATL", "RUS", "SF", "TU"]
