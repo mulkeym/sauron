@@ -276,3 +276,82 @@ async def test_cleanup_spreadsheet_tables_noop_for_unknown_doc(tmp_path, monkeyp
     await store.init()
     n = await cleanup_spreadsheet_tables("nonexistent-doc", store, schema_registry=SchemaRegistry())
     assert n == 0
+
+
+from src.ingestion.tabular_ingest import ingest_structured_sheets, SPREADSHEET_DOC_TYPES
+
+
+class _FakeVectorStore:
+    def __init__(self):
+        self.upserts = []  # list of (texts, metadatas)
+
+    def upsert(self, texts, vectors, metadatas):
+        self.upserts.append((list(texts), list(metadatas)))
+
+
+class _FakeMetadataStore:
+    def __init__(self):
+        self.saved = []
+
+    async def save_schema(self, schema):
+        self.saved.append(schema)
+
+
+class _FakeRegistry:
+    def __init__(self):
+        self.registered = []
+
+    def register(self, schema):
+        self.registered.append(schema)
+
+
+@pytest.mark.asyncio
+async def test_ingest_structured_sheets_clean_ingested_messy_gets_region_narratives(tmp_path, monkeypatch):
+    import openpyxl
+    p = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    clean = wb.create_sheet("Pay")
+    for row in [["locality", "grade", "salary"], ["Tampa", "GS-12", 86415],
+                ["Boston", "GS-12", 92000], ["Denver", "GS-13", 99000]]:
+        clean.append(row)
+    # Genuinely messy: a clean 3-row block embedded among total/prose rows whose
+    # text in the numeric salary column makes the SHEET fail clean classification,
+    # while find_table_region still carves out the clean block for narratives.
+    messy = wb.create_sheet("Notes")
+    for row in [["2026 Pay Notes"], ["locality", "grade", "salary"],
+                ["Reno", "GS-9", 55000], ["Mesa", "GS-9", 56000], ["Ames", "GS-9", 57000],
+                ["Totals", "across all", "see appendix"],
+                ["Average", "N/A", "varies by locality"],
+                ["Footnote", "refer to", "HR schedule B"]]:
+        messy.append(row)
+    wb.save(p)
+
+    # avoid real embeddings: return a fixed-width vector per text
+    monkeypatch.setattr("src.ingestion.tabular_ingest.embed_texts",
+                        lambda texts, *a, **k: [[0.0, 0.0, 0.0] for _ in texts])
+
+    vs, ms, reg = _FakeVectorStore(), _FakeMetadataStore(), _FakeRegistry()
+    grids, clss, ingested = await ingest_structured_sheets(
+        str(p), "doc1", "book.xlsx", "xlsx", ["g1"], "cat",
+        vs, ms, schema_registry=reg, generate_fn=lambda **k: "{}",
+    )
+    assert [g.sheet_name for g in grids] == ["Pay", "Notes"]
+    assert "Pay" in ingested              # clean sheet fully ingested
+    assert "Notes" not in ingested        # messy sheet not "ingested" to DuckDB
+    # messy region narratives were embedded at the table_row tier
+    tiers = [m.chunk_size_tier for _, metas in vs.upserts for m in metas]
+    assert "table_row" in tiers
+    # narrative text restates a messy-region row
+    all_texts = [t for texts, _ in vs.upserts for t in texts]
+    assert any("Reno" in t for t in all_texts)
+
+
+@pytest.mark.asyncio
+async def test_ingest_structured_sheets_read_failure_returns_empty(monkeypatch):
+    vs, ms, reg = _FakeVectorStore(), _FakeMetadataStore(), _FakeRegistry()
+    grids, clss, ingested = await ingest_structured_sheets(
+        "/no/such/file.xlsx", "doc1", "x.xlsx", "xlsx", ["g1"], "cat",
+        vs, ms, schema_registry=reg, generate_fn=lambda **k: "{}",
+    )
+    assert grids == [] and clss == [] and ingested == set()

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from src.ingestion.chunker import Chunk
 from src.ingestion.tabular import (
-    SheetGrid, SheetClassification, detect_header_row, infer_column_dtypes,
-    _cell_kind, COLUMN_CONSISTENCY, MIN_DATA_ROWS,
+    SheetGrid, SheetClassification, infer_column_dtypes, _cell_kind,
+    COLUMN_CONSISTENCY, MIN_DATA_ROWS, MAX_HEADER_SCAN, MIN_HEADER_CELLS,
+    HEADER_MIN_FILLED, HEADER_MAX_NUMERIC,
 )
 from src.ingestion.table_profiler import _heuristic_profile, build_row_narratives
 from src.ingestion.tabular_store import _safe_column_names
@@ -55,41 +56,76 @@ def build_tier_chunks(text_sheets: list, chunk_size: int) -> list[Chunk]:
     return chunks
 
 
+def _looks_like_header(row: list) -> bool:
+    """Per-row header test, identical to the criteria ``detect_header_row`` uses:
+    at least ``MIN_HEADER_CELLS`` non-empty cells (so a lone title banner is
+    skipped), mostly filled, and mostly non-numeric."""
+    kinds = [_cell_kind(c) for c in row]
+    filled = [k for k in kinds if k != "empty"]
+    if not kinds or len(filled) < MIN_HEADER_CELLS:
+        return False
+    numeric_ratio = sum(1 for k in filled if k == "number") / len(filled)
+    return len(filled) / len(kinds) >= HEADER_MIN_FILLED and numeric_ratio <= HEADER_MAX_NUMERIC
+
+
+def _consistent_run(rows: list, header_idx: int) -> int:
+    """Greedily extend a data run beneath ``rows[header_idx]`` and return its
+    exclusive end. A row joins the run only while it keeps EVERY column
+    type-consistent (cumulative dominant-kind ratio >= ``COLUMN_CONSISTENCY``)
+    and is structurally data-like (more than one cell, no wider than the header).
+    The first conflicting-type or structurally-broken row bounds the run — this
+    is what lets a clean block be carved out of a messy sheet whose later rows
+    (totals, prose footnotes) would poison a whole-sheet consistency check."""
+    ncols = len(rows[header_idx])
+    counts = [{"number": 0, "text": 0} for _ in range(ncols)]
+    end = header_idx + 1
+    while end < len(rows):
+        row = rows[end]
+        if not (1 < len(row) <= ncols):
+            break  # ragged-narrow note/banner or wider-than-header row bounds it
+        trial = [dict(c) for c in counts]
+        for col in range(ncols):
+            kind = _cell_kind(row[col]) if col < len(row) else "empty"
+            if kind != "empty":
+                trial[col][kind] += 1
+        consistent = all(
+            (c["number"] + c["text"]) == 0
+            or max(c["number"], c["text"]) / (c["number"] + c["text"]) >= COLUMN_CONSISTENCY
+            for c in trial
+        )
+        if not consistent:
+            break
+        counts = trial
+        end += 1
+    return end
+
+
 def find_table_region(rows: list) -> tuple[int, int] | None:
     """Locate the largest contiguous table-like block inside a sheet.
 
-    Returns ``(header_row_index, data_end_exclusive)`` for the run of rows
-    directly beneath a detected header that look like data for it and are
-    column-type-consistent (same thresholds as clean-sheet classification), or
-    None if no qualifying block exists (too few data rows, no header, or
-    inconsistent columns). Detection is modest by design: it finds the first
-    header in the leading rows and the contiguous data run beneath it — stacked
-    secondary tables are deferred. A row counts as data while it has more than
-    one cell and no more than the header's column count; spreadsheet readers
-    drop trailing empty cells, so a data row with a missing last value arrives
-    shorter than the header — it stays in the region (its gap renders as "(not
-    specified)" later), whereas a lone single-cell banner/note bounds it.
+    Returns ``(header_row_index, data_end_exclusive)`` for the biggest run of
+    type-consistent data rows beneath any header-like row, or None if no block
+    has >= ``MIN_DATA_ROWS`` rows. Unlike clean-sheet classification (which
+    judges a sheet whole, so one stray total/footnote row marks the entire sheet
+    messy — and spreadsheet readers pad every row to the sheet width, hiding
+    structural breaks), this scans candidate headers in the leading
+    ``MAX_HEADER_SCAN`` rows and, for each, greedily grows the consistent run
+    beneath it (see ``_consistent_run``), then keeps the largest. That carves a
+    clean block out of an otherwise-messy sheet. A data row whose trailing empty
+    cells were dropped by the reader stays in the region (its gap renders as
+    "(not specified)" later); a lone single-cell banner/note bounds it. Stacked
+    secondary tables beyond the largest block are deferred.
     """
-    header_idx = detect_header_row(rows)
-    if header_idx < 0:
-        return None
-    ncols = len(rows[header_idx])
-    end = header_idx + 1
-    while end < len(rows) and 1 < len(rows[end]) <= ncols:
-        end += 1
-    data = rows[header_idx + 1:end]
-    if len(data) < MIN_DATA_ROWS:
-        return None
-    for col in range(ncols):
-        counts = {"number": 0, "text": 0}
-        for r in data:
-            kind = _cell_kind(r[col]) if col < len(r) else "empty"
-            if kind != "empty":
-                counts[kind] += 1
-        total = counts["number"] + counts["text"]
-        if total and max(counts["number"], counts["text"]) / total < COLUMN_CONSISTENCY:
-            return None
-    return (header_idx, end)
+    best: tuple[int, int] | None = None
+    best_len = 0
+    for header_idx in range(min(len(rows), MAX_HEADER_SCAN)):
+        if header_idx + 1 >= len(rows) or not _looks_like_header(rows[header_idx]):
+            continue
+        end = _consistent_run(rows, header_idx)
+        data_len = end - (header_idx + 1)
+        if data_len >= MIN_DATA_ROWS and data_len > best_len:
+            best, best_len = (header_idx, end), data_len
+    return best
 
 
 def messy_region_narratives(grid: SheetGrid, region: tuple[int, int],

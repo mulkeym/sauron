@@ -9,7 +9,10 @@ the others or the surrounding document ingestion.
 import logging
 from pathlib import Path
 
-from src.ingestion.tabular import read_sheets, classify_sheet
+from src.ingestion.tabular import (
+    read_sheets, classify_sheet, SheetGrid, SheetClassification,
+)
+from src.ingestion.tabular_chunker import find_table_region, messy_region_narratives
 from src.ingestion.tabular_store import (
     connect_tabular, load_sheet_to_duckdb, schema_from_sheet,
 )
@@ -20,16 +23,78 @@ from src.retrieval.models import ChunkMetadata
 logger = logging.getLogger(__name__)
 
 
+def _ingest_one_clean_sheet(con, grid, cls, doc_id, acl_groups, schema_registry,
+                            generate_fn):
+    """Structured-ingest ONE already-classified clean sheet's DuckDB rows + build
+    its enriched, registered schema. Returns ``(col_names, profile, data_rows,
+    schema)``; the async caller persists the schema and embeds narratives via
+    ``_save_and_embed_clean``. Raises on any failure (caller decides fail-open).
+    This is the exact per-sheet logic previously inlined in
+    ``ingest_spreadsheet_tables``."""
+    _, col_names = load_sheet_to_duckdb(con, doc_id, grid.sheet_name, cls, grid)
+    data_rows = grid.rows[cls.header_row_index + 1:]
+    profile = profile_table(grid.sheet_name, col_names, cls.column_dtypes,
+                            data_rows[:5], generate_fn=generate_fn)
+    schema = schema_from_sheet(doc_id, grid.sheet_name, cls, grid, acl_groups=acl_groups)
+    for col in schema.columns:
+        if col.name in profile.column_descriptions:
+            col.description = profile.column_descriptions[col.name]
+    if profile.table_description:
+        schema.description = profile.table_description
+    schema_registry.register(schema)
+    return col_names, profile, data_rows, schema
+
+
+async def _save_and_embed_clean(metadata_store, vector_store, schema, col_names, profile,
+                                data_rows, doc_id, filename, doc_type, acl_groups, category,
+                                chunk_index):
+    """Persist a clean sheet's schema and embed its per-row narratives. Returns
+    the next chunk_index."""
+    await metadata_store.save_schema(schema)
+    narratives = [n for n in build_row_narratives(
+        col_names, profile, data_rows, context=profile.table_description) if n.strip()]
+    if narratives:
+        vectors = embed_texts(narratives)
+        metadatas = []
+        for _ in narratives:
+            metadatas.append(ChunkMetadata(
+                doc_id=doc_id, filename=filename, doc_type=doc_type,
+                chunk_index=chunk_index, start_char=0, acl_groups=acl_groups,
+                category=category, chunk_size_tier="table_row",
+            ))
+            chunk_index += 1
+        vector_store.upsert(texts=narratives, vectors=vectors, metadatas=metadatas)
+    return chunk_index
+
+
 async def ingest_spreadsheet_tables(file_path, doc_id, filename, doc_type, acl_groups,
                                     category, vector_store, metadata_store,
                                     schema_registry=None, generate_fn=None) -> int:
-    """Process every CLEAN sheet of a spreadsheet.
+    """Backward-compatible wrapper: structured-ingest clean sheets only and
+    return the count fully processed. New callers should use
+    ``ingest_structured_sheets`` (which also returns grids/classifications and
+    handles messy region narratives)."""
+    _, _, ingested = await ingest_structured_sheets(
+        file_path, doc_id, filename, doc_type, acl_groups, category,
+        vector_store, metadata_store, schema_registry=schema_registry,
+        generate_fn=generate_fn,
+    )
+    return len(ingested)
 
-    Returns the number of sheets FULLY processed (DuckDB rows + registered/
-    persisted schema + embedded narratives all succeeded). Fail-open per sheet:
-    a sheet that fails partway (e.g. an embedding error) is not counted, but any
-    DuckDB rows or persisted schema it already wrote remain — they are valid for
-    SQL querying and are overwritten idempotently on re-ingest.
+
+async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_groups,
+                                   category, vector_store, metadata_store,
+                                   schema_registry=None, generate_fn=None):
+    """Read a spreadsheet's sheets once, structured-ingest clean sheets, and embed
+    deterministic region narratives for messy sheets.
+
+    Returns ``(grids, classifications, ingested_names)`` where ``ingested_names``
+    is the set of CLEAN sheet names whose DuckDB rows + schema + per-row
+    narratives ALL succeeded. The caller uses that set (via
+    ``tabular_chunker.sheets_needing_text``) to decide which sheets still need
+    full-text chunks. Fully fail-open: a read failure returns ([], [], set());
+    a per-sheet failure is logged and the sheet is simply absent from
+    ``ingested_names`` (so it falls back to text chunks).
     """
     if schema_registry is None:
         from src.api.routes_ingest import get_schema_registry
@@ -39,61 +104,56 @@ async def ingest_spreadsheet_tables(file_path, doc_id, filename, doc_type, acl_g
         grids = read_sheets(Path(file_path))
     except Exception as e:
         logger.warning(f"Tabular ingest: could not read sheets from {filename}: {e}")
-        return 0
+        return [], [], set()
 
-    clean_count = 0
+    classifications = [classify_sheet(g) for g in grids]
+    ingested: set[str] = set()
     chunk_index = 0
     con = None
     try:
         con = connect_tabular(read_only=False)
-        for grid in grids:
-            cls = classify_sheet(grid)
-            if cls.route != "clean":
-                continue
-            try:
-                _, col_names = load_sheet_to_duckdb(con, doc_id, grid.sheet_name, cls, grid)
-                data_rows = grid.rows[cls.header_row_index + 1:]
-                profile = profile_table(
-                    grid.sheet_name, col_names, cls.column_dtypes, data_rows[:5],
-                    generate_fn=generate_fn,
-                )
-                # Build + enrich the schema with the profile's labels/description.
-                schema = schema_from_sheet(doc_id, grid.sheet_name, cls, grid, acl_groups=acl_groups)
-                for col in schema.columns:
-                    if col.name in profile.column_descriptions:
-                        col.description = profile.column_descriptions[col.name]
-                if profile.table_description:
-                    schema.description = profile.table_description
-                schema_registry.register(schema)
-                await metadata_store.save_schema(schema)
-
-                # Deterministic row narratives -> embeddings (raw rows live in DuckDB).
-                narratives = [
-                    n for n in build_row_narratives(
-                        col_names, profile, data_rows, context=profile.table_description
-                    ) if n.strip()
-                ]
-                if narratives:
+        for grid, cls in zip(grids, classifications):
+            if cls.route == "clean":
+                try:
+                    col_names, profile, data_rows, schema = _ingest_one_clean_sheet(
+                        con, grid, cls, doc_id, acl_groups, schema_registry, generate_fn)
+                    chunk_index = await _save_and_embed_clean(
+                        metadata_store, vector_store, schema, col_names, profile,
+                        data_rows, doc_id, filename, doc_type, acl_groups, category,
+                        chunk_index)
+                    ingested.add(grid.sheet_name)
+                except Exception as e:
+                    logger.warning(
+                        f"Tabular ingest: failed on clean sheet '{grid.sheet_name}' "
+                        f"of {filename}: {e}")
+                    continue
+            else:  # messy: deterministic region narratives (no LLM, no DuckDB)
+                try:
+                    region = find_table_region(grid.rows)
+                    if region is None:
+                        continue
+                    narratives = messy_region_narratives(grid, region)
+                    if not narratives:
+                        continue
                     vectors = embed_texts(narratives)
-                    metadatas = []
-                    for _ in narratives:
-                        metadatas.append(ChunkMetadata(
-                            doc_id=doc_id, filename=filename, doc_type=doc_type,
-                            chunk_index=chunk_index, start_char=0, acl_groups=acl_groups,
-                            category=category, chunk_size_tier="table_row",
-                        ))
-                        chunk_index += 1
+                    metadatas = [ChunkMetadata(
+                        doc_id=doc_id, filename=filename, doc_type=doc_type,
+                        chunk_index=chunk_index + i, start_char=0, acl_groups=acl_groups,
+                        category=category, chunk_size_tier="table_row",
+                    ) for i in range(len(narratives))]
+                    chunk_index += len(narratives)
                     vector_store.upsert(texts=narratives, vectors=vectors, metadatas=metadatas)
-                clean_count += 1
-            except Exception as e:
-                logger.warning(f"Tabular ingest: failed on sheet '{grid.sheet_name}' of {filename}: {e}")
-                continue
+                except Exception as e:
+                    logger.warning(
+                        f"Tabular ingest: region narratives failed on messy sheet "
+                        f"'{grid.sheet_name}' of {filename}: {e}")
+                    continue
     finally:
         if con is not None:
             con.close()
 
-    logger.info(f"Tabular ingest: processed {clean_count} clean sheet(s) from {filename}")
-    return clean_count
+    logger.info(f"Tabular ingest: structured {len(ingested)} clean sheet(s) from {filename}")
+    return grids, classifications, ingested
 
 
 async def populate_schema_registry(metadata_store, schema_registry) -> int:
@@ -104,7 +164,7 @@ async def populate_schema_registry(metadata_store, schema_registry) -> int:
     return len(schemas)
 
 
-_SPREADSHEET_DOC_TYPES = ("xlsx", "xls", "csv", "tsv")
+SPREADSHEET_DOC_TYPES = ("xlsx", "xls", "csv", "tsv")
 
 
 async def maybe_ingest_spreadsheet(file_path, doc_id, filename, doc_type, acl_groups,
@@ -116,7 +176,7 @@ async def maybe_ingest_spreadsheet(file_path, doc_id, filename, doc_type, acl_gr
     the other. Fail-open: any error is logged and swallowed (returns 0), so a
     structured-ingest failure never breaks document ingestion.
     """
-    if doc_type not in _SPREADSHEET_DOC_TYPES:
+    if doc_type not in SPREADSHEET_DOC_TYPES:
         return 0
     try:
         return await ingest_spreadsheet_tables(
