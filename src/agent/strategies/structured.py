@@ -6,10 +6,13 @@ the SWEEP branch. `tables_relevant_to` is a cheap (no-LLM) gate. `retrieve_struc
 combines them, fail-open, for the SWEEP strategy.
 """
 import asyncio
+import logging
 import math
 
 from src.generation.llm_client import generate
 from src.ingestion.embedder import embed_query, embed_texts
+
+logger = logging.getLogger(__name__)
 
 TEXT_TO_SQL_PROMPT = """You are a SQL query generator. Given a natural language question and database schema, generate a single SELECT query.
 
@@ -47,7 +50,10 @@ def structured_sql_rows(question: str, schemas, generate_fn=None) -> list[dict]:
             max_tokens=2048,
         )
         sql = sql.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
-        return execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
+        logger.info("Text-to-SQL for %r -> %s", question, sql)
+        rows = execute_duckdb_sql(con, sql, allowed_tables=allowed_tables)
+        logger.info("Text-to-SQL returned %d row(s) for %r", len(rows), question)
+        return rows
     finally:
         con.close()
 

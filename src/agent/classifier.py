@@ -1,5 +1,9 @@
+import logging
+
 from src.agent.state import AgentState, QueryType
 from src.generation.llm_client import generate, parse_json_response
+
+logger = logging.getLogger(__name__)
 
 CLASSIFICATION_PROMPT = """You are a query classifier for a document knowledge base. Classify the user's question into exactly one type and identify sub-tasks.
 
@@ -44,9 +48,13 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
         parsed = parse_json_response(response)
         query_type = QueryType(parsed["query_type"])
         sub_tasks = parsed.get("sub_tasks", [question])
+        logger.info("Classified %r -> %s (tables_available=%s)",
+                    question, query_type.value, bool(available_tables))
     except (Exception,):
         query_type = QueryType.LOOKUP
         sub_tasks = [question]
+        logger.warning("Classification parse failed for %r; defaulting to LOOKUP. Raw: %r",
+                       question, response)
     return {"query_type": query_type, "sub_tasks": sub_tasks}
 
 
