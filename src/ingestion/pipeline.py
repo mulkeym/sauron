@@ -5,6 +5,8 @@ from pathlib import Path
 from src.ingestion.parser import parse_document
 from src.ingestion.chunker import chunk_text
 from src.ingestion.embedder import embed_texts
+from src.ingestion.tabular_ingest import ingest_structured_sheets, SPREADSHEET_DOC_TYPES
+from src.ingestion.tabular_chunker import sheets_needing_text, build_tier_chunks
 from src.retrieval.models import ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 from src.db.metadata import MetadataStore
@@ -85,9 +87,27 @@ async def ingest_document(
     if doc_summary:
         doc_context += f"\nSummary: {doc_summary}"
     total_chunks = 0
+    chunks = []  # medium-tier chunks, retained for the return/entity count
+
+    is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
+    text_sheets = None
+    if is_spreadsheet:
+        # Structured: clean sheets -> DuckDB + schema + row narratives; messy
+        # sheets -> deterministic region narratives. Returns which clean sheets
+        # fully succeeded so we can de-dup their full text below.
+        grids, classifications, ingested = await ingest_structured_sheets(
+            file_path, doc_id, parsed.filename, parsed.doc_type,
+            acl_groups, category, vector_store, metadata_store,
+        )
+        text_sheets = sheets_needing_text(grids, classifications, ingested)
 
     for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
-        tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
+        if is_spreadsheet:
+            # Structure-aware, row-atomic chunks for messy + failed-clean sheets
+            # only. Clean sheets already in the structured store contribute none.
+            tier_chunks = build_tier_chunks(text_sheets, chunk_size=tier_size)
+        else:
+            tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
         texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
         metadatas = [
             ChunkMetadata(
@@ -117,14 +137,7 @@ async def ingest_document(
         uploaded_by=uploaded_by,
         category=category,
     )
-    # Structured handling for spreadsheets: clean sheets -> DuckDB + row narratives.
-    # Shared helper (also called by the async queue worker) so both ingestion
-    # paths get the structured path; fail-open inside the helper.
-    from src.ingestion.tabular_ingest import maybe_ingest_spreadsheet
-    await maybe_ingest_spreadsheet(
-        file_path, doc_id, parsed.filename, parsed.doc_type,
-        acl_groups, category, vector_store, metadata_store,
-    )
+    # (Spreadsheet structured ingest + de-dup happened in the chunking loop above.)
     # Ensure category exists in categories table
     if category and category != "uncategorized":
         existing = await metadata_store.get_category(category)

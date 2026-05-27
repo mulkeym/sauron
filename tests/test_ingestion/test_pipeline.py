@@ -91,3 +91,55 @@ async def test_ingest_extracts_entities(mock_deps):
     assert result.chunk_count > 0
     metadata_store.add_entity.assert_called()
     metadata_store.add_mention.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_spreadsheet_dedups_clean_sheet(tmp_path, monkeypatch):
+    """A clean spreadsheet that is structured-ingested emits NO full-text tier
+    chunks (only its DuckDB rows + table_row narratives); messy sheets would
+    still produce structure-aware text chunks."""
+    import openpyxl
+    from src.ingestion import pipeline
+
+    p = tmp_path / "pay.xlsx"
+    wb = openpyxl.Workbook(); wb.remove(wb.active)
+    clean = wb.create_sheet("Pay")
+    for r in [["locality", "grade", "salary"], ["Tampa", "GS-12", 86415],
+              ["Boston", "GS-12", 92000], ["Denver", "GS-13", 99000]]:
+        clean.append(r)
+    wb.save(p)
+
+    captured = {"tiers": []}
+
+    class FakeVS:
+        def upsert(self, texts, vectors, metadatas):
+            captured["tiers"] += [m.chunk_size_tier for m in metadatas]
+
+    class FakeMS:
+        async def add_document(self, **k): pass
+        async def get_category(self, name): return None
+        async def add_category(self, **k): pass
+        async def save_schema(self, s): pass
+
+    # Stub everything external: embeddings (both call sites), the LLM summary/
+    # profiler, the LightRAG insert, and the schema registry.
+    monkeypatch.setattr(pipeline, "embed_texts", lambda texts, *a, **k: [[0.0] for _ in texts])
+    monkeypatch.setattr("src.ingestion.tabular_ingest.embed_texts",
+                        lambda texts, *a, **k: [[0.0] for _ in texts])
+    monkeypatch.setattr("src.generation.llm_client.generate", lambda **k: "")
+
+    async def _coro(*a, **k):
+        return None
+    monkeypatch.setattr("src.knowledge.graph_rag.insert_document", lambda *a, **k: _coro())
+    monkeypatch.setattr("src.api.routes_ingest.get_schema_registry",
+                        lambda: type("R", (), {"register": lambda self, s: None,
+                                               "remove": lambda self, *a: None})())
+
+    await pipeline.ingest_document(
+        str(p), acl_groups=["g1"], uploaded_by="t", vector_store=FakeVS(),
+        metadata_store=FakeMS(), category="cat",
+    )
+    # The clean "Pay" sheet was de-duped: no small/medium/large/xlarge text tiers,
+    # only table_row narratives.
+    assert "table_row" in captured["tiers"]
+    assert not ({"small", "medium", "large", "xlarge"} & set(captured["tiers"]))

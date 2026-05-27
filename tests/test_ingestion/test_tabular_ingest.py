@@ -146,8 +146,9 @@ async def test_ingest_document_invokes_tabular_branch_for_spreadsheet(tmp_path, 
 
     async def _fake_orch(*args, **kwargs):
         calls.append(args)
-        return 1
-    monkeypatch.setattr(ti, "ingest_spreadsheet_tables", _fake_orch)
+        return [], [], set()
+    # pipeline imports the orchestrator into its own namespace, so patch it there.
+    monkeypatch.setattr(pipe, "ingest_structured_sheets", _fake_orch)
 
     store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
     await store.init()
