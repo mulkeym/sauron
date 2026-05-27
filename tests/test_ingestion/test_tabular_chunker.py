@@ -3,6 +3,7 @@ from src.ingestion.chunker import Chunk
 from src.ingestion.tabular import SheetGrid, SheetClassification
 from src.ingestion.tabular_chunker import (
     structure_aware_chunks, find_table_region, messy_region_narratives,
+    sheets_needing_text, build_tier_chunks,
 )
 
 
@@ -102,3 +103,37 @@ def test_messy_region_narratives_missing_cell_not_fabricated():
     region = find_table_region(rows)
     narratives = messy_region_narratives(grid, region)
     assert any("(not specified)" in n for n in narratives)
+
+
+def _grid(name, rows):
+    return SheetGrid(sheet_name=name, rows=rows)
+
+
+def _cls(name, route, hdr=0):
+    return SheetClassification(sheet_name=name, route=route, header_row_index=hdr)
+
+
+def test_sheets_needing_text_skips_ingested_clean_keeps_messy_and_failed_clean():
+    grids = [_grid("Clean", [["a", "b"]]), _grid("Messy", [["x"]]), _grid("Failed", [["c", "d"]])]
+    clss = [_cls("Clean", "clean"), _cls("Messy", "messy", hdr=-1), _cls("Failed", "clean")]
+    ingested = {"Clean"}  # only "Clean" structured-ingest succeeded
+    out = sheets_needing_text(grids, clss, ingested)
+    names = [g.sheet_name for g, _ in out]
+    assert names == ["Messy", "Failed"]  # ingested clean dropped; messy + failed-clean kept
+
+
+def test_build_tier_chunks_concatenates_across_sheets_with_continuous_indices():
+    grids = [
+        _grid("A", [["h1", "h2"], ["a", "1"], ["b", "2"]]),
+        _grid("B", [["h3", "h4"], ["c", "3"], ["d", "4"]]),
+    ]
+    clss = [_cls("A", "messy"), _cls("B", "messy")]
+    text_sheets = list(zip(grids, clss))
+    chunks = build_tier_chunks(text_sheets, chunk_size=1000)
+    assert [c.index for c in chunks] == list(range(len(chunks)))
+    assert any("Sheet: A" in c.text for c in chunks)
+    assert any("Sheet: B" in c.text for c in chunks)
+
+
+def test_build_tier_chunks_empty_when_no_sheets():
+    assert build_tier_chunks([], chunk_size=1000) == []

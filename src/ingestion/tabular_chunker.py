@@ -22,6 +22,39 @@ def _fmt_row(row: list) -> str:
     return " | ".join("" if c is None else str(c) for c in row)
 
 
+def sheets_needing_text(grids: list, classifications: list,
+                        ingested_sheets: set) -> list:
+    """Return ``[(grid, classification), ...]`` for every sheet that still needs a
+    TEXT representation: all messy sheets, plus any clean sheet NOT in
+    ``ingested_sheets`` (its structured ingest failed, so full text is its
+    fallback). Clean sheets that were structured-ingested are dropped — this is
+    the conditional de-dup."""
+    out = []
+    for grid, cls in zip(grids, classifications):
+        if cls.route == "clean" and cls.sheet_name in ingested_sheets:
+            continue
+        out.append((grid, cls))
+    return out
+
+
+def build_tier_chunks(text_sheets: list, chunk_size: int) -> list[Chunk]:
+    """Structure-aware chunks for all ``text_sheets`` concatenated into one list
+    with continuous chunk indices and running char offsets. ``text_sheets`` is
+    ``[(grid, classification), ...]`` (typically from ``sheets_needing_text``)."""
+    chunks: list[Chunk] = []
+    char_pos = 0
+    for grid, cls in text_sheets:
+        sheet_chunks = structure_aware_chunks(
+            grid.sheet_name, grid.rows, cls.header_row_index,
+            chunk_size=chunk_size, start_index=len(chunks), start_char=char_pos,
+        )
+        chunks.extend(sheet_chunks)
+        if sheet_chunks:
+            last = sheet_chunks[-1]
+            char_pos = last.start_char + len(last.text) + 1
+    return chunks
+
+
 def find_table_region(rows: list) -> tuple[int, int] | None:
     """Locate the largest contiguous table-like block inside a sheet.
 
