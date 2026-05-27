@@ -197,24 +197,38 @@ def distinct_values(con, table: str, column: str, max_distinct: int = 100) -> li
     return [r[0] for r in rows]
 
 
-def schema_prompt_with_values(schemas, con, max_distinct: int = 100) -> str:
+def schema_prompt_with_values(schemas, con, max_distinct: int = 100, hints=None) -> str:
     """Render registered schemas for the text-to-SQL prompt, appending the
     distinct values of low-cardinality VARCHAR columns so the LLM filters on
     real category codes (the gap that made 'Rest of U.S.' match 0 rows).
+
+    ``hints`` (optional) maps table name -> ResolvedHints; when present its
+    glossaries annotate the values list (``CODE (meaning)``), column notes append
+    to the column description, and table notes render as a ``Notes:`` line. With
+    ``hints=None`` (or no entry for a table) output is byte-identical to before.
     """
     parts = []
     for s in schemas:
+        th = (hints or {}).get(s.table)
+        glossaries = th.column_glossaries if th else {}
+        col_notes = th.column_notes if th else {}
         col_lines = []
         for c in s.columns:
-            line = f"  - {c.name} ({c.dtype}): {c.description}"
+            desc = c.description
+            if c.name in col_notes:
+                desc = f"{desc} — {col_notes[c.name]}" if desc else col_notes[c.name]
+            line = f"  - {c.name} ({c.dtype}): {desc}"
             if c.dtype == "VARCHAR":
                 vals = distinct_values(con, s.table, c.name, max_distinct)
                 if vals:
-                    line += " | values: " + ", ".join(str(v) for v in vals)
+                    gloss = glossaries.get(c.name, {})
+                    rendered = [f"{v} ({gloss[str(v)]})" if str(v) in gloss else str(v) for v in vals]
+                    line += " | values: " + ", ".join(rendered)
             col_lines.append(line)
-        parts.append(
-            f"Table: {s.table}\nDescription: {s.description}\nColumns:\n" + "\n".join(col_lines)
-        )
+        header = f"Table: {s.table}\nDescription: {s.description}"
+        if th and th.table_notes:
+            header += "\nNotes: " + "; ".join(th.table_notes)
+        parts.append(header + "\nColumns:\n" + "\n".join(col_lines))
     return "\n\n".join(parts)
 
 
