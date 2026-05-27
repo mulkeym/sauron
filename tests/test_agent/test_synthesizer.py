@@ -82,3 +82,60 @@ def test_synthesize_handles_context_cap_without_nameerror():
         )
         result = synthesize_answer(state)  # must not raise NameError
     assert result["answer"] == "ok"
+
+
+def _chunk(text, doc_id="d1", tier="medium", score=0.9):
+    return RetrievedChunk(
+        text=text, score=score,
+        metadata=ChunkMetadata(
+            doc_id=doc_id, filename="pay.xlsx", doc_type="xlsx",
+            chunk_index=0, start_char=0, acl_groups=["finance"],
+            chunk_size_tier=tier,
+        ),
+    )
+
+
+def test_sweep_keeps_structured_narratives_drops_raw_when_mapreduce():
+    """With a map-reduce synthesis present, structured table_row narratives are
+    kept in the synthesis context but bulky raw sweep chunks are dropped."""
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured["user_prompt"] = kwargs.get("user_prompt", "")
+        return "answer [1]"
+
+    mr = _chunk("Map-reduce synthesis of pay docs.", doc_id="map-reduce", tier="medium")
+    narrative = _chunk("locality=Tampa, grade=GS-12: salary is 86415", doc_id="dpay", tier="table_row")
+    raw = _chunk("RAWSWEEPBLOB huge raw spreadsheet text", doc_id="dpay", tier="large")
+
+    with patch("src.agent.synthesizer.generate", fake_generate):
+        state = AgentState(
+            question="GS rates in Tampa", user_groups=["finance"],
+            query_type=QueryType.SWEEP,
+            retrieved_chunks=[mr, narrative, raw], sql_results=[],
+        )
+        synthesize_answer(state)
+
+    ctx = captured["user_prompt"]
+    assert "Map-reduce synthesis" in ctx          # synthetic kept
+    assert "locality=Tampa" in ctx                # structured narrative kept
+    assert "RAWSWEEPBLOB" not in ctx              # raw sweep chunk dropped
+
+
+def test_no_mapreduce_keeps_raw_chunks():
+    """Regression: without a map-reduce chunk, raw chunks are still included."""
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured["user_prompt"] = kwargs.get("user_prompt", "")
+        return "answer [1]"
+
+    raw = _chunk("RAWSWEEPBLOB huge raw spreadsheet text", doc_id="dpay", tier="large")
+    with patch("src.agent.synthesizer.generate", fake_generate):
+        state = AgentState(
+            question="GS rates in Tampa", user_groups=["finance"],
+            query_type=QueryType.LOOKUP,
+            retrieved_chunks=[raw], sql_results=[],
+        )
+        synthesize_answer(state)
+    assert "RAWSWEEPBLOB" in captured["user_prompt"]

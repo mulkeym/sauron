@@ -116,3 +116,14 @@ def test_classify_fallback_on_bad_json():
         state = AgentState(question="Tell me something", user_groups=["finance"])
         result = classify_query(state)
     assert result["query_type"] == QueryType.LOOKUP
+
+
+def test_format_available_tables_is_order_stable():
+    from types import SimpleNamespace
+    a = SimpleNamespace(table="doc_a_pay", description="A pay")
+    b = SimpleNamespace(table="doc_b_pay", description="B pay")
+    c = SimpleNamespace(table="doc_c_pay", description="C pay")
+    out1 = format_available_tables([c, a, b])
+    out2 = format_available_tables([b, c, a])
+    assert out1 == out2
+    assert out1 == "- doc_a_pay: A pay\n- doc_b_pay: B pay\n- doc_c_pay: C pay"

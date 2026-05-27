@@ -31,6 +31,7 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "seed": settings.llm_seed,
     }
 
     headers = {}

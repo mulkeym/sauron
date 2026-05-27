@@ -229,3 +229,53 @@ async def cleanup_spreadsheet_tables(doc_id, metadata_store, schema_registry=Non
         logger.warning(f"DuckDB table cleanup failed for doc {doc_id}: {e}")
 
     return dropped
+
+
+async def purge_orphan_schemas(metadata_store, schema_registry=None) -> int:
+    """Drop DuckDB tables and delete/unregister schemas whose doc_id has no live
+    document in the metadata store (e.g. leftover test fixtures). Only operates on
+    the ``doc_`` table namespace. Fail-open. Returns the number of orphan schemas
+    removed."""
+    if schema_registry is None:
+        from src.api.routes_ingest import get_schema_registry
+        schema_registry = get_schema_registry()
+
+    from src.ingestion.tabular_store import connect_tabular, duckdb_table_name
+
+    try:
+        live_docs = await metadata_store.list_documents()
+        live_prefixes = [duckdb_table_name(d.doc_id, "") for d in live_docs]
+    except Exception as e:
+        logger.warning(f"Orphan schema purge aborted (could not list live docs): {e}")
+        return 0
+
+    def _is_orphan(table_name: str) -> bool:
+        # Only our namespace; orphan if no live doc prefix matches.
+        return table_name.startswith("doc_") and not any(
+            table_name.startswith(p) for p in live_prefixes)
+
+    removed = 0
+    try:
+        for sc in await metadata_store.load_all_schemas():
+            if _is_orphan(sc.table):
+                await metadata_store.delete_schema(sc.database, sc.table)
+                schema_registry.remove(sc.database, sc.table)
+                removed += 1
+    except Exception as e:
+        logger.warning(f"Orphan schema purge failed: {e}")
+
+    try:
+        con = connect_tabular(read_only=False)
+        try:
+            tables = [r[0] for r in con.execute(
+                "SELECT table_name FROM information_schema.tables").fetchall()]
+            for t in tables:
+                if _is_orphan(t):
+                    con.execute(f'DROP TABLE IF EXISTS "{t}"')
+        finally:
+            con.close()
+    except Exception as e:
+        logger.warning(f"Orphan DuckDB table purge failed: {e}")
+
+    logger.info(f"Orphan schema purge removed {removed} schema(s)")
+    return removed

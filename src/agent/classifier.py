@@ -24,8 +24,11 @@ Respond with ONLY valid JSON:
 
 
 def format_available_tables(schemas) -> str:
-    """One '- <table>: <description>' line per schema, for the classifier prompt."""
-    return "\n".join(f"- {s.table}: {s.description}" for s in schemas)
+    """One '- <table>: <description>' line per schema, sorted by table name for
+    a stable (run-to-run identical) classifier prompt."""
+    return "\n".join(
+        f"- {s.table}: {s.description}" for s in sorted(schemas, key=lambda s: s.table)
+    )
 
 
 def classify_query(state: AgentState, available_tables: str = "") -> dict:
