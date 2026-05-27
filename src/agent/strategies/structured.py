@@ -188,28 +188,31 @@ def tables_relevant_to(question: str, schemas, threshold: float = RELEVANCE_THRE
 
 
 async def retrieve_structured(state, vector_store, schema_registry) -> dict:
-    """Gated structured retrieval for the SWEEP branch.
-
-    If a registered (ACL-visible) table is relevant to the question, return its
-    exact SQL rows AND top-k row-narrative chunks. Fail-open: any failure yields
-    whatever succeeded; an irrelevant question returns {} (sweep proceeds RAG-only).
-    """
+    """Gated structured retrieval for the SWEEP branch. Returns exact SQL rows +
+    top-k row-narrative chunks when a registered table is relevant, plus a
+    ``structured_trace`` describing the decision/SQL/result. Fail-open: gate or
+    registry errors yield {} (RAG-only sweep)."""
     question = state["question"]
     user_groups = state["user_groups"]
 
     try:
         schemas = schema_registry.list_for_user(user_groups)
-        relevant = tables_relevant_to(question, schemas)
+        scored = tables_relevant_scored(question, schemas)
     except Exception:
         return {}   # gate/registry error -> RAG-only sweep (fail-open)
+
+    gate = [[s.table, round(score, 3), passed] for s, score, passed in scored]
+    relevant = [s for s, _score, passed in scored if passed]
+
     if not relevant:
+        if gate:  # tables existed but none cleared the threshold -> a visible "skipped" decision
+            trace = StructuredLookupTrace(
+                query_type="sweep", gate=gate, status="skipped",
+                skip_reason=f"no table >= {RELEVANCE_THRESHOLD} relevance")
+            return {"structured_trace": trace.to_dict()}
         return {}
 
-    sql_results: list = []
-    try:
-        sql_results = await asyncio.to_thread(structured_sql_rows, question, relevant)
-    except Exception:
-        sql_results = []
+    trace = await asyncio.to_thread(run_structured_lookup, question, relevant, "sweep", gate)
 
     chunks: list = []
     try:
@@ -220,4 +223,5 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
     except Exception:
         chunks = []
 
-    return {"sql_results": sql_results, "retrieved_chunks": chunks}
+    return {"sql_results": trace.rows, "retrieved_chunks": chunks,
+            "structured_trace": trace.to_dict()}

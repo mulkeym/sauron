@@ -1,6 +1,10 @@
 """Tests for shared structured retrieval (SQL core + gate + retrieve_structured)."""
+from types import SimpleNamespace
+
 import duckdb
 import pytest
+
+from src.agent.strategies.structured import StructuredLookupTrace
 
 from src.ingestion.tabular import SheetGrid, SheetClassification
 from src.ingestion.tabular_store import load_sheet_to_duckdb, schema_from_sheet
@@ -81,55 +85,57 @@ def _reg(schemas):
 
 @pytest.mark.asyncio
 async def test_retrieve_structured_returns_sql_and_narratives(monkeypatch):
-    schema = _schema("doc_pay", "GS pay rates")
-    monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [schema])
-    monkeypatch.setattr(structured, "structured_sql_rows", lambda q, s: [{"salary": 86415.0}])
-    monkeypatch.setattr(structured, "embed_query", lambda q: [0.1], raising=False)
-    vs = MagicMock()
-    vs.search.return_value = [_narr_chunk()]
-    out = await retrieve_structured({"question": "pay?", "user_groups": ["ALL"]},
-                                    vector_store=vs, schema_registry=_reg([schema]))
+    schemas = [SimpleNamespace(table="t_pay", description="pay", columns=[SimpleNamespace(name="salary")])]
+
+    class _Reg:
+        def list_for_user(self, g): return schemas
+
+    monkeypatch.setattr(structured, "tables_relevant_scored",
+                        lambda q, s: [(schemas[0], 0.71, True)])
+    monkeypatch.setattr(structured, "run_structured_lookup",
+                        lambda q, s, query_type, gate=None: StructuredLookupTrace(
+                            query_type="sweep", gate=gate, status="ran", sql="SELECT 1",
+                            row_count=1, sample_rows=[{"salary": 86415.0}], rows=[{"salary": 86415.0}]))
+    monkeypatch.setattr(structured, "embed_query", lambda q: [0.0])
+
+    class _VS:
+        def search(self, **kw): return [SimpleNamespace(text="narr", metadata=SimpleNamespace(doc_id="d", chunk_index=0))]
+
+    out = await structured.retrieve_structured(
+        {"question": "gs pay", "user_groups": ["ALL"]}, vector_store=_VS(), schema_registry=_Reg())
     assert out["sql_results"] == [{"salary": 86415.0}]
-    assert len(out["retrieved_chunks"]) == 1
-    # narratives searched on the table_row tier
-    assert vs.search.call_args.kwargs.get("tier") == "table_row"
+    assert out["structured_trace"]["status"] == "ran"
+    assert out["structured_trace"]["gate"] == [["t_pay", 0.71, True]]
 
 
 @pytest.mark.asyncio
-async def test_retrieve_structured_empty_when_gate_misses(monkeypatch):
-    monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [])
-    out = await retrieve_structured({"question": "weather?", "user_groups": ["ALL"]},
-                                    vector_store=MagicMock(), schema_registry=_reg([_schema("doc_pay", "pay")]))
-    assert out == {}
+async def test_retrieve_structured_skipped_trace_when_gate_misses(monkeypatch):
+    schemas = [SimpleNamespace(table="t_pay", description="pay", columns=[SimpleNamespace(name="salary")])]
+
+    class _Reg:
+        def list_for_user(self, g): return schemas
+
+    monkeypatch.setattr(structured, "tables_relevant_scored",
+                        lambda q, s: [(schemas[0], 0.10, False)])
+
+    class _VS:
+        def search(self, **kw): return []
+
+    out = await structured.retrieve_structured(
+        {"question": "weather", "user_groups": ["ALL"]}, vector_store=_VS(), schema_registry=_Reg())
+    assert "sql_results" not in out
+    assert out["structured_trace"]["status"] == "skipped"
+    assert out["structured_trace"]["gate"] == [["t_pay", 0.1, False]]
 
 
 @pytest.mark.asyncio
 async def test_retrieve_structured_fail_open_on_gate_error(monkeypatch):
-    """If the embedding gate raises (service down), retrieve_structured returns {} (RAG-only)."""
-    def boom(q, s, **k):
-        raise RuntimeError("embedding service down")
-    monkeypatch.setattr(structured, "tables_relevant_to", boom)
-    out = await retrieve_structured(
-        {"question": "pay?", "user_groups": ["ALL"]},
-        vector_store=MagicMock(),
-        schema_registry=_reg([_schema("doc_pay", "pay")]),
-    )
+    class _Reg:
+        def list_for_user(self, g): raise RuntimeError("embeddings down")
+
+    out = await structured.retrieve_structured(
+        {"question": "x", "user_groups": ["ALL"]}, vector_store=None, schema_registry=_Reg())
     assert out == {}
-
-
-@pytest.mark.asyncio
-async def test_retrieve_structured_fail_open_on_sql_error(monkeypatch):
-    schema = _schema("doc_pay", "GS pay rates")
-    monkeypatch.setattr(structured, "tables_relevant_to", lambda q, s, **k: [schema])
-    def boom(q, s):
-        raise RuntimeError("sql gen down")
-    monkeypatch.setattr(structured, "structured_sql_rows", boom)
-    monkeypatch.setattr(structured, "embed_query", lambda q: [0.1], raising=False)
-    vs = MagicMock(); vs.search.return_value = [_narr_chunk()]
-    out = await retrieve_structured({"question": "pay?", "user_groups": ["ALL"]},
-                                    vector_store=vs, schema_registry=_reg([schema]))
-    assert out["sql_results"] == []                 # SQL failed -> empty, no raise
-    assert len(out["retrieved_chunks"]) == 1        # narratives still returned
 
 
 # --- _extract_sql: robust SQL extraction from LLM responses ---

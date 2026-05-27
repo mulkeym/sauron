@@ -41,14 +41,19 @@ async def retrieve_cross_reference(
                 unique_chunks.append(chunk)
 
     sql_results = []
+    structured_trace = None
     has_schemas = len(schema_registry.list_for_user(user_groups)) > 0
     if has_schemas:
         analytical_result = await retrieve_analytical(state, vector_store=vector_store, schema_registry=schema_registry)
         sql_results = analytical_result.get("sql_results", [])
+        structured_trace = analytical_result.get("structured_trace")
 
     unique_chunks = vector_store.expand_window(unique_chunks, window=2)
-    return {
+    result = {
         "retrieved_chunks": unique_chunks,
         "sql_results": sql_results,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
     }
+    if structured_trace:
+        result["structured_trace"] = structured_trace
+    return result
