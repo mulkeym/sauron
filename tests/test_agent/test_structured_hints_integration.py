@@ -37,3 +37,15 @@ async def test_resolve_hints_for_schemas_empty_when_no_owning_doc():
     store = HintStore()
     out = await resolve_hints_for_schemas([_schema("doc_ghost_all_gs")], store, _MS([]))
     assert out == {}
+
+
+def test_text_to_sql_prompt_directs_glossary_use_and_no_refusal():
+    # Guards the SQL-generation direction: the model must be told to map a named
+    # place to its CODE via the `CODE (meaning)` glossary, honor Notes, and never
+    # refuse (the failure mode where it returned a prose apology instead of SQL).
+    from src.agent.strategies.structured import TEXT_TO_SQL_PROMPT
+    p = TEXT_TO_SQL_PROMPT.lower()
+    assert "code (meaning)" in p
+    assert "notes" in p
+    assert "never refuse" in p
+    assert "closest applicable code" in p

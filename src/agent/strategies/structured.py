@@ -26,6 +26,19 @@ Rules:
 - Always use SELECT (never INSERT, UPDATE, DELETE, DROP, etc.)
 - Keep queries simple and correct
 
+Using column values and codes:
+- A column may list its allowed values. Codes are often annotated as `CODE (meaning)`
+  (e.g. `TU (Tucson-Nogales, AZ)`). When the question names a place, category, or
+  entity, match it to the corresponding `(meaning)` and filter on the CODE itself,
+  not the human-readable name.
+- Apply any `Notes:` guidance shown for a table or column when choosing values.
+- If the exact value the user named is not in the list, do NOT refuse — choose the
+  closest applicable code, or a catch-all / "rest" / total category if the values
+  or notes indicate one.
+
+Always return your single best-effort SELECT query. Never refuse, never apologize,
+and never output prose — output SQL only, even when you are unsure.
+
 Schema:
 {schema}"""
 
