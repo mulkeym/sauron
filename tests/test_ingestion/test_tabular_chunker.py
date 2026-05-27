@@ -1,7 +1,7 @@
 """Tests for src/ingestion/tabular_chunker.py — sheet-aware chunking + region narratives."""
 from src.ingestion.chunker import Chunk
 from src.ingestion.tabular import SheetGrid, SheetClassification
-from src.ingestion.tabular_chunker import structure_aware_chunks
+from src.ingestion.tabular_chunker import structure_aware_chunks, find_table_region
 
 
 def test_structure_aware_chunks_repeats_header_and_marks_sheet():
@@ -44,3 +44,27 @@ def test_structure_aware_chunks_indices_and_start_offsets():
     assert chunks[1].index == 11
     assert chunks[0].start_char == 500
     assert chunks[1].start_char == 500 + len(chunks[0].text) + 1
+
+
+def test_find_table_region_in_messy_sheet():
+    # title banner + blank-ish preamble, then a clean rectangular block, then trailing note
+    rows = [
+        ["2026 GS Pay Table"],            # 0 single-cell banner
+        ["grade", "step", "salary"],      # 1 header
+        ["GS-12", "5", "86415"],          # 2 data
+        ["GS-13", "1", "90000"],          # 3 data
+        ["GS-14", "2", "99000"],          # 4 data
+        ["note: rates effective Jan 1"],  # 5 trailing (width mismatch ends region)
+    ]
+    region = find_table_region(rows)
+    assert region == (1, 5)  # header at row 1, data rows [2,5)
+
+
+def test_find_table_region_returns_none_when_no_block():
+    rows = [["just"], ["some"], ["prose"], ["lines"]]
+    assert find_table_region(rows) is None
+
+
+def test_find_table_region_requires_min_data_rows():
+    rows = [["a", "b"], ["1", "2"]]  # only one data row beneath header
+    assert find_table_region(rows) is None

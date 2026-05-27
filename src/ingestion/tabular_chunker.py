@@ -22,6 +22,39 @@ def _fmt_row(row: list) -> str:
     return " | ".join("" if c is None else str(c) for c in row)
 
 
+def find_table_region(rows: list) -> tuple[int, int] | None:
+    """Locate the largest contiguous table-like block inside a sheet.
+
+    Returns ``(header_row_index, data_end_exclusive)`` for the run of rows
+    directly beneath a detected header that share the header's column count and
+    are column-type-consistent (same thresholds as clean-sheet classification),
+    or None if no qualifying block exists (too few data rows, no header, or
+    inconsistent columns). Detection is modest by design: it finds the first
+    header in the leading rows and the contiguous width-matching run beneath it
+    — stacked secondary tables are deferred.
+    """
+    header_idx = detect_header_row(rows)
+    if header_idx < 0:
+        return None
+    ncols = len(rows[header_idx])
+    end = header_idx + 1
+    while end < len(rows) and len(rows[end]) == ncols:
+        end += 1
+    data = rows[header_idx + 1:end]
+    if len(data) < MIN_DATA_ROWS:
+        return None
+    for col in range(ncols):
+        counts = {"number": 0, "text": 0}
+        for r in data:
+            kind = _cell_kind(r[col]) if col < len(r) else "empty"
+            if kind != "empty":
+                counts[kind] += 1
+        total = counts["number"] + counts["text"]
+        if total and max(counts["number"], counts["text"]) / total < COLUMN_CONSISTENCY:
+            return None
+    return (header_idx, end)
+
+
 def structure_aware_chunks(sheet_name: str, rows: list, header_row_index: int,
                            chunk_size: int = 2048, start_index: int = 0,
                            start_char: int = 0) -> list[Chunk]:
