@@ -928,7 +928,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             sr = get_schema_registry()
             ms = get_metadata_store()
 
-            graph = create_agent_graph(vector_store=vs, schema_registry=sr, metadata_store=ms)
+            graph = create_agent_graph(vector_store=vs, schema_registry=sr, metadata_store=ms, include_synthesize=False)
 
             initial_state = AgentState(
                 question=question, user_groups=user_groups, query_type=None, sub_tasks=[],
@@ -946,7 +946,10 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             steps_data = [{"step": "cache_check", "time": cache_time, "output": {"result": "miss"}}]
             _playground_jobs[query_id]["completed_steps"].append({"step": "cache_check", "time": cache_time, "detail": f"<strong>Result:</strong> miss ({cache_time}s)"})
             step_start = time.time()
-            final_state = {}
+            # Seed from initial_state so base keys (question, user_groups, ...) are
+            # present: astream(stream_mode="updates") only emits per-node output
+            # deltas, so node updates alone never carry the original question.
+            final_state = dict(initial_state)
             # Show classify as the first active step
             _playground_jobs[query_id]["step"] = "classify"
 
@@ -1005,35 +1008,53 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     step_start = now
                     final_state.update(node_output if isinstance(node_output, dict) else {})
 
-                    # When synthesize starts, signal streaming ready with context
-                    if node_name == "synthesize" and not _playground_jobs[query_id].get("stream_ready"):
-                        from src.agent.synthesizer import _filter_relevant_chunks
-                        synth_chunks = _filter_relevant_chunks(
-                            final_state.get("retrieved_chunks", []), question
-                        )
-                        ctx_parts = []
-                        for ci, ch in enumerate(synth_chunks, 1):
-                            src = f"Source: {ch.metadata.filename}"
-                            if ch.metadata.page is not None:
-                                src += f", page {ch.metadata.page}"
-                            ctx_parts.append(f"{src}\n{ch.text}")
-                        sql = final_state.get("sql_results", [])
-                        if sql:
-                            ctx_parts.append(f"[Database query results]:\n{json.dumps(sql, indent=2)}")
-                        _playground_jobs[query_id]["stream_ready"] = True
-                        _playground_jobs[query_id]["stream_context"] = {
-                            "context": "\n\n".join(ctx_parts),
-                            "question": question,
-                        }
+
+            # Answer is produced by streaming (graph was built without synthesize).
+            has_context = bool(final_state.get("retrieved_chunks")) or bool(final_state.get("sql_results"))
+            answer = "I could not find any relevant information in the documents you have access to."
+            synth_start = time.time()
+            if has_context:
+                from src.agent.synthesizer import build_synthesis_context
+                _playground_jobs[query_id]["stream_context"] = {
+                    "context": build_synthesis_context(final_state),
+                    "question": question,
+                }
+                _playground_jobs[query_id]["stream_ready"] = True
+                _playground_jobs[query_id]["step"] = "streaming"
+
+                # The SSE endpoint (opened by the frontend) streams the answer and
+                # stores it back as streamed_answer. Wait for it; fall back to a
+                # non-streamed generate so a closed tab can never hang the job.
+                for _ in range(1500):  # ~5 min at 0.2s
+                    if _playground_jobs[query_id].get("streamed_answer") is not None:
+                        break
+                    await asyncio.sleep(0.2)
+                streamed = _playground_jobs[query_id].get("streamed_answer")
+                if streamed is not None:
+                    answer = streamed
+                else:
+                    from src.agent.synthesizer import (
+                        SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts)
+                    from src.generation.llm_client import generate as _gen
+                    ctx = _playground_jobs[query_id]["stream_context"]["context"]
+                    answer = _strip_reasoning_artifacts(_gen(
+                        system_prompt=SYSTEM_PROMPT,
+                        user_prompt=USER_PROMPT_TEMPLATE.format(context=ctx, question=question),
+                        max_tokens=4096))
+
+            # Synthesize wasn't a graph node; build citations + a trace step here.
+            from src.agent.synthesizer import build_citations
+            final_state["citations"] = build_citations(final_state) if has_context else []
+            synth_elapsed = round(time.time() - synth_start, 2)
+            steps_data.append({"step": "synthesize", "time": synth_elapsed,
+                               "output": {"answer": answer, "citations": final_state["citations"]}})
+            _playground_jobs[query_id]["completed_steps"].append(
+                {"step": "synthesize", "time": synth_elapsed,
+                 "detail": f"<strong>Answer length:</strong> {len(answer)} chars<br><strong>Citations:</strong> {len(final_state['citations'])}"})
 
             total_time = sum(s["time"] for s in steps_data)
-            answer = final_state.get("answer", "No answer")
             chunks = final_state.get("retrieved_chunks", [])
             query_type = str(final_state.get("query_type", "lookup"))
-
-            # Use streamed answer if available (from SSE endpoint)
-            if _playground_jobs[query_id].get("streamed_answer"):
-                answer = _playground_jobs[query_id]["streamed_answer"]
 
             # Build trace with expandable step details
             step_labels = {"cache_check": "Check Cache", "classify": "Classify Query", "structured_lookup": "Structured Lookup", "retrieve": "Retrieve Documents", "enrich": "Knowledge Graph", "synthesize": "Generate Answer"}
