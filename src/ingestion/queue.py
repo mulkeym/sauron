@@ -189,6 +189,8 @@ class IngestQueue:
         from src.ingestion.parser import parse_document
         from src.ingestion.chunker import chunk_text
         from src.ingestion.embedder import embed_texts
+        from src.ingestion.tabular_ingest import ingest_structured_sheets, SPREADSHEET_DOC_TYPES
+        from src.ingestion.tabular_chunker import sheets_needing_text, build_tier_chunks
         from src.knowledge.categorizer import categorize_document
         from src.retrieval.models import ChunkMetadata
 
@@ -280,13 +282,33 @@ class IngestQueue:
         if doc_summary:
             doc_context += f"\nSummary: {doc_summary}"
         total_chunks = 0
+        chunks = []  # ensure defined even if all sheets de-dup to zero text chunks
 
         # Smaller batch sizes for larger tiers to prevent OOM kills
         TIER_BATCH_SIZES = {"small": 64, "medium": 32, "large": 16, "xlarge": 8}
 
+        # Structured handling for spreadsheets: clean sheets -> DuckDB + schema +
+        # row narratives; messy sheets -> deterministic region narratives. Returns
+        # which clean sheets fully succeeded so we de-dup their full text below.
+        # Mirrors the sync pipeline so both ingestion paths behave identically.
+        is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
+        text_sheets = None
+        if is_spreadsheet:
+            self.update_step(job.job_id, IngestStep.STORING, "Structured spreadsheet ingest (DuckDB + narratives)")
+            grids, classifications, ingested = await ingest_structured_sheets(
+                file_path, doc_id, parsed.filename, parsed.doc_type,
+                job.acl_groups, category, vector_store, metadata_store,
+            )
+            text_sheets = sheets_needing_text(grids, classifications, ingested)
+
         for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
             self.update_step(job.job_id, IngestStep.CHUNKING, f"Chunking at {tier_name} ({tier_size} chars)")
-            tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
+            if is_spreadsheet:
+                # Structure-aware, row-atomic chunks for messy + failed-clean sheets
+                # only. Clean sheets already in the structured store contribute none.
+                tier_chunks = build_tier_chunks(text_sheets, chunk_size=tier_size)
+            else:
+                tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
 
             self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(tier_chunks)} {tier_name} chunks")
             texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
@@ -342,13 +364,7 @@ class IngestQueue:
                     name=category, description="", acl_groups=job.acl_groups, routing_keywords=[],
                 )
 
-        # Structured handling for spreadsheets: clean sheets -> DuckDB + row narratives.
-        # Same shared helper as the sync pipeline; fail-open inside the helper.
-        from src.ingestion.tabular_ingest import maybe_ingest_spreadsheet
-        await maybe_ingest_spreadsheet(
-            file_path, doc_id, parsed.filename, parsed.doc_type,
-            job.acl_groups, category, vector_store, metadata_store,
-        )
+        # (Spreadsheet structured ingest + de-dup happened in the chunking loop above.)
 
         # Step 6: Build knowledge graph via LightRAG
         if job.build_graph:
