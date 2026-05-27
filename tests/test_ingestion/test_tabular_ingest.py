@@ -320,3 +320,67 @@ async def test_ingest_structured_sheets_read_failure_returns_empty(monkeypatch):
         vs, ms, schema_registry=reg, generate_fn=lambda **k: "{}",
     )
     assert grids == [] and clss == [] and ingested == set()
+
+
+from types import SimpleNamespace
+
+
+@pytest.mark.asyncio
+async def test_purge_orphan_schemas_removes_only_orphans(monkeypatch):
+    from src.ingestion.tabular_ingest import purge_orphan_schemas
+    from src.ingestion.tabular_store import duckdb_table_name
+
+    live_tbl = duckdb_table_name("live1", "pay")
+    ghost_tbl = duckdb_table_name("ghost", "pay")
+
+    class FakeMS:
+        def __init__(self):
+            self.deleted = []
+
+        async def list_documents(self, user_groups=None):
+            return [SimpleNamespace(doc_id="live1", acl_groups=["ALL"])]
+
+        async def load_all_schemas(self):
+            return [
+                SimpleNamespace(database="spreadsheets", table=live_tbl),
+                SimpleNamespace(database="spreadsheets", table=ghost_tbl),
+            ]
+
+        async def delete_schema(self, database, table):
+            self.deleted.append((database, table))
+
+    class FakeReg:
+        def __init__(self):
+            self.removed = []
+
+        def remove(self, database, table):
+            self.removed.append((database, table))
+
+    class FakeCon:
+        def __init__(self, tables):
+            self.tables = tables
+            self.dropped = []
+
+        def execute(self, sql):
+            if sql.startswith("SELECT table_name"):
+                rows = [(t,) for t in self.tables]
+                return SimpleNamespace(fetchall=lambda: rows)
+            if sql.startswith("DROP TABLE"):
+                self.dropped.append(sql)
+            return SimpleNamespace(fetchall=lambda: [])
+
+        def close(self):
+            pass
+
+    fake_con = FakeCon([live_tbl, ghost_tbl, "system_meta"])
+    monkeypatch.setattr("src.ingestion.tabular_store.connect_tabular", lambda read_only=False: fake_con)
+
+    ms, reg = FakeMS(), FakeReg()
+    removed = await purge_orphan_schemas(ms, schema_registry=reg)
+
+    assert removed == 1
+    assert ms.deleted == [("spreadsheets", ghost_tbl)]
+    assert reg.removed == [("spreadsheets", ghost_tbl)]
+    assert any(ghost_tbl in d for d in fake_con.dropped)
+    assert not any(live_tbl in d for d in fake_con.dropped)
+    assert not any("system_meta" in d for d in fake_con.dropped)
