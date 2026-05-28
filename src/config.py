@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     # Strategy memory
     strategy_memory_enabled: bool = True
 
+    # Final-N reranking
+    rerank_final_enabled: bool = True
+    rerank_final_top_n: int = 50  # cap on chunks the final CrossEncoder pass scores/leads
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
     # Chunking
     chunk_size: int = 1024
     chunk_overlap: int = 100
