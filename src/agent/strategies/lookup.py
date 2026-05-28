@@ -2,6 +2,7 @@ import logging
 
 from src.agent.state import AgentState
 from src.ingestion.embedder import embed_query
+from src.retrieval.feedback import get_feedback_boosts_sync, apply_feedback_boosts_to_chunks
 from src.retrieval.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,9 @@ def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 3
 
     chunks = vector_store.hybrid_search_reranked(vector=query_vector, text_query=question, user_groups=user_groups, top_k=top_k, tier="medium", doc_ids=doc_ids)
 
+    feedback_boosts = get_feedback_boosts_sync(query_vector, user_groups)
+    chunks = apply_feedback_boosts_to_chunks(chunks, feedback_boosts)
+
     # Score-based filter: drop chunks below 30% of top score after reranking
     # to avoid pulling in loosely-matching documents for targeted lookups
     if chunks:
@@ -36,4 +40,5 @@ def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 3
     return {
         "retrieved_chunks": chunks,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
+        "feedback_boosts": feedback_boosts,
     }
