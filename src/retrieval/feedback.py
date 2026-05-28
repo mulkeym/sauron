@@ -157,3 +157,27 @@ async def get_feedback_boosts(
         logger.info(f"Feedback boosts: {pos} boosted, {neg} penalized (from {similar_queries} similar past queries)")
 
     return boosts
+
+
+def apply_feedback_boosts_to_chunks(chunks, boosts):
+    """Add each chunk's owning-doc boost to chunk.score, re-sort desc, return.
+    No-op when boosts is empty. Mutates chunk.score in place."""
+    if not boosts:
+        return chunks
+    for c in chunks:
+        b = boosts.get(c.metadata.doc_id, 0.0)
+        if b:
+            c.score += b
+    chunks.sort(key=lambda c: c.score, reverse=True)
+    return chunks
+
+
+def get_feedback_boosts_sync(query_vector, user_groups):
+    """Synchronous wrapper for get_feedback_boosts, for sync strategy callers
+    (e.g. retrieve_lookup runs in a worker thread). Fail-open -> {}."""
+    import asyncio
+    try:
+        return asyncio.run(get_feedback_boosts(query_vector, user_groups))
+    except Exception as e:
+        logger.warning(f"Sync feedback boost fetch failed: {e}")
+        return {}
