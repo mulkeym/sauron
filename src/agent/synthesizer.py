@@ -146,7 +146,14 @@ def synthesize_answer(state: AgentState) -> dict:
         total_chars += len(part)
 
     if sql_results:
-        context_parts.append(f"[Database query results]:\n{json.dumps(sql_results, indent=2)}")
+        trace = state.get("structured_trace") or {}
+        block = "[Database query results]"
+        if trace.get("schema_context"):
+            block += f"\nTable & column reference:\n{trace['schema_context']}"
+        if trace.get("sql"):
+            block += f"\nExecuted SQL:\n{trace['sql']}"
+        block += f"\nResult rows:\n{json.dumps(sql_results, indent=2)}"
+        context_parts.append(block)
     context = "\n\n".join(context_parts)
     logger.info(f"Synthesizer context: {len(context):,} chars from {len(context_parts)} parts")
 

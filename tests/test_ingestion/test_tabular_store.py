@@ -126,6 +126,33 @@ def test_load_sheet_raises_on_dtype_mismatch():
         load_sheet_to_duckdb(duckdb.connect(), "d", "S", cls, SheetGrid("S", rows))
 
 
+def test_schema_context_for_synthesis_describes_columns_and_glossary():
+    from src.ingestion.tabular_store import schema_context_for_synthesis
+    from src.db.schema_registry import ColumnSchema
+    from src.agent.strategies.hint_resolver import ResolvedHints
+    schema = TableSchema(
+        database="spreadsheets", table="doc_x_all_gs",
+        columns=[ColumnSchema("grade", "DOUBLE", "GS grade"),
+                 ColumnSchema("locname", "VARCHAR", "locality code"),
+                 ColumnSchema("annual1", "DOUBLE", "step 1 annual rate")],
+        description="GS pay by grade and locality", acl_groups=["ALL"])
+    hints = {"doc_x_all_gs": ResolvedHints(
+        column_glossaries={"locname": {"RUS": "Rest of U.S.", "TU": "Tucson-Nogales, AZ"}},
+        column_notes={"locname": "unlisted locations map to RUS"},
+        table_notes=["2026 base General Schedule"])}
+    out = schema_context_for_synthesis([schema], hints=hints)
+    # Column meanings present (so the LLM knows annual1 is a step rate, not random).
+    assert "grade (DOUBLE): GS grade" in out
+    assert "annual1 (DOUBLE): step 1 annual rate" in out
+    # Column note appended; table note rendered.
+    assert "unlisted locations map to RUS" in out
+    assert "2026 base General Schedule" in out
+    # Value-code glossary lets the LLM read 'RUS' rows as 'Rest of U.S.'
+    assert "RUS = Rest of U.S." in out
+    # No DB needed, and no exhaustive distinct-values dump (rows already carry values).
+    assert "values:" not in out
+
+
 def test_schema_from_sheet_raises_on_dtype_mismatch():
     rows = [["a", "b", "c"], [1, 2, 3]]
     cls = SheetClassification("S", "clean", 0, ["number", "number"], "clean table")

@@ -36,6 +36,13 @@ Using column values and codes:
   closest applicable code, or a catch-all / "rest" / total category if the values
   or notes indicate one.
 
+Choosing which columns to return:
+- Return enough columns that each row is self-explanatory. ALWAYS include the
+  identifying / label columns that say WHICH entity a row describes (e.g. name,
+  code, grade, category, locality, year/date) — not only the numeric measure
+  columns. A reader who sees only the measures cannot tell the rows apart.
+- When in doubt, prefer `SELECT *` over a hand-picked subset of columns.
+
 Always return your single best-effort SELECT query. Never refuse, never apologize,
 and never output prose — output SQL only, even when you are unsure.
 
@@ -72,6 +79,7 @@ class StructuredLookupTrace:
     query_type: str
     gate: list | None = None            # list of [table, score, passed]; None when no gate (analytical)
     sql: str = ""
+    schema_context: str = ""            # column meanings + value glossary for the queried table(s); fed to the synthesizer so it can interpret the raw rows
     status: str = "ran"                 # "ran" | "skipped" | "error"
     skip_reason: str = ""
     error: str = ""
@@ -85,6 +93,7 @@ class StructuredLookupTrace:
             "query_type": self.query_type,
             "gate": self.gate,
             "sql": self.sql,
+            "schema_context": self.schema_context,
             "status": self.status,
             "skip_reason": self.skip_reason,
             "error": self.error,
@@ -123,12 +132,17 @@ def run_structured_lookup(question: str, schemas, query_type: str,
     """Generate + run SQL and capture a full trace. Never raises: a failure is
     recorded as status='error' (with the SQL, if generated) and fell_back=True so
     the caller can fall back. Sync (run via asyncio.to_thread from async callers)."""
-    from src.ingestion.tabular_store import connect_tabular, schema_prompt_with_values
+    from src.ingestion.tabular_store import (
+        connect_tabular, schema_prompt_with_values, schema_context_for_synthesis)
     trace = StructuredLookupTrace(query_type=query_type, gate=gate)
     con = connect_tabular(read_only=True)
     try:
         trace.sql = generate_sql(schema_prompt_with_values(schemas, con, hints=hints), question,
                                  generate_fn=generate_fn)
+        # Carry the meaning of the queried table(s) forward to the synthesizer.
+        # Scope to the tables the SQL actually referenced so the context stays small.
+        referenced = [s for s in schemas if s.table in trace.sql] or list(schemas)
+        trace.schema_context = schema_context_for_synthesis(referenced, hints=hints)
         rows = run_sql(con, trace.sql, {s.table for s in schemas})
         trace.status = "ran"
         trace.rows = rows

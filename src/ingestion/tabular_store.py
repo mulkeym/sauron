@@ -248,6 +248,43 @@ def schema_prompt_with_values(schemas, con, max_distinct: int = 100, hints=None)
     return "\n\n".join(parts)
 
 
+def schema_context_for_synthesis(schemas, hints=None) -> str:
+    """Compact description of the queried table(s) for the *answer* LLM: column
+    meanings plus the value-code glossary, so it can interpret SQL result rows
+    that carry only raw column keys/codes (e.g. read a ``locname='RUS'`` row as
+    "Rest of U.S.", or know ``annual1`` is a step-1 salary).
+
+    Unlike ``schema_prompt_with_values`` (the text-to-SQL prompt) this needs no
+    DB connection and omits the exhaustive distinct-values dump — the result
+    rows already contain the actual values; what the synthesizer lacks is their
+    *meaning*. ``hints`` maps table name -> ResolvedHints (optional).
+    """
+    parts = []
+    for s in schemas:
+        th = (hints or {}).get(s.table)
+        glossaries = th.column_glossaries if th else {}
+        col_notes = th.column_notes if th else {}
+        col_lines = []
+        for c in s.columns:
+            desc = c.description
+            if c.name in col_notes:
+                desc = f"{desc} — {col_notes[c.name]}" if desc else col_notes[c.name]
+            col_lines.append(f"  - {c.name} ({c.dtype}): {desc}" if desc
+                             else f"  - {c.name} ({c.dtype})")
+        header = f"Table {s.table} — {s.description}"
+        if th and th.table_notes:
+            header += "\nNotes: " + "; ".join(th.table_notes)
+        block = header + "\nColumns:\n" + "\n".join(col_lines)
+        gloss_lines = [
+            f"  - {col}: " + ", ".join(f"{code} = {meaning}" for code, meaning in mapping.items())
+            for col, mapping in glossaries.items() if mapping
+        ]
+        if gloss_lines:
+            block += "\nValue meanings:\n" + "\n".join(gloss_lines)
+        parts.append(block)
+    return "\n\n".join(parts)
+
+
 def connect_tabular(read_only: bool = False):
     """Open a connection to the persistent tabular DuckDB database.
 

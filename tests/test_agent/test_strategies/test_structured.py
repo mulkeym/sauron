@@ -34,7 +34,23 @@ def test_structured_sql_rows_generates_and_runs(tmp_path, monkeypatch):
     assert len(rows) == 4
 
 
-def test_structured_sql_rows_raises_on_disallowed_table(tmp_path, monkeypatch):
+def test_run_structured_lookup_captures_sql_and_schema_context(tmp_path, monkeypatch):
+    """The trace must carry the executed SQL and a schema reference (column
+    meanings + value glossary) for the table(s) the SQL touched, so the
+    synthesizer can interpret the raw result rows."""
+    from src.agent.strategies.structured import run_structured_lookup
+    from src.agent.strategies.hint_resolver import ResolvedHints
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(structured, "generate",
+                        lambda **kw: f'SELECT * FROM "{schema.table}" WHERE step = 5')
+    hints = {schema.table: ResolvedHints(
+        column_glossaries={"grade": {"GS-10": "Grade 10"}}, table_notes=["pay table"])}
+    trace = run_structured_lookup("pay", [schema], "analytical", hints=hints)
+    assert trace.status == "ran"
+    assert "WHERE step = 5" in trace.sql
+    assert "grade" in trace.schema_context              # column described
+    assert "GS-10 = Grade 10" in trace.schema_context   # glossary rendered
+    assert trace.to_dict()["schema_context"] == trace.schema_context
     schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
     monkeypatch.setattr(structured, "generate", lambda **kw: 'SELECT * FROM "doc_other_secret"')
     with pytest.raises(Exception):
