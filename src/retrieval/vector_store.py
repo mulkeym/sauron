@@ -27,6 +27,7 @@ def _detect_vector_size() -> int:
 
 class VectorStore:
     _cross_encoder = None  # class-level cache for CrossEncoder model
+    _cross_encoder_model = None  # class-level cache for the raw CrossEncoder
 
     def __init__(self):
         self.db = lancedb.connect(settings.lancedb_path)
@@ -41,6 +42,17 @@ class VectorStore:
             cls._cross_encoder = CrossEncoderReranker(column="text")
             logger.info("CrossEncoder model loaded and cached")
         return cls._cross_encoder
+
+    @classmethod
+    def _get_cross_encoder_model(cls):
+        """Lazy-load and cache a raw sentence_transformers CrossEncoder for
+        scoring explicit (query, text) pairs (the lancedb reranker only drives
+        Lance query pipelines)."""
+        if cls._cross_encoder_model is None:
+            from sentence_transformers import CrossEncoder
+            from src.config import settings
+            cls._cross_encoder_model = CrossEncoder(settings.rerank_model)
+        return cls._cross_encoder_model
 
     @property
     def table(self):
@@ -202,6 +214,42 @@ class VectorStore:
         except Exception as e:
             logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
             return self.hybrid_search(vector, text_query, user_groups, top_k, tier, doc_ids)
+
+    def rerank_chunks(self, chunks, text_query, top_n, boosts=None):
+        """Rerank the top_n highest-scoring non-synthetic chunks with a
+        CrossEncoder so they lead (ordered by relevance), re-adding the
+        doc-level feedback boost. Mutates chunk.score in place and returns
+        the same list. Fail-open: any error leaves scores unchanged."""
+        boosts = boosts or {}
+        SYNTHETIC = {"map-reduce", "knowledge-graph", "metadata-context"}
+        if not chunks or len(chunks) < 2:
+            return chunks
+        regular = [c for c in chunks if c.metadata.doc_id not in SYNTHETIC]
+        if len(regular) < 2:
+            return chunks
+        try:
+            model = self._get_cross_encoder_model()
+        except Exception as e:
+            logger.warning(f"Rerank model load failed, skipping rerank: {e}")
+            return chunks
+
+        regular.sort(key=lambda c: c.score, reverse=True)
+        head = regular[:top_n]
+        tail = regular[top_n:]
+        try:
+            raw = list(model.predict([(text_query, c.text) for c in head]))
+        except Exception as e:
+            logger.warning(f"Rerank predict failed, skipping rerank: {e}")
+            return chunks
+
+        lo, hi = min(raw), max(raw)
+        span = (hi - lo) or 1.0
+        tail_max = max((c.score for c in tail), default=0.0)
+        base = tail_max + 0.01  # guarantee reranked head leads the tail
+        for c, r in zip(head, raw):
+            norm = (r - lo) / span  # [0, 1]
+            c.score = base + norm + boosts.get(c.metadata.doc_id, 0.0)
+        return chunks
 
     def get_chunks_by_doc(self, doc_id: str, limit: int = 200, tier: str | None = None) -> list[RetrievedChunk]:
         """Retrieve chunks for a document, optionally filtered by tier."""
