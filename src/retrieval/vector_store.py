@@ -50,7 +50,6 @@ class VectorStore:
         Lance query pipelines)."""
         if cls._cross_encoder_model is None:
             from sentence_transformers import CrossEncoder
-            from src.config import settings
             cls._cross_encoder_model = CrossEncoder(settings.rerank_model)
         return cls._cross_encoder_model
 
