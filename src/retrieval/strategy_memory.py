@@ -120,28 +120,39 @@ async def get_best_strategy(query_text: str) -> dict | None:
         strategy_stats[s]["discovered"].append(r.docs_discovered)
         strategy_stats[s]["cited"].append(r.docs_cited)
 
-    best = None
-    best_precision = -1
-    for strategy, stats in strategy_stats.items():
-        avg_discovered = sum(stats["discovered"]) / len(stats["discovered"])
+    # Composite ranking: primary = avg docs cited (truest success proxy),
+    # tiebreak = avg relevant. Precision is reported but no longer the key
+    # (it structurally favored narrow strategies and punished recall).
+    def composite(stats):
+        avg_cited = sum(stats["cited"]) / len(stats["cited"])
         avg_relevant = sum(stats["relevant"]) / len(stats["relevant"])
-        precision = avg_relevant / avg_discovered if avg_discovered > 0 else 0
-        avg_time = sum(stats["times"]) / len(stats["times"])
-        count = len(stats["times"])
+        return avg_cited + 0.001 * avg_relevant  # relevant breaks cited ties
 
-        if precision > best_precision:
-            best_precision = precision
-            best = {
-                "strategy": strategy,
-                "avg_relevant": round(avg_relevant, 1),
-                "avg_discovered": round(avg_discovered, 1),
-                "avg_time": round(avg_time, 1),
-                "precision": round(precision, 3),
-                "count": count,
-            }
+    ranked = sorted(
+        strategy_stats.items(), key=lambda kv: composite(kv[1]), reverse=True
+    )
+    top_strategy, top_stats = ranked[0]
+    top_comp = composite(top_stats)
+    runner_comp = composite(ranked[1][1]) if len(ranked) > 1 else 0.0
+    margin = (top_comp - runner_comp) / top_comp if top_comp > 0 else (1.0 if len(ranked) == 1 else 0.0)
+
+    avg_discovered = sum(top_stats["discovered"]) / len(top_stats["discovered"])
+    avg_relevant = sum(top_stats["relevant"]) / len(top_stats["relevant"])
+    avg_cited = sum(top_stats["cited"]) / len(top_stats["cited"])
+    precision = avg_relevant / avg_discovered if avg_discovered > 0 else 0
+    best = {
+        "strategy": top_strategy,
+        "avg_relevant": round(avg_relevant, 1),
+        "avg_discovered": round(avg_discovered, 1),
+        "avg_cited": round(avg_cited, 1),
+        "avg_time": round(sum(top_stats["times"]) / len(top_stats["times"]), 1),
+        "precision": round(precision, 3),
+        "count": len(top_stats["times"]),
+        "margin": round(margin, 3),
+    }
 
     if best:
         logger.info(f"Strategy memory: pattern='{pattern}' -> best={best['strategy']} "
-                   f"(precision={best['precision']:.0%} from {best['count']} runs)")
+                   f"(cited={best['avg_cited']}, margin={best['margin']:.0%}, n={best['count']})")
 
     return best
