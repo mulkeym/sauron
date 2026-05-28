@@ -1322,17 +1322,21 @@ async def playground_stream(query_id: str):
     """SSE endpoint that streams the synthesized answer token by token."""
     from fastapi.responses import StreamingResponse
 
-    async def event_stream():
-        import asyncio
+    # Sync generator: Starlette runs it in a threadpool, so the blocking
+    # generate_stream() (synchronous `requests` to the LLM) does NOT block the
+    # asyncio event loop. Running it as an `async def` starved the loop and made
+    # concurrent /status polls fail ("Failed to fetch") during long generations.
+    def event_stream():
+        import time
 
         # Wait for the job to reach synthesize step with context ready
-        for _ in range(300):  # 5 min timeout
+        for _ in range(1500):  # ~5 min at 0.2s
             job = _playground_jobs.get(query_id, {})
             if job.get("stream_ready"):
                 break
             if job.get("step") in ("complete", "error"):
                 return
-            await asyncio.sleep(0.2)
+            time.sleep(0.2)
 
         context_data = job.get("stream_context")
         if not context_data:
