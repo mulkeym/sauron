@@ -41,5 +41,5 @@ class AgentState(TypedDict, total=False):
     allowed_doc_ids: list[str]  # restrict retrieval to these doc_ids (app filter)
     dataset_id: int  # dataset filter for KG queries
     structured_trace: dict  # playground: structured/SQL lookup decision + result
-    feedback_boosts: dict  # {doc_id: boost} from relevance feedback, passed to final rerank
+    feedback_boosts: dict[str, float]  # {doc_id: boost} from relevance feedback, passed to final rerank
     strategy_memory: dict  # routing decision from Strategy Memory (F1 observability)

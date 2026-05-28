@@ -20,6 +20,7 @@ from src.retrieval.vector_store import VectorStore
 def _rerank_merge(state, vector_store) -> dict:
     """Final-N rerank of the consolidated chunk set (mutates chunk.score in
     place; consumers sort by score). Fail-open + flag-guarded."""
+    import logging
     from src.config import settings
     if not settings.rerank_final_enabled:
         return {}
@@ -32,7 +33,6 @@ def _rerank_merge(state, vector_store) -> dict:
             chunks, state.get("question", ""), settings.rerank_final_top_n, boosts=boosts,
         )
     except Exception as e:
-        import logging
         logging.getLogger("retrieval").warning(f"Final rerank skipped: {e}")
     return {}
 
