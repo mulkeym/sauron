@@ -97,10 +97,31 @@ def test_rerank_chunks_skips_synthetic(monkeypatch):
     from src.retrieval.vector_store import VectorStore
     vs = VectorStore.__new__(VectorStore)
     synth = _chunk("map-reduce", 0, 0.42, "extracted data")
-    chunks = [synth, _chunk("d1", 0, 0.1, "a match")]
+    reg1 = _chunk("d1", 0, 0.3, "a match")
+    reg2 = _chunk("d2", 1, 0.2, "another match")
+    original_reg_scores = (reg1.score, reg2.score)
+    # 2 regular chunks → scoring loop runs; synthetic is present but excluded
     with patch.object(VectorStore, "_get_cross_encoder_model", return_value=_FakeCE()):
-        vs.rerank_chunks(chunks, "match", top_n=50, boosts=None)
-    assert synth.score == 0.42  # synthetic chunk score untouched
+        vs.rerank_chunks([synth, reg1, reg2], "match", top_n=50, boosts=None)
+    assert synth.score == 0.42  # synthetic chunk score untouched by reranking
+    # Regular chunks must have been rescored (scores changed from originals)
+    assert reg1.score != original_reg_scores[0] or reg2.score != original_reg_scores[1]
+
+
+def test_rerank_chunks_failopen_on_predict_error(monkeypatch):
+    from src.retrieval.vector_store import VectorStore
+    vs = VectorStore.__new__(VectorStore)
+
+    class _RaisingCE:
+        """Fake CrossEncoder whose predict always raises."""
+        def predict(self, pairs):
+            raise RuntimeError("predict exploded")
+
+    chunks = [_chunk("d1", 0, 0.9, "a match"), _chunk("d2", 1, 0.4, "another match")]
+    original_scores = [c.score for c in chunks]
+    with patch.object(VectorStore, "_get_cross_encoder_model", return_value=_RaisingCE()):
+        out = vs.rerank_chunks(chunks, "match", top_n=50, boosts=None)
+    assert [c.score for c in out] == original_scores  # scores unchanged on predict error
 
 
 def test_rerank_chunks_failopen_on_model_error(monkeypatch):
