@@ -145,9 +145,12 @@ async def ingest_document(
             await metadata_store.add_category(
                 name=category, description="", acl_groups=acl_groups, routing_keywords=[],
             )
-    # Build knowledge graph via LightRAG
-    from src.knowledge.graph_rag import insert_document as lightrag_insert
-    await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+    # Build knowledge graph via LightRAG — skipped for spreadsheets, which are
+    # fully covered by the structured/tabular store; KG extraction over flattened
+    # numeric tables is costly and yields almost no entities.
+    if not is_spreadsheet:
+        from src.knowledge.graph_rag import insert_document as lightrag_insert
+        await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
     return IngestResult(
         doc_id=doc_id,
         filename=parsed.filename,

@@ -143,3 +143,70 @@ async def test_ingest_document_spreadsheet_dedups_clean_sheet(tmp_path, monkeypa
     # only table_row narratives.
     assert "table_row" in captured["tiers"]
     assert not ({"small", "medium", "large", "xlarge"} & set(captured["tiers"]))
+
+
+def _stub_pipeline(monkeypatch, pipeline, kg_calls):
+    """Stub the external deps shared by the KG-gating tests, recording every
+    LightRAG insert_document call into kg_calls."""
+    async def _coro(*a, **k):
+        return None
+
+    def _fake_insert(*a, **k):
+        kg_calls.append((a, k))
+        return _coro()
+
+    monkeypatch.setattr(pipeline, "embed_texts", lambda texts, *a, **k: [[0.0] for _ in texts])
+    monkeypatch.setattr("src.ingestion.tabular_ingest.embed_texts",
+                        lambda texts, *a, **k: [[0.0] for _ in texts])
+    monkeypatch.setattr("src.generation.llm_client.generate", lambda **k: "")
+    monkeypatch.setattr("src.knowledge.graph_rag.insert_document", _fake_insert)
+    monkeypatch.setattr("src.api.routes_ingest.get_schema_registry",
+                        lambda: type("R", (), {"register": lambda self, s: None,
+                                               "remove": lambda self, *a: None})())
+
+
+class _GateVS:
+    def upsert(self, texts, vectors, metadatas): pass
+
+
+class _GateMS:
+    async def add_document(self, **k): pass
+    async def get_category(self, name): return None
+    async def add_category(self, **k): pass
+    async def save_schema(self, s): pass
+
+
+@pytest.mark.asyncio
+async def test_ingest_spreadsheet_skips_knowledge_graph(tmp_path, monkeypatch):
+    """Spreadsheets are fully covered by the structured/tabular store, so KG
+    extraction (costly + near-empty for numeric tables) is skipped."""
+    import openpyxl
+    from src.ingestion import pipeline
+
+    p = tmp_path / "pay.xlsx"
+    wb = openpyxl.Workbook(); wb.remove(wb.active)
+    s = wb.create_sheet("Pay")
+    for r in [["locality", "grade", "salary"], ["Tampa", "GS-12", 86415]]:
+        s.append(r)
+    wb.save(p)
+
+    kg_calls = []
+    _stub_pipeline(monkeypatch, pipeline, kg_calls)
+    await pipeline.ingest_document(str(p), acl_groups=["g1"], uploaded_by="t",
+                                   vector_store=_GateVS(), metadata_store=_GateMS(), category="cat")
+    assert kg_calls == []   # KG skipped for spreadsheet
+
+
+@pytest.mark.asyncio
+async def test_ingest_plaintext_still_builds_knowledge_graph(tmp_path, monkeypatch):
+    """Regression guard: the spreadsheet gate must NOT suppress KG for prose docs."""
+    from src.ingestion import pipeline
+
+    p = tmp_path / "memo.txt"
+    p.write_text("Acme Corp signed a contract with Globex in 2026.")
+
+    kg_calls = []
+    _stub_pipeline(monkeypatch, pipeline, kg_calls)
+    await pipeline.ingest_document(str(p), acl_groups=["g1"], uploaded_by="t",
+                                   vector_store=_GateVS(), metadata_store=_GateMS(), category="cat")
+    assert len(kg_calls) == 1   # KG still runs for non-spreadsheet

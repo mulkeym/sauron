@@ -366,8 +366,13 @@ class IngestQueue:
 
         # (Spreadsheet structured ingest + de-dup happened in the chunking loop above.)
 
-        # Step 6: Build knowledge graph via LightRAG
-        if job.build_graph:
+        # Step 6: Build knowledge graph via LightRAG. Skipped for spreadsheets —
+        # they are fully covered by the structured/tabular store, and KG
+        # extraction over flattened numeric tables is costly and near-empty.
+        if is_spreadsheet:
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                "Skipped (structured data — knowledge graph not applicable)")
+        elif job.build_graph:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
             from src.knowledge.graph_rag import insert_document as lightrag_insert, get_graph_counts
 
