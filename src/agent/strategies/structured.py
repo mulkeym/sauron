@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from src.generation.llm_client import generate
 from src.ingestion.embedder import embed_query, embed_texts
 from src.agent.strategies.hint_resolver import resolve_hints
+from src.retrieval.feedback import get_feedback_boosts, apply_feedback_boosts_to_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,12 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
         )
     except Exception:
         chunks = []
+
+    try:
+        _boosts = await get_feedback_boosts(qv, user_groups)
+        chunks = apply_feedback_boosts_to_chunks(chunks, _boosts)
+    except Exception:
+        pass
 
     return {"sql_results": trace.rows, "retrieved_chunks": chunks,
             "structured_trace": trace.to_dict()}

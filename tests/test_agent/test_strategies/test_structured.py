@@ -232,6 +232,45 @@ def test_run_structured_lookup_zero_rows(tmp_path, monkeypatch):
     assert trace.gate == [["t", 0.5, True]]
 
 
+@pytest.mark.asyncio
+async def test_structured_applies_feedback_boosts_to_narratives(monkeypatch):
+    from src.agent.strategies import structured as st
+    from src.retrieval.models import RetrievedChunk, ChunkMetadata
+
+    class S:
+        table = "all_gs"
+    monkeypatch.setattr(st, "tables_relevant_scored", lambda q, schemas: [(S(), 0.9, True)])
+
+    class FakeTrace:
+        rows = [{"x": 1}]
+        def to_dict(self):
+            return {"status": "ran"}
+    monkeypatch.setattr(st, "run_structured_lookup", lambda *a, **k: FakeTrace())
+    monkeypatch.setattr(st, "embed_query", lambda q: [0.0, 0.1])
+
+    async def fake_boosts(qv, ug):
+        return {"docB": 0.5}
+    monkeypatch.setattr(st, "get_feedback_boosts", fake_boosts, raising=False)
+
+    def _c(doc_id, idx, score):
+        return RetrievedChunk(text="t", score=score,
+            metadata=ChunkMetadata(doc_id=doc_id, filename="f", doc_type="text",
+                                   chunk_index=idx, start_char=0, acl_groups=["ALL"]))
+
+    class FakeVS:
+        def search(self, **k):
+            return [_c("docA", 0, 0.8), _c("docB", 1, 0.4)]
+
+    class FakeRegistry:
+        def list_for_user(self, ug):
+            return [S()]
+
+    state = {"question": "q", "user_groups": ["ALL"]}
+    result = await st.retrieve_structured(state, vector_store=FakeVS(), schema_registry=FakeRegistry())
+    chunks = result["retrieved_chunks"]
+    assert chunks[0].metadata.doc_id == "docB"  # 0.4+0.5 > 0.8
+
+
 def test_tables_relevant_scored_reports_all_scores(monkeypatch):
     from types import SimpleNamespace
     schemas = [
