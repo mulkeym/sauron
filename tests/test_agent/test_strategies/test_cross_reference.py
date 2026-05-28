@@ -63,7 +63,7 @@ async def test_cross_reference_returns_feedback_boosts(monkeypatch):
     from src.agent.strategies import cross_reference as xr
     from src.retrieval.models import RetrievedChunk, ChunkMetadata
 
-    async def fake_embed(texts, kind):
+    def fake_embed(texts, kind):
         return [[0.0, 0.1] for _ in texts]
     monkeypatch.setattr("src.ingestion.embedder.embed_texts", fake_embed)
 

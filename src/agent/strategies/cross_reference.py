@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 from src.agent.state import AgentState
 from src.agent.strategies.analytical import retrieve_analytical
 from src.db.schema_registry import SchemaRegistry
@@ -20,10 +19,7 @@ async def retrieve_cross_reference(
 
     # Embed all sub-tasks in one batch (model isn't thread-safe for concurrent calls)
     from src.ingestion.embedder import embed_texts
-    if inspect.iscoroutinefunction(embed_texts):
-        task_vectors = await embed_texts(sub_tasks, "query")
-    else:
-        task_vectors = await asyncio.to_thread(embed_texts, sub_tasks, "query")
+    task_vectors = await asyncio.to_thread(embed_texts, sub_tasks, "query")
 
     # Search in parallel (LanceDB handles concurrent reads)
     async def search_task(task, vector):
