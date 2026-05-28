@@ -4,6 +4,7 @@ import logging
 import re
 from src.agent.state import AgentState
 from src.ingestion.embedder import embed_query
+from src.retrieval.feedback import get_feedback_boosts
 from src.retrieval.models import RetrievedChunk
 from src.retrieval.vector_store import VectorStore
 
@@ -20,6 +21,12 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     doc_ids = state.get("allowed_doc_ids")
 
     query_vector = await asyncio.to_thread(embed_query, question)
+
+    feedback_boosts = {}
+    try:
+        feedback_boosts = await get_feedback_boosts(query_vector, user_groups)
+    except Exception:
+        pass
 
     # Step 1: Search for relevant documents
     # Date filter adds docs that mention the date — used as a boost, not exclusive
@@ -42,7 +49,13 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     # Score-based cutoff: drop docs below 30% of top score to avoid pulling
     # in loosely-matching documents that dilute results
     if initial_results:
-        top_score = max(c.score for c in initial_results)
+        if feedback_boosts:
+            initial_results = [
+                c for c in initial_results if feedback_boosts.get(c.metadata.doc_id, 0) >= 0
+            ]
+            for c in initial_results:
+                c.score += feedback_boosts.get(c.metadata.doc_id, 0.0)
+        top_score = max((c.score for c in initial_results), default=0)
         score_threshold = top_score * 0.3 if top_score > 0 else 0
         before_count = len(initial_results)
         initial_results = [c for c in initial_results if c.score >= score_threshold]
@@ -108,6 +121,7 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     return {
         "retrieved_chunks": all_chunks,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
+        "feedback_boosts": feedback_boosts,
     }
 
 
