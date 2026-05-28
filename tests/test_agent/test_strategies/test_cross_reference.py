@@ -59,6 +59,40 @@ async def test_cross_reference_combines_doc_and_sql(registry):
 
 
 @pytest.mark.asyncio
+async def test_cross_reference_returns_feedback_boosts(monkeypatch):
+    from src.agent.strategies import cross_reference as xr
+    from src.retrieval.models import RetrievedChunk, ChunkMetadata
+
+    async def fake_embed(texts, kind):
+        return [[0.0, 0.1] for _ in texts]
+    monkeypatch.setattr("src.ingestion.embedder.embed_texts", fake_embed)
+
+    async def fake_boosts(qv, ug):
+        return {"docB": 0.6}
+    monkeypatch.setattr(xr, "get_feedback_boosts", fake_boosts, raising=False)
+
+    def _c(doc_id, idx, score):
+        return RetrievedChunk(text="t", score=score,
+            metadata=ChunkMetadata(doc_id=doc_id, filename="f", doc_type="text",
+                                   chunk_index=idx, start_char=0, acl_groups=["ALL"]))
+
+    class FakeVS:
+        def hybrid_search_reranked(self, **k):
+            return [_c("docA", 0, 0.9), _c("docB", 1, 0.5)]
+        def expand_window(self, chunks, window=2):
+            return chunks
+
+    class FakeRegistry:
+        def list_for_user(self, ug):
+            return []
+
+    state = {"question": "q", "user_groups": ["ALL"], "sub_tasks": ["q"]}
+    result = await xr.retrieve_cross_reference(state, vector_store=FakeVS(), schema_registry=FakeRegistry())
+    assert result["feedback_boosts"] == {"docB": 0.6}
+    assert result["retrieved_chunks"][0].metadata.doc_id == "docB"  # 0.5+0.6 > 0.9
+
+
+@pytest.mark.asyncio
 async def test_cross_reference_doc_only_when_no_db():
     mock_store = MagicMock()
     mock_store.search.return_value = [_make_chunk("Some policy content")]

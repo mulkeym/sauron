@@ -1,7 +1,9 @@
 import asyncio
+import inspect
 from src.agent.state import AgentState
 from src.agent.strategies.analytical import retrieve_analytical
 from src.db.schema_registry import SchemaRegistry
+from src.retrieval.feedback import get_feedback_boosts, apply_feedback_boosts_to_chunks
 from src.retrieval.models import RetrievedChunk
 from src.retrieval.vector_store import VectorStore
 
@@ -18,7 +20,10 @@ async def retrieve_cross_reference(
 
     # Embed all sub-tasks in one batch (model isn't thread-safe for concurrent calls)
     from src.ingestion.embedder import embed_texts
-    task_vectors = await asyncio.to_thread(embed_texts, sub_tasks, "query")
+    if inspect.iscoroutinefunction(embed_texts):
+        task_vectors = await embed_texts(sub_tasks, "query")
+    else:
+        task_vectors = await asyncio.to_thread(embed_texts, sub_tasks, "query")
 
     # Search in parallel (LanceDB handles concurrent reads)
     async def search_task(task, vector):
@@ -40,6 +45,13 @@ async def retrieve_cross_reference(
                 seen.add(key)
                 unique_chunks.append(chunk)
 
+    feedback_boosts = {}
+    try:
+        feedback_boosts = await get_feedback_boosts(task_vectors[0], user_groups)
+        unique_chunks = apply_feedback_boosts_to_chunks(unique_chunks, feedback_boosts)
+    except Exception:
+        pass
+
     sql_results = []
     structured_trace = None
     has_schemas = len(schema_registry.list_for_user(user_groups)) > 0
@@ -53,6 +65,7 @@ async def retrieve_cross_reference(
         "retrieved_chunks": unique_chunks,
         "sql_results": sql_results,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
+        "feedback_boosts": feedback_boosts,
     }
     if structured_trace:
         result["structured_trace"] = structured_trace
