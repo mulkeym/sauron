@@ -255,3 +255,44 @@ def test_cap_content_truncates_over_budget():
 
 def test_cap_content_leaves_small_content_untouched():
     assert _cap_content("short", 100) == "short"
+
+
+# --- feedback_boosts surfaced in return dict ---------------------------------
+
+@pytest.mark.asyncio
+async def test_retrieve_map_reduce_returns_feedback_boosts():
+    """feedback_boosts fetched by map_reduce must appear in the returned dict."""
+    summary_results = [_chunk("d1", "navy contract", 0.5)]
+    vector_store = MagicMock()
+    vector_store.search.return_value = summary_results
+    vector_store.get_chunks_by_doc.side_effect = lambda did, *a, **k: [
+        _chunk(did, "Navy awarded $5M to Acme Corp")
+    ]
+
+    docs = [
+        SimpleNamespace(doc_id="d1", filename="d1.md",
+                        metadata_tags={"organizations": ["Navy"], "summary": "Navy contract award"}),
+    ]
+    store = MagicMock()
+    store.list_documents = AsyncMock(return_value=docs)
+
+    def fake_generate(system_prompt, user_prompt, **kw):
+        if "Answer YES or NO" in user_prompt:
+            return "YES"
+        if "Extract ONLY" in user_prompt:
+            return "Navy awarded $5M to Acme Corp"
+        return "combined"
+
+    state = AgentState(question="what contracts did the navy award?",
+                       user_groups=["ALL"], query_type=QueryType.SWEEP,
+                       retrieved_chunks=[], retrieval_attempts=0)
+
+    with patch("src.agent.strategies.map_reduce.embed_query", return_value=[0.1] * 1024), \
+         patch("src.agent.strategies.map_reduce.generate", side_effect=fake_generate), \
+         patch("src.agent.strategies.sweep._extract_date_filter", return_value=None), \
+         patch("src.retrieval.prf.expand_query_with_prf", new=AsyncMock(return_value=("what contracts did the navy award?", [0.1] * 1024))), \
+         patch("src.agent.strategies.map_reduce.get_feedback_boosts", new=AsyncMock(return_value={"docZ": 0.2})), \
+         patch("src.api.routes_ingest.get_metadata_store", return_value=store):
+        result = await retrieve_map_reduce(state, vector_store=vector_store)
+
+    assert result.get("feedback_boosts") == {"docZ": 0.2}

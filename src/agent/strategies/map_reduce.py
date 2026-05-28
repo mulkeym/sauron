@@ -13,6 +13,7 @@ import math
 from src.agent.state import AgentState
 from src.generation.llm_client import generate, LLMConnectionError
 from src.ingestion.embedder import embed_query
+from src.retrieval.feedback import get_feedback_boosts
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 
@@ -260,7 +261,6 @@ async def retrieve_map_reduce(
     # Fetch feedback boosts from past similar queries
     feedback_boosts = {}
     try:
-        from src.retrieval.feedback import get_feedback_boosts
         feedback_boosts = await get_feedback_boosts(query_vector, user_groups)
     except Exception:
         pass
@@ -556,4 +556,5 @@ async def retrieve_map_reduce(
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,
         "warnings": [incomplete_note.strip()] if incomplete_note else [],
         "doc_relevance": doc_relevance,
+        "feedback_boosts": feedback_boosts,
     }
