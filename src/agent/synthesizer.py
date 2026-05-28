@@ -82,15 +82,30 @@ def _filter_relevant_chunks(chunks, question):
 
 
 def synthesize_answer(state: AgentState) -> dict:
-    chunks = state.get("retrieved_chunks", [])
-    sql_results = state.get("sql_results", [])
-    question = state["question"]
-
-    if not chunks and not sql_results:
+    if not state.get("retrieved_chunks") and not state.get("sql_results"):
         return {
             "answer": "I could not find any relevant information in the documents you have access to.",
             "citations": [],
         }
+    from src.config import settings as _cfg
+    context = build_synthesis_context(state)
+    answer = generate(
+        system_prompt=SYSTEM_PROMPT,
+        user_prompt=USER_PROMPT_TEMPLATE.format(context=context, question=state["question"]),
+        max_tokens=_cfg.llm_max_output_tokens,
+    )
+    answer = _strip_reasoning_artifacts(answer)
+    citations = build_citations(state)
+    return {"answer": answer, "citations": citations}
+
+
+def build_synthesis_context(state: AgentState) -> str:
+    """Assemble the LLM synthesis context from retrieved chunks + structured SQL
+    results. Single source of truth shared by synthesize_answer (non-streaming)
+    and the playground streaming path. Returns "" when there is nothing to say."""
+    chunks = state.get("retrieved_chunks", [])
+    sql_results = state.get("sql_results", [])
+    question = state["question"]
 
     # Filter out irrelevant chunks before synthesis
     chunks = _filter_relevant_chunks(chunks, question)
@@ -156,15 +171,15 @@ def synthesize_answer(state: AgentState) -> dict:
         context_parts.append(block)
     context = "\n\n".join(context_parts)
     logger.info(f"Synthesizer context: {len(context):,} chars from {len(context_parts)} parts")
+    return context
 
-    answer = generate(
-        system_prompt=SYSTEM_PROMPT,
-        user_prompt=USER_PROMPT_TEMPLATE.format(context=context, question=question),
-        max_tokens=_cfg.llm_max_output_tokens,
-    )
 
-    # Strip thinking model reasoning artifacts that leak into the answer
-    answer = _strip_reasoning_artifacts(answer)
+def build_citations(state: AgentState) -> list[Citation]:
+    """Deduplicated document citations (one per doc, best score) plus
+    SQL-source-document citations for structured answers. Independent of the
+    answer text. Shared by synthesize_answer and the playground streaming path."""
+    chunks = _filter_relevant_chunks(state.get("retrieved_chunks", []), state["question"])
+    SYNTHETIC_IDS = {"map-reduce", "knowledge-graph", "metadata-context"}
 
     # Deduplicate citations — one per document, with best relevance score
     # Include all real documents (skip synthetic chunks like map-reduce, knowledge-graph, metadata-context)
@@ -256,4 +271,4 @@ def synthesize_answer(state: AgentState) -> dict:
         except Exception as e:
             logger.debug(f"SQL-source citations skipped: {e}")
 
-    return {"answer": answer, "citations": citations}
+    return citations

@@ -13,6 +13,20 @@ def test_create_agent_graph():
     graph = create_agent_graph(vector_store=mock_store, schema_registry=SchemaRegistry())
     assert graph is not None
 
+
+def test_create_agent_graph_without_synthesize_ends_at_merge():
+    g = create_agent_graph(vector_store=MagicMock(), schema_registry=MagicMock(),
+                           metadata_store=MagicMock(), include_synthesize=False)
+    nodes = set(g.get_graph().nodes.keys())
+    assert "merge" in nodes
+    assert "synthesize" not in nodes
+
+
+def test_create_agent_graph_includes_synthesize_by_default():
+    g = create_agent_graph(vector_store=MagicMock(), schema_registry=MagicMock(),
+                           metadata_store=MagicMock())
+    assert "synthesize" in set(g.get_graph().nodes.keys())
+
 @pytest.mark.asyncio
 async def test_run_agent_lookup():
     mock_store = MagicMock()
