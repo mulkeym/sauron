@@ -17,6 +17,26 @@ from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 
 
+def _rerank_merge(state, vector_store) -> dict:
+    """Final-N rerank of the consolidated chunk set (mutates chunk.score in
+    place; consumers sort by score). Fail-open + flag-guarded."""
+    from src.config import settings
+    if not settings.rerank_final_enabled:
+        return {}
+    chunks = state.get("retrieved_chunks", [])
+    if not chunks:
+        return {}
+    boosts = state.get("feedback_boosts", {}) or {}
+    try:
+        vector_store.rerank_chunks(
+            chunks, state.get("question", ""), settings.rerank_final_top_n, boosts=boosts,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("retrieval").warning(f"Final rerank skipped: {e}")
+    return {}
+
+
 def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None, include_synthesize: bool = True):
     graph = StateGraph(AgentState)
 
@@ -216,8 +236,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
     # Merge node: combine retrieve + enrich results before synthesis
     def merge_results(state: AgentState) -> dict:
-        """No-op merge — LangGraph already combined retrieved_chunks from both branches."""
-        return {}
+        """Final-N rerank over the chunks both branches produced (mutates
+        scores in place; the additive reducer means we return {})."""
+        return _rerank_merge(state, vector_store)
 
     graph.add_node("merge", merge_results)
 

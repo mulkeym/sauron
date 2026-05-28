@@ -40,6 +40,42 @@ async def test_run_agent_lookup():
     assert "approval" in result.answer.lower() or "500" in result.answer
     assert len(result.citations) >= 1
 
+def test_merge_results_reranks_when_enabled(monkeypatch):
+    from src.retrieval.vector_store import VectorStore
+    from src.config import settings
+
+    calls = {}
+
+    def fake_rerank(chunks, text_query, top_n, boosts=None):
+        calls["args"] = (text_query, top_n, boosts)
+        return chunks
+
+    vs = VectorStore.__new__(VectorStore)
+    monkeypatch.setattr(vs, "rerank_chunks", fake_rerank)
+    monkeypatch.setattr(settings, "rerank_final_enabled", True)
+    monkeypatch.setattr(settings, "rerank_final_top_n", 7)
+
+    from src.agent.graph import _rerank_merge
+    state = {"question": "hello", "retrieved_chunks": [1, 2], "feedback_boosts": {"d1": 0.3}}
+    out = _rerank_merge(state, vs)
+    assert out == {}
+    assert calls["args"] == ("hello", 7, {"d1": 0.3})
+
+
+def test_merge_results_noop_when_disabled(monkeypatch):
+    from src.agent.graph import _rerank_merge
+    from src.retrieval.vector_store import VectorStore
+    from src.config import settings
+
+    vs = VectorStore.__new__(VectorStore)
+    def boom(*a, **k):
+        raise AssertionError("rerank should not run when disabled")
+    monkeypatch.setattr(vs, "rerank_chunks", boom)
+    monkeypatch.setattr(settings, "rerank_final_enabled", False)
+    out = _rerank_merge({"question": "x", "retrieved_chunks": [1]}, vs)
+    assert out == {}
+
+
 @pytest.mark.asyncio
 async def test_run_agent_no_results():
     mock_store = MagicMock()
