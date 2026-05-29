@@ -287,3 +287,82 @@ async def test_resolve_hints_for_classifier_fails_open(monkeypatch):
         raise RuntimeError("store down")
     monkeypatch.setattr(structured, "resolve_hints_for_schemas", _boom)
     assert await classifier._resolve_hints_for_classifier([_schema()]) == {}
+
+
+@pytest.mark.asyncio
+async def test_memory_does_not_override_analytical(monkeypatch):
+    # LLM picks ANALYTICAL (capability-gated); memory wants lookup past the gates.
+    # The override must be suppressed and recorded as "protected".
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "analytical", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "lookup", "count": 3, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+    async def _no_hints(schemas):
+        return {}
+    monkeypatch.setattr(classifier, "_resolve_hints_for_classifier", _no_hints)
+
+    reg = SchemaRegistry()
+    reg.register(_schema(table="doc_pay", desc="military pay", acl=["ALL"]))
+    node = _classify_node_factory(reg)
+    out = await node({"question": "pay range for an officer?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.ANALYTICAL
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "protected"
+    assert out["strategy_memory"]["memory_best"] == "lookup"
+
+
+@pytest.mark.asyncio
+async def test_memory_still_overrides_non_analytical(monkeypatch):
+    # Regression: a learned override among non-structured strategies still applies.
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "lookup", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "sweep", "count": 5, "margin": 0.5}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "list all contracts", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.SWEEP
+    assert out["strategy_memory"]["overrode"] is True
+    assert out["strategy_memory"]["reason"] == "override"
+
+
+@pytest.mark.asyncio
+async def test_memory_agreement_on_analytical_unchanged(monkeypatch):
+    # When memory agrees with an ANALYTICAL pick, reason stays "agreed".
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "analytical", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "analytical", "count": 3, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "pay range for an officer?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.ANALYTICAL
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "agreed"
+
+
+@pytest.mark.asyncio
+async def test_memory_below_gate_unchanged(monkeypatch):
+    # A differing memory pick that fails the count gate is "below gate", no override.
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "lookup", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "sweep", "count": 1, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "who is John?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.LOOKUP
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "below gate"
