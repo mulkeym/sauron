@@ -135,6 +135,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 retrieve_logger.debug(f"Metadata context enrichment skipped: {e}")
         elif query_type == QueryType.ANALYTICAL:
             result = await retrieve_analytical(retry_state, vector_store=vector_store, schema_registry=schema_registry)
+        elif query_type == QueryType.METADATA:
+            from src.agent.strategies.metadata_catalog import retrieve_metadata_catalog
+            result = await retrieve_metadata_catalog(retry_state, metadata_store=metadata_store)
         elif query_type == QueryType.CROSS_REFERENCE:
             result = await retrieve_cross_reference(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.TEMPORAL:
