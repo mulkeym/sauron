@@ -7,6 +7,39 @@ from src.agent.classifier import format_available_tables, classify_query
 from src.db.schema_registry import TableSchema, ColumnSchema
 from src.agent.classifier import _classify_node_factory
 from src.db.schema_registry import SchemaRegistry
+from src.agent.classifier import _hint_note
+from src.agent.strategies.hint_resolver import ResolvedHints
+
+
+def test_hint_note_combines_table_notes_and_glossary_meanings():
+    rh = ResolvedHints(
+        column_glossaries={"col_0": {"O-1": "Commissioned Officer", "E-1": "Enlisted Member"}},
+        column_notes={},
+        table_notes=["U.S. military active-duty basic pay"],
+    )
+    note = _hint_note(rh)
+    assert "U.S. military active-duty basic pay" in note
+    assert "Commissioned Officer" in note
+    assert "Enlisted Member" in note
+
+
+def test_hint_note_is_length_capped():
+    rh = ResolvedHints(table_notes=["x" * 500])
+    assert len(_hint_note(rh)) <= 200
+
+
+def test_format_available_tables_appends_note_when_hint_present():
+    s = _schema(table="doc_pay", desc="financial values indexed by col_0")
+    hints = {"doc_pay": ResolvedHints(table_notes=["U.S. military active-duty basic pay"])}
+    line = format_available_tables([s], hints)
+    assert line.startswith("- doc_pay: financial values indexed by col_0")
+    assert "U.S. military active-duty basic pay" in line
+
+
+def test_format_available_tables_unchanged_without_hints():
+    # Byte-identical to pre-change behavior when no hints are supplied.
+    assert format_available_tables([_schema()]) == "- doc_x_pay: GS pay by grade and step"
+    assert format_available_tables([_schema()], {}) == "- doc_x_pay: GS pay by grade and step"
 
 
 def _schema(table="doc_x_pay", desc="GS pay by grade and step", acl=None):

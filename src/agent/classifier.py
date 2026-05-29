@@ -25,12 +25,40 @@ Respond with ONLY valid JSON:
 {"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
 
 
-def format_available_tables(schemas) -> str:
-    """One '- <table>: <description>' line per schema, sorted by table name for
-    a stable (run-to-run identical) classifier prompt."""
-    return "\n".join(
-        f"- {s.table}: {s.description}" for s in sorted(schemas, key=lambda s: s.table)
-    )
+_MAX_NOTE_CHARS = 200
+
+
+def _hint_note(rh) -> str:
+    """Compact, length-capped domain note for a table, built from its resolved
+    hints: table notes first, then the distinct glossary meanings (e.g. the human
+    labels behind coded values). Lets the classifier recognize what a generically
+    profiled table actually holds."""
+    parts = [n for n in rh.table_notes if n]
+    meanings: list[str] = []
+    for col_map in rh.column_glossaries.values():
+        for meaning in col_map.values():
+            if meaning and meaning not in meanings:
+                meanings.append(meaning)
+    if meanings:
+        parts.append(", ".join(meanings))
+    return "; ".join(parts)[:_MAX_NOTE_CHARS]
+
+
+def format_available_tables(schemas, hints=None) -> str:
+    """One '- <table>: <description>' line per schema, sorted by table name for a
+    stable (run-to-run identical) classifier prompt. When ``hints`` (table ->
+    ResolvedHints) supplies a note for a table, it is appended after an em dash.
+    With ``hints`` None/empty the output is byte-identical to before."""
+    hints = hints or {}
+    lines = []
+    for s in sorted(schemas, key=lambda s: s.table):
+        line = f"- {s.table}: {s.description}"
+        rh = hints.get(s.table)
+        note = _hint_note(rh) if rh is not None else ""
+        if note:
+            line += f" — {note}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def classify_query(state: AgentState, available_tables: str = "") -> dict:
