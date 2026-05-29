@@ -117,19 +117,29 @@ def _fmt_cell(value) -> str:
     return s if s else "(not specified)"
 
 
-def row_narrative(col_names: list[str], profile: TableProfile, row: list) -> str:
+def row_narrative(col_names: list[str], profile: TableProfile, row: list,
+                  column_glossaries: dict | None = None) -> str:
     """One deterministic sentence for a row: keys as context, then measures.
 
     Uses the profile's column descriptions as human labels. Cells absent from
     the row (shorter row) render as "(not specified)" — nothing is fabricated.
+    When ``column_glossaries`` is provided, key-column values are annotated with
+    their glossary meaning (e.g. ``E-3 (Enlisted Member)``).
     """
     index = {name: i for i, name in enumerate(col_names)}
+    glos = column_glossaries or {}
 
     def cell(name: str) -> str:
         i = index.get(name)
         if i is None or i >= len(row):
             return "(not specified)"
-        return _fmt_cell(row[i])
+        value = _fmt_cell(row[i])
+        mapping = glos.get(name)
+        if mapping:
+            meaning = glossary_lookup(mapping, row[i])
+            if meaning:
+                return f"{value} ({meaning})"
+        return value
 
     keys = [f"{profile.column_descriptions.get(k, k)}={cell(k)}" for k in profile.key_columns]
     measures = [f"{profile.column_descriptions.get(m, m)} is {cell(m)}" for m in profile.measure_columns]
@@ -141,8 +151,10 @@ def row_narrative(col_names: list[str], profile: TableProfile, row: list) -> str
 
 
 def build_row_narratives(col_names: list[str], profile: TableProfile, data_rows: list,
-                         context: str = "") -> list[str]:
+                         context: str = "", column_glossaries: dict | None = None) -> list[str]:
     """One narrative string per data row, optionally prefixed with ``context``
-    (e.g. the table description) so a retrieved narrative is self-describing."""
+    (e.g. the table description) so a retrieved narrative is self-describing.
+    Pass ``column_glossaries`` to annotate key-column values with their meaning."""
     prefix = f"{context} — " if context else ""
-    return [f"{prefix}{row_narrative(col_names, profile, row)}" for row in data_rows]
+    return [f"{prefix}{row_narrative(col_names, profile, row, column_glossaries)}"
+            for row in data_rows]

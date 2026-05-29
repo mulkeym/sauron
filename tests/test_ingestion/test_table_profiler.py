@@ -149,3 +149,20 @@ def test_glossary_lookup_exact_then_prefix():
     assert glossary_lookup(g, "E-3") == "Enlisted Member"
     assert glossary_lookup(g, "O-10") == "Commissioned Officer"
     assert glossary_lookup(g, "W-2") is None           # no match
+
+
+def test_row_narrative_annotates_key_value_with_glossary():
+    profile = TableProfile(
+        column_descriptions={"grade": "Pay grade", "over2": "Over 2 years"},
+        key_columns=["grade"], measure_columns=["over2"], table_description="AD pay")
+    out = build_row_narratives(
+        ["grade", "over2"], profile, [["E-3", "3081.00"]],
+        context="AD pay", column_glossaries={"grade": {"E-*": "Enlisted Member"}})
+    assert "E-3 (Enlisted Member)" in out[0]
+
+
+def test_row_narrative_unchanged_without_glossary():
+    profile = TableProfile(column_descriptions={"grade": "Pay grade"},
+                           key_columns=["grade"], measure_columns=[], table_description="")
+    out = build_row_narratives(["grade"], profile, [["E-3"]])
+    assert out == ["Pay grade=E-3"]
