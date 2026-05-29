@@ -33,7 +33,7 @@ def _hint_note(rh) -> str:
     hints: table notes first, then the distinct glossary meanings (e.g. the human
     labels behind coded values). Lets the classifier recognize what a generically
     profiled table actually holds."""
-    parts = [n for n in rh.table_notes if n]
+    parts = list(dict.fromkeys(n for n in rh.table_notes if n))  # order-preserving dedup
     meanings: list[str] = []
     for col_map in rh.column_glossaries.values():
         for meaning in col_map.values():

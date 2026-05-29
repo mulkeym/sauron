@@ -226,6 +226,13 @@ async def test_classify_node_failopen(monkeypatch):
     assert out["strategy_memory"]["reason"] == "error"
 
 
+def test_hint_note_dedupes_table_notes():
+    rh = ResolvedHints(table_notes=["pay table", "pay table", "extra note"])
+    note = _hint_note(rh)
+    assert note.count("pay table") == 1
+    assert "extra note" in note
+
+
 @pytest.mark.asyncio
 async def test_classify_node_respects_margin(monkeypatch):
     import src.agent.classifier as clf
