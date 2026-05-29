@@ -146,9 +146,9 @@ def _classify_node_factory(schema_registry):
                             # (trainable by cited-but-unhelpful answers)
                             # must not veto it. Memory relearns once analytical/metadata runs.
                             memory_decision["reason"] = "protected"
-                            logger.info("Strategy memory suppressed: analytical capability "
+                            logger.info("Strategy memory suppressed: %s capability "
                                         "pick protected (memory wanted %s, n=%d, margin=%.0f%%)",
-                                        mem_type, best["count"], best["margin"] * 100)
+                                        llm_pick, mem_type, best["count"], best["margin"] * 100)
                         else:
                             result["query_type"] = mem_type
                             memory_decision["overrode"] = True
