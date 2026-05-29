@@ -238,6 +238,32 @@ def test_sql_answer_cites_source_document(monkeypatch):
     assert cits[0].relevance == 1.0
 
 
+def test_sql_block_labels_source_filename(monkeypatch):
+    """The SQL-results context block must name its source document(s) by filename,
+    so the answer LLM cites the original Excel filename rather than the raw DuckDB
+    table name (e.g. doc_bb9025d1_..._allleo)."""
+    from src.ingestion.tabular_store import duckdb_table_name
+    tbl = duckdb_table_name("docpay", "AllLEO")
+    monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured["user_prompt"] = kwargs.get("user_prompt", "")
+        return "answer"
+
+    with patch("src.agent.synthesizer.generate", fake_generate):
+        state = AgentState(
+            question="pay range for an officer in Tampa?", user_groups=["finance"],
+            query_type=QueryType.ANALYTICAL,
+            retrieved_chunks=[], sql_results=[{"salary": 91162}],
+            structured_trace={"status": "ran", "row_count": 15, "sql": f'SELECT * FROM "{tbl}"'},
+        )
+        synthesize_answer(state)
+    ctx = captured["user_prompt"]
+    assert "Source: 2026-pay.xlsx" in ctx          # filename labels the SQL block
+    assert tbl not in ctx.split("Result rows:")[0].split("Executed SQL:")[0]  # no raw table name before the SQL itself
+
+
 def test_sql_citation_deduped_with_chunk(monkeypatch):
     from src.ingestion.tabular_store import duckdb_table_name
     tbl = duckdb_table_name("docpay", "pay")

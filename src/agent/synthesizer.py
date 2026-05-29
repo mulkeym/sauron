@@ -99,6 +99,37 @@ def synthesize_answer(state: AgentState) -> dict:
     return {"answer": answer, "citations": citations}
 
 
+def _resolve_sql_source_docs(trace: dict) -> list:
+    """Document records whose DuckDB tables the executed SQL referenced.
+
+    Shared by build_synthesis_context (to label the SQL block with a friendly
+    filename) and build_citations (to emit Citation objects). Fail-open: any
+    error returns []. Returns [] unless the trace ran and returned rows."""
+    if not (trace.get("status") == "ran" and trace.get("row_count", 0) > 0 and trace.get("sql")):
+        return []
+    try:
+        import asyncio
+        from src.api.routes_ingest import get_metadata_store
+        from src.ingestion.tabular_store import referenced_source_docs
+        ms = get_metadata_store()
+
+        async def _fetch():
+            docs = await ms.list_documents()
+            src_ids = referenced_source_docs(trace["sql"], [d.doc_id for d in docs])
+            by_id = {d.doc_id: d for d in docs}
+            return [by_id[i] for i in src_ids if i in by_id]
+
+        try:
+            return asyncio.run(_fetch())
+        except RuntimeError:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, _fetch()).result()
+    except Exception as e:
+        logger.debug(f"SQL source-doc resolution skipped: {e}")
+        return []
+
+
 def build_synthesis_context(state: AgentState) -> str:
     """Assemble the LLM synthesis context from retrieved chunks + structured SQL
     results. Single source of truth shared by synthesize_answer (non-streaming)
@@ -163,6 +194,13 @@ def build_synthesis_context(state: AgentState) -> str:
     if sql_results:
         trace = state.get("structured_trace") or {}
         block = "[Database query results]"
+        # Label the block with the source document filename(s) so the answer cites
+        # the original Excel file, not the internal DuckDB table name in the SQL.
+        sql_docs = _resolve_sql_source_docs(trace)
+        if sql_docs:
+            names = ", ".join(d.filename for d in sql_docs if getattr(d, "filename", ""))
+            if names:
+                block += f"\nSource: {names}"
         if trace.get("schema_context"):
             block += f"\nTable & column reference:\n{trace['schema_context']}"
         if trace.get("sql"):
@@ -233,42 +271,20 @@ def build_citations(state: AgentState) -> list[Citation]:
     # executed SQL referenced. ANALYTICAL returns no chunks, so without this the
     # answer would carry zero citations. Fully additive + fail-open.
     trace = state.get("structured_trace") or {}
-    if trace.get("status") == "ran" and trace.get("row_count", 0) > 0 and trace.get("sql"):
-        try:
-            import asyncio
-            from src.api.routes_ingest import get_metadata_store
-            from src.ingestion.tabular_store import referenced_source_docs
-            _ms = get_metadata_store()
-
-            async def _fetch_sql_docs():
-                docs = await _ms.list_documents()
-                src_ids = referenced_source_docs(trace["sql"], [d.doc_id for d in docs])
-                by_id = {d.doc_id: d for d in docs}
-                return [by_id[i] for i in src_ids if i in by_id]
-
-            try:
-                sql_docs = asyncio.run(_fetch_sql_docs())
-            except RuntimeError:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    sql_docs = pool.submit(asyncio.run, _fetch_sql_docs()).result()
-
-            existing = {c.doc_id for c in citations}
-            for rec in sql_docs:
-                if rec.doc_id in existing:
-                    continue
-                citations.append(Citation(
-                    doc_id=rec.doc_id,
-                    filename=rec.filename,
-                    doc_type=getattr(rec, "doc_type", "") or "",
-                    chunk_index=0,
-                    page=None,
-                    snippet=f"Structured query returned {trace['row_count']} rows from this table.",
-                    relevance=1.0,
-                    source_url=getattr(rec, "source_url", "") or "",
-                ))
-                existing.add(rec.doc_id)
-        except Exception as e:
-            logger.debug(f"SQL-source citations skipped: {e}")
+    existing = {c.doc_id for c in citations}
+    for rec in _resolve_sql_source_docs(trace):
+        if rec.doc_id in existing:
+            continue
+        citations.append(Citation(
+            doc_id=rec.doc_id,
+            filename=rec.filename,
+            doc_type=getattr(rec, "doc_type", "") or "",
+            chunk_index=0,
+            page=None,
+            snippet=f"Structured query returned {trace['row_count']} rows from this table.",
+            relevance=1.0,
+            source_url=getattr(rec, "source_url", "") or "",
+        ))
+        existing.add(rec.doc_id)
 
     return citations
