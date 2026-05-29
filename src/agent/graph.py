@@ -284,6 +284,7 @@ class AgentTrace:
     query_type: str = ""
     chunks_retrieved: int = 0
     retrieval_attempts: int = 0
+    strategy_memory: dict | None = None
 
 
 async def run_agent_with_trace(question: str, user_groups: list[str], vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None) -> tuple[RAGResponse, AgentTrace]:
@@ -313,6 +314,7 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
             # Capture metadata from node outputs
             if node_name == "classify":
                 trace.query_type = str(node_output.get("query_type", ""))
+                trace.strategy_memory = node_output.get("strategy_memory")
             elif node_name == "retrieve":
                 trace.chunks_retrieved = len(node_output.get("retrieved_chunks", []))
             elif node_name == "evaluate":

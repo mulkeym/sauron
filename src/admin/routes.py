@@ -727,6 +727,9 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             detail = f"<strong>Strategy:</strong> {qt}"
             if subs:
                 detail += "<br><strong>Sub-tasks:</strong> " + ", ".join(subs[:5])
+            sm = output.get("strategy_memory") or {}
+            if sm.get("overrode"):
+                detail += f"<br><strong>Strategy memory override:</strong> {sm.get('llm_pick')} &rarr; {sm.get('memory_best')} (n={sm.get('count')}, margin={sm.get('margin')})"
             return detail
         elif node_name == "retrieve":
             rc = output.get("retrieved_chunks", [])
@@ -1078,6 +1081,9 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     detail = f"<strong>Query Type:</strong> {qt}<br>"
                     if subs:
                         detail += "<strong>Sub-tasks:</strong><ul>" + "".join(f"<li>{s}</li>" for s in subs) + "</ul>"
+                    sm = output.get("strategy_memory") or {}
+                    if sm.get("overrode"):
+                        detail += f"<br><strong>Strategy memory override:</strong> {sm.get('llm_pick')} &rarr; {sm.get('memory_best')} (n={sm.get('count')}, margin={sm.get('margin')})"
                     return detail
                 elif step_name == "retrieve":
                     rc = output.get("retrieved_chunks", [])

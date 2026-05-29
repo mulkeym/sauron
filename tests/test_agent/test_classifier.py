@@ -1,4 +1,5 @@
 """Tests for the table-aware query classifier."""
+import pytest
 from unittest.mock import patch
 from src.agent.state import QueryType, AgentState
 from src.agent import classifier
@@ -44,34 +45,42 @@ def test_classify_omits_tables_section_when_none(monkeypatch):
     assert "Available structured tables" not in captured["system"]
 
 
-def test_node_factory_passes_acl_filtered_tables(monkeypatch):
+@pytest.mark.asyncio
+async def test_node_factory_passes_acl_filtered_tables(monkeypatch):
     captured = {}
     def fake_generate(system_prompt, user_prompt, **kwargs):
         captured["system"] = system_prompt
         return '{"query_type": "analytical", "sub_tasks": []}'
     monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _no_memory(q):
+        return None
+    monkeypatch.setattr(classifier, "get_best_strategy", _no_memory, raising=False)
 
     reg = SchemaRegistry()
     reg.register(_schema(table="doc_pay", desc="pay", acl=["ALL"]))
     reg.register(_schema(table="doc_secret", desc="secret", acl=["admins"]))
 
     node = _classify_node_factory(reg)
-    out = node({"question": "pay?", "user_groups": ["ALL"]})
+    out = await node({"question": "pay?", "user_groups": ["ALL"]})
 
     assert "doc_pay" in captured["system"]          # visible to ALL
     assert "doc_secret" not in captured["system"]   # ACL-filtered out
     assert out["query_type"] == QueryType.ANALYTICAL
 
 
-def test_node_factory_with_no_registry(monkeypatch):
+@pytest.mark.asyncio
+async def test_node_factory_with_no_registry(monkeypatch):
     captured = {}
     def fake_generate(system_prompt, user_prompt, **kwargs):
         captured["system"] = system_prompt
         return '{"query_type": "lookup", "sub_tasks": []}'
     monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _no_memory(q):
+        return None
+    monkeypatch.setattr(classifier, "get_best_strategy", _no_memory, raising=False)
 
     node = _classify_node_factory(None)
-    node({"question": "x", "user_groups": ["ALL"]})
+    await node({"question": "x", "user_groups": ["ALL"]})
     assert "Available structured tables" not in captured["system"]
 
 
@@ -127,3 +136,56 @@ def test_format_available_tables_is_order_stable():
     out2 = format_available_tables([b, c, a])
     assert out1 == out2
     assert out1 == "- doc_a_pay: A pay\n- doc_b_pay: B pay\n- doc_c_pay: C pay"
+
+
+@pytest.mark.asyncio
+async def test_classify_node_soft_override_applies(monkeypatch):
+    import src.agent.classifier as clf
+
+    monkeypatch.setattr(clf, "classify_query",
+                        lambda state, available_tables="": {"query_type": QueryType.LOOKUP, "sub_tasks": ["q"]})
+    async def fake_best(q):
+        return {"strategy": "sweep", "count": 5, "margin": 0.5, "avg_cited": 8.0}
+    monkeypatch.setattr(clf, "get_best_strategy", fake_best, raising=False)
+    monkeypatch.setattr(clf.settings, "strategy_memory_enabled", True)
+    monkeypatch.setattr(clf.settings, "strategy_memory_min_runs", 3)
+    monkeypatch.setattr(clf.settings, "strategy_memory_margin", 0.15)
+
+    node = clf._classify_node_factory(schema_registry=None)
+    out = await node({"question": "q", "user_groups": ["ALL"]})
+    assert out["query_type"] == QueryType.SWEEP
+    assert out["strategy_memory"]["overrode"] is True
+
+
+@pytest.mark.asyncio
+async def test_classify_node_respects_min_runs(monkeypatch):
+    import src.agent.classifier as clf
+
+    monkeypatch.setattr(clf, "classify_query",
+                        lambda state, available_tables="": {"query_type": QueryType.LOOKUP, "sub_tasks": ["q"]})
+    async def fake_best(q):
+        return {"strategy": "sweep", "count": 2, "margin": 0.9, "avg_cited": 8.0}
+    monkeypatch.setattr(clf, "get_best_strategy", fake_best, raising=False)
+    monkeypatch.setattr(clf.settings, "strategy_memory_enabled", True)
+    monkeypatch.setattr(clf.settings, "strategy_memory_min_runs", 3)
+    monkeypatch.setattr(clf.settings, "strategy_memory_margin", 0.15)
+
+    node = clf._classify_node_factory(schema_registry=None)
+    out = await node({"question": "q", "user_groups": ["ALL"]})
+    assert out["query_type"] == QueryType.LOOKUP
+    assert out["strategy_memory"]["overrode"] is False
+
+
+@pytest.mark.asyncio
+async def test_classify_node_failopen(monkeypatch):
+    import src.agent.classifier as clf
+    monkeypatch.setattr(clf, "classify_query",
+                        lambda state, available_tables="": {"query_type": QueryType.LOOKUP, "sub_tasks": ["q"]})
+    async def boom(q):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(clf, "get_best_strategy", boom, raising=False)
+    monkeypatch.setattr(clf.settings, "strategy_memory_enabled", True)
+
+    node = clf._classify_node_factory(schema_registry=None)
+    out = await node({"question": "q", "user_groups": ["ALL"]})
+    assert out["query_type"] == QueryType.LOOKUP

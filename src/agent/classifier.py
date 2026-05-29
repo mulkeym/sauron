@@ -1,7 +1,9 @@
 import logging
 
 from src.agent.state import AgentState, QueryType
+from src.config import settings
 from src.generation.llm_client import generate, parse_json_response
+from src.retrieval.strategy_memory import get_best_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +64,46 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
 
 
 def _classify_node_factory(schema_registry):
-    """Build a LangGraph 'classify' node that injects the user's ACL-visible
-    registered tables into the classifier prompt."""
-    def classify_node(state: AgentState) -> dict:
+    """Build an async LangGraph 'classify' node: LLM classification, then a
+    confidence-gated soft override from Strategy Memory."""
+    async def classify_node(state: AgentState) -> dict:
+        import asyncio
         available = ""
         if schema_registry is not None:
             schemas = schema_registry.list_for_user(state.get("user_groups", ["ALL"]))
             available = format_available_tables(schemas)
-        return classify_query(state, available_tables=available)
+        # classify_query makes a blocking LLM call — run it off the event loop
+        # (the old sync node was run by LangGraph in a threadpool).
+        result = await asyncio.to_thread(classify_query, state, available)
+        llm_pick = result["query_type"]
+
+        memory_decision = {"llm_pick": str(llm_pick), "overrode": False, "reason": "disabled"}
+        if settings.strategy_memory_enabled:
+            try:
+                best = await get_best_strategy(state["question"])
+                memory_decision["reason"] = "no record"
+                if best:
+                    memory_decision.update({
+                        "memory_best": best["strategy"], "count": best["count"],
+                        "margin": best["margin"], "reason": "below gate",
+                    })
+                    try:
+                        mem_type = QueryType(best["strategy"])
+                    except ValueError:
+                        mem_type = None
+                    if (mem_type is not None
+                            and mem_type != llm_pick
+                            and best["count"] >= settings.strategy_memory_min_runs
+                            and best["margin"] >= settings.strategy_memory_margin):
+                        result["query_type"] = mem_type
+                        memory_decision["overrode"] = True
+                        memory_decision["reason"] = "override"
+                        logger.info("Strategy memory override: %s -> %s (n=%d, margin=%.0f%%)",
+                                    llm_pick, mem_type, best["count"], best["margin"] * 100)
+            except Exception as e:
+                logger.warning("Strategy memory lookup failed, keeping LLM pick: %s", e)
+                memory_decision["reason"] = "error"
+
+        result["strategy_memory"] = memory_decision
+        return result
     return classify_node
