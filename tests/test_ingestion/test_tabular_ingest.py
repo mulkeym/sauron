@@ -437,3 +437,30 @@ async def test_ingest_grids_processes_provided_grids(monkeypatch):
     assert classifications[0].route == "clean"
     assert any(m.chunk_size_tier == "table_row"
                for _, metas in vs.upserts for m in metas)  # narratives embedded
+
+
+@pytest.mark.asyncio
+async def test_ingest_grids_applies_seeded_glossary_to_narratives(monkeypatch):
+    from src.ingestion import tabular_ingest as ti
+    from src.ingestion.tabular import SheetGrid
+    from src.db.hint_store import HintStore, SchemaHint
+    monkeypatch.setattr("src.ingestion.tabular_ingest.embed_texts",
+                        lambda texts, *a, **k: [[0.0, 0.0, 0.0] for _ in texts])
+    hint_store = HintStore()
+    hint_store.register(SchemaHint(
+        scope_type="category", scope_value="payroll_compensation",
+        hint_type="value_glossary", target_column="grade",
+        payload={"E-*": "Enlisted Member", "O-*": "Commissioned Officer"}))
+    monkeypatch.setattr("src.api.routes_ingest.get_hint_store", lambda: hint_store)
+
+    grids = [SheetGrid("p0_table0",
+                       [["grade", "over2"], ["O-1", "3998"], ["O-2", "4606"], ["E-1", "2017"]])]
+    vs, ms, reg = _FakeVectorStore(), _FakeMetadataStore(), _FakeRegistry()
+    await ti.ingest_grids(
+        grids, "docG", "ad.pdf", "pdf", ["executives"], "payroll_compensation",
+        vs, ms, schema_registry=reg,
+        generate_fn=lambda **k: '{"key_columns":["grade"],"measure_columns":["over2"],'
+                                '"column_descriptions":{},"table_description":"AD pay"}',
+    )
+    joined = "\n".join(t for texts, _ in vs.upserts for t in texts)
+    assert "Enlisted Member" in joined

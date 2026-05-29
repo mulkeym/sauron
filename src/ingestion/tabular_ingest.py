@@ -19,6 +19,7 @@ from src.ingestion.tabular_store import (
 from src.ingestion.table_profiler import profile_table, build_row_narratives
 from src.ingestion.embedder import embed_texts
 from src.retrieval.models import ChunkMetadata
+from src.agent.strategies.hint_resolver import resolve_hints
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +46,28 @@ def _ingest_one_clean_sheet(con, grid, cls, doc_id, acl_groups, schema_registry,
     return col_names, profile, data_rows, schema
 
 
+def _resolve_column_glossaries(schema, category, dataset_id, hint_store):
+    """ResolvedHints.column_glossaries for one schema, given its collection scope.
+    Fail-safe -> {} on any error."""
+    if hint_store is None:
+        return {}
+    try:
+        doc_like = type("Doc", (), {"category": category or "",
+                                    "dataset_id": dataset_id})()
+        return resolve_hints(schema, doc_like, hint_store).column_glossaries
+    except Exception:
+        return {}
+
+
 async def _save_and_embed_clean(metadata_store, vector_store, schema, col_names, profile,
                                 data_rows, doc_id, filename, doc_type, acl_groups, category,
-                                chunk_index):
+                                chunk_index, column_glossaries=None):
     """Persist a clean sheet's schema and embed its per-row narratives. Returns
     the next chunk_index."""
     await metadata_store.save_schema(schema)
     narratives = [n for n in build_row_narratives(
-        col_names, profile, data_rows, context=profile.table_description) if n.strip()]
+        col_names, profile, data_rows, context=profile.table_description,
+        column_glossaries=column_glossaries) if n.strip()]
     if narratives:
         vectors = embed_texts(narratives)
         metadatas = []
@@ -84,7 +99,7 @@ async def ingest_spreadsheet_tables(file_path, doc_id, filename, doc_type, acl_g
 
 async def ingest_grids(grids, doc_id, filename, doc_type, acl_groups, category,
                        vector_store, metadata_store, schema_registry=None,
-                       generate_fn=None):
+                       generate_fn=None, dataset_id=None, hint_store=None):
     """Structured-ingest a list of already-acquired SheetGrids: clean sheets ->
     DuckDB + schema + per-row narratives; messy sheets -> region narratives.
     Returns (classifications, ingested_names). Fully fail-open per grid. Shared by
@@ -92,6 +107,9 @@ async def ingest_grids(grids, doc_id, filename, doc_type, acl_groups, category,
     if schema_registry is None:
         from src.api.routes_ingest import get_schema_registry
         schema_registry = get_schema_registry()
+    if hint_store is None:
+        from src.api.routes_ingest import get_hint_store
+        hint_store = get_hint_store()
 
     classifications = [classify_sheet(g) for g in grids]
     for g, c in zip(grids, classifications):
@@ -108,10 +126,12 @@ async def ingest_grids(grids, doc_id, filename, doc_type, acl_groups, category,
                 try:
                     col_names, profile, data_rows, schema = _ingest_one_clean_sheet(
                         con, grid, cls, doc_id, acl_groups, schema_registry, generate_fn)
+                    column_glossaries = _resolve_column_glossaries(
+                        schema, category, dataset_id, hint_store)
                     chunk_index = await _save_and_embed_clean(
                         metadata_store, vector_store, schema, col_names, profile,
                         data_rows, doc_id, filename, doc_type, acl_groups, category,
-                        chunk_index)
+                        chunk_index, column_glossaries=column_glossaries)
                     ingested.add(grid.sheet_name)
                     logger.info(
                         f"Tabular ingest [{filename}]: sheet '{grid.sheet_name}' CLEAN -> "
