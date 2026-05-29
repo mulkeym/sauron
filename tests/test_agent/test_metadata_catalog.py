@@ -73,6 +73,7 @@ def test_build_catalog_optional_datasets_categories():
 
 def test_catalog_schema_mentions_files_and_tags():
     assert "files" in CATALOG_SCHEMA and "tags" in CATALOG_SCHEMA
+    assert "LIMIT" in CATALOG_SCHEMA
 
 
 def test_build_catalog_created_at_date_filter():

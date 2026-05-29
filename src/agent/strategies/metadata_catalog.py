@@ -18,7 +18,8 @@ CATALOG_SCHEMA = """Table "files" — one row per document the user can access:
 Table "datasets" — name VARCHAR, description VARCHAR.
 Table "categories" — name VARCHAR, description VARCHAR.
 Rules: use ILIKE for case-insensitive text/tag matching; use COUNT for "how many";
-when listing specific files, always SELECT filename AND doc_id."""
+when listing specific files, always SELECT filename AND doc_id;
+add LIMIT 100 when listing rows, unless the question asks for all rows or for a count."""
 
 
 def _flatten_tags(metadata_tags) -> str:
@@ -111,7 +112,7 @@ def _catalog_snapshot_chunk(docs) -> RetrievedChunk:
         score=0.3,
         metadata=ChunkMetadata(
             doc_id="metadata-context", filename="metadata_context",
-            doc_type="metadata", chunk_index=0, start_char=0, acl_groups=["ALL"]),
+            doc_type="metadata", chunk_index=0, start_char=0, acl_groups=["ALL"]),  # safe: the doc list is already ACL-filtered upstream by list_documents(user_groups)
     )
 
 
@@ -126,7 +127,7 @@ async def retrieve_metadata_catalog(state, metadata_store=None, generate_fn=None
 
     docs = await metadata_store.list_documents(user_groups)   # ACL boundary
     try:
-        datasets = await metadata_store.list_datasets()
+        datasets = await metadata_store.list_datasets(active_only=True)
     except Exception:
         datasets = []
     try:
