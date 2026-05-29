@@ -338,3 +338,22 @@ def test_distinct_values_sorted_independent_of_insertion_order():
     for v in ["TU", "AK", "SF", "ATL", "RUS"]:
         con.execute('INSERT INTO t VALUES (?)', [v])
     assert distinct_values(con, "t", "loc", max_distinct=100) == ["AK", "ATL", "RUS", "SF", "TU"]
+
+
+def test_schema_prompt_annotates_values_via_prefix_glossary(monkeypatch):
+    """A value_glossary with prefix patterns (E-*) annotates actual distinct
+    values (E-3) in the text-to-SQL prompt, not just exact-match codes."""
+    import src.ingestion.tabular_store as ts
+    from src.agent.strategies.hint_resolver import ResolvedHints
+
+    class _Col:
+        def __init__(s, name, dtype, desc=""): s.name, s.dtype, s.description = name, dtype, desc
+    class _Schema:
+        table = "doc_x_pay"; description = "AD pay"
+        columns = [_Col("grade", "VARCHAR", "Pay grade")]
+
+    monkeypatch.setattr(ts, "distinct_values", lambda con, t, c, m: ["E-3", "O-1"])
+    hints = {"doc_x_pay": ResolvedHints(column_glossaries={"grade": {"E-*": "Enlisted", "O-*": "Officer"}})}
+    out = ts.schema_prompt_with_values([_Schema()], con=None, hints=hints)
+    assert "E-3 (Enlisted)" in out
+    assert "O-1 (Officer)" in out

@@ -11,6 +11,7 @@ import re
 
 from src.db.schema_registry import ColumnSchema, TableSchema
 from src.ingestion.tabular import SheetClassification, SheetGrid
+from src.ingestion.table_profiler import glossary_lookup
 
 DUCKDB_DATABASE = "spreadsheets"
 
@@ -238,7 +239,10 @@ def schema_prompt_with_values(schemas, con, max_distinct: int = 100, hints=None)
                 vals = distinct_values(con, s.table, c.name, max_distinct)
                 if vals:
                     gloss = glossaries.get(c.name, {})
-                    rendered = [f"{v} ({gloss[str(v)]})" if str(v) in gloss else str(v) for v in vals]
+                    rendered = []
+                    for v in vals:
+                        meaning = glossary_lookup(gloss, v) if gloss else None
+                        rendered.append(f"{v} ({meaning})" if meaning else str(v))
                     line += " | values: " + ", ".join(rendered)
             col_lines.append(line)
         header = f"Table: {s.table}\nDescription: {s.description}"
