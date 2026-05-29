@@ -154,10 +154,12 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         else:
             result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
 
-        # Sub-task decomposition: run additional searches for each sub-task IN PARALLEL
+        # Sub-task decomposition: run additional searches for each sub-task IN PARALLEL.
+        # Skipped for METADATA: catalog answers come entirely from the catalog SQL, so
+        # content vector chunks would only add noise/citations.
         sub_tasks = state.get("sub_tasks", [])
         unique_tasks = [t for t in sub_tasks if t != state["question"]] if sub_tasks else []
-        if unique_tasks:
+        if unique_tasks and query_type != QueryType.METADATA:
             from src.ingestion.embedder import embed_texts
             import asyncio
 
