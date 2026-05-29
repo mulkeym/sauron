@@ -7,8 +7,10 @@ Verified against the standard DoD pay-grade scheme:
 - `O-1E`..`O-3E` → Commissioned Officer with prior enlisted service
 - `W-1`..`W-5` → Warrant Officer
 
-Prefix patterns (`E-*`, `O-*`, `W-*`, `O-*E`) are used so all grades resolve
-without enumerating each. Seeded via `scripts/seed_military_paygrade_glossary.py`.
+Prefix patterns (`E-*`, `O-*`, `W-*`) cover the bulk; the three "prior enlisted
+service" grades (`O-1E`/`O-2E`/`O-3E`) are EXACT entries so they win over the
+`O-*` prefix (a `O-*E` pattern would never fire — patterns must end in `*`).
+Seeded via `scripts/seed_military_paygrade_glossary.py`.
 
 The source AD pay PDF's grade column has a **blank header**, so it is named
 `col_0` by `_safe_column_names`. Pass `--column col_0` (confirm against the

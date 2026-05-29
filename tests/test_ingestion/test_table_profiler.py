@@ -151,6 +151,15 @@ def test_glossary_lookup_exact_then_prefix():
     assert glossary_lookup(g, "W-2") is None           # no match
 
 
+def test_glossary_lookup_exact_entry_wins_over_prefix_pattern():
+    """A more-specific exact key (O-1E) must override a broader prefix (O-*).
+    This is the precedence the military paygrade seed relies on so 'prior
+    enlisted service' grades aren't mislabeled by the O-* pattern."""
+    g = {"O-1E": "Officer w/ prior enlisted", "O-*": "Commissioned Officer"}
+    assert glossary_lookup(g, "O-1E") == "Officer w/ prior enlisted"  # exact wins
+    assert glossary_lookup(g, "O-1") == "Commissioned Officer"        # prefix for the rest
+
+
 def test_row_narrative_annotates_key_value_with_glossary():
     profile = TableProfile(
         column_descriptions={"grade": "Pay grade", "over2": "Over 2 years"},

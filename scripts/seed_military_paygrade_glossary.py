@@ -11,10 +11,16 @@ patterns cover all grades, so no per-grade enumeration is needed."""
 import argparse
 import asyncio
 
+# NOTE: glossary_lookup matches EXACT keys first, then KEY*-prefix patterns. The
+# "prior enlisted service" grades (O-1E/O-2E/O-3E) MUST be exact entries so they
+# win over the "O-*" prefix — a "O-*E" pattern would never fire (patterns must
+# end in "*"), leaving those grades mislabeled "Commissioned Officer".
 PAYGRADE_GLOSSARY = {
+    "O-1E": "Commissioned Officer with prior enlisted service",
+    "O-2E": "Commissioned Officer with prior enlisted service",
+    "O-3E": "Commissioned Officer with prior enlisted service",
     "E-*": "Enlisted Member",
     "O-*": "Commissioned Officer",
-    "O-*E": "Commissioned Officer with prior enlisted service",
     "W-*": "Warrant Officer",
 }
 
