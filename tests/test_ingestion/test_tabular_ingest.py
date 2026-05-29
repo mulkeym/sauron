@@ -411,3 +411,29 @@ async def test_purge_orphan_schemas_fails_open_when_list_documents_raises(monkey
     removed = await purge_orphan_schemas(BoomMS(), schema_registry=reg)
     assert removed == 0
     assert reg.removed == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_grids_processes_provided_grids(monkeypatch):
+    """ingest_grids ingests grids passed directly (no file read), so PDF-derived
+    grids reuse the same clean/messy logic as Excel sheets."""
+    from src.ingestion import tabular_ingest as ti
+    from src.ingestion.tabular import SheetGrid
+    monkeypatch.setattr("src.ingestion.tabular_ingest.embed_texts",
+                        lambda texts, *a, **k: [[0.0, 0.0, 0.0] for _ in texts])
+    grids = [SheetGrid("p0_table0",
+                       [["grade", "over2", "over4"],
+                        ["O-1", "3998.40", "5031.30"],
+                        ["O-2", "4606.80", "6042.90"],
+                        ["E-1", "2017.20", "2017.20"]])]
+    vs, ms, reg = _FakeVectorStore(), _FakeMetadataStore(), _FakeRegistry()
+    classifications, ingested = await ti.ingest_grids(
+        grids, "docX", "ad.pdf", "pdf", ["executives"], "payroll_compensation",
+        vs, ms, schema_registry=reg,
+        generate_fn=lambda **k: '{"key_columns":["grade"],"measure_columns":["over2","over4"],'
+                                '"column_descriptions":{},"table_description":"AD pay"}',
+    )
+    assert "p0_table0" in ingested                         # clean sheet structured
+    assert classifications[0].route == "clean"
+    assert any(m.chunk_size_tier == "table_row"
+               for _, metas in vs.upserts for m in metas)  # narratives embedded

@@ -82,29 +82,16 @@ async def ingest_spreadsheet_tables(file_path, doc_id, filename, doc_type, acl_g
     return len(ingested)
 
 
-async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_groups,
-                                   category, vector_store, metadata_store,
-                                   schema_registry=None, generate_fn=None):
-    """Read a spreadsheet's sheets once, structured-ingest clean sheets, and embed
-    deterministic region narratives for messy sheets.
-
-    Returns ``(grids, classifications, ingested_names)`` where ``ingested_names``
-    is the set of CLEAN sheet names whose DuckDB rows + schema + per-row
-    narratives ALL succeeded. The caller uses that set (via
-    ``tabular_chunker.sheets_needing_text``) to decide which sheets still need
-    full-text chunks. Fully fail-open: a read failure returns ([], [], set());
-    a per-sheet failure is logged and the sheet is simply absent from
-    ``ingested_names`` (so it falls back to text chunks).
-    """
+async def ingest_grids(grids, doc_id, filename, doc_type, acl_groups, category,
+                       vector_store, metadata_store, schema_registry=None,
+                       generate_fn=None):
+    """Structured-ingest a list of already-acquired SheetGrids: clean sheets ->
+    DuckDB + schema + per-row narratives; messy sheets -> region narratives.
+    Returns (classifications, ingested_names). Fully fail-open per grid. Shared by
+    Excel (ingest_structured_sheets) and PDF (pipeline PDF branch)."""
     if schema_registry is None:
         from src.api.routes_ingest import get_schema_registry
         schema_registry = get_schema_registry()
-
-    try:
-        grids = read_sheets(Path(file_path))
-    except Exception as e:
-        logger.warning(f"Tabular ingest: could not read sheets from {filename}: {e}")
-        return [], [], set()
 
     classifications = [classify_sheet(g) for g in grids]
     for g, c in zip(grids, classifications):
@@ -169,7 +156,23 @@ async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_gr
     finally:
         if con is not None:
             con.close()
+    return classifications, ingested
 
+
+async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_groups,
+                                   category, vector_store, metadata_store,
+                                   schema_registry=None, generate_fn=None):
+    """Read a spreadsheet's sheets once, then structured-ingest them via
+    ingest_grids. Returns (grids, classifications, ingested_names)."""
+    try:
+        grids = read_sheets(Path(file_path))
+    except Exception as e:
+        logger.warning(f"Tabular ingest: could not read sheets from {filename}: {e}")
+        return [], [], set()
+    classifications, ingested = await ingest_grids(
+        grids, doc_id, filename, doc_type, acl_groups, category,
+        vector_store, metadata_store, schema_registry=schema_registry,
+        generate_fn=generate_fn)
     logger.info(f"Tabular ingest: structured {len(ingested)} clean sheet(s) from {filename}")
     return grids, classifications, ingested
 
