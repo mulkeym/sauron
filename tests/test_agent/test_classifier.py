@@ -370,3 +370,29 @@ async def test_memory_below_gate_unchanged(monkeypatch):
     assert out["query_type"] == QueryType.LOOKUP
     assert out["strategy_memory"]["overrode"] is False
     assert out["strategy_memory"]["reason"] == "below gate"
+
+
+def test_classify_metadata_routes_when_about_files():
+    with patch("src.agent.classifier.generate",
+               return_value='{"query_type": "metadata", "sub_tasks": []}'):
+        result = classify_query({"question": "How many PDFs do we have?"})
+    assert result["query_type"] == QueryType.METADATA
+
+
+@pytest.mark.asyncio
+async def test_memory_does_not_override_metadata(monkeypatch):
+    # METADATA is a deterministic capability pick; a learned LOOKUP must not override it.
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "metadata", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "lookup", "count": 3, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "how many files are there?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.METADATA
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "protected"

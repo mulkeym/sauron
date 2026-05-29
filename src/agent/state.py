@@ -22,6 +22,7 @@ class QueryType(StrEnum):
     ANALYTICAL = "analytical"
     CROSS_REFERENCE = "cross_reference"
     TEMPORAL = "temporal"
+    METADATA = "metadata"
 
 class AgentState(TypedDict, total=False):
     question: str

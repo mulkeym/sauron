@@ -15,11 +15,13 @@ Query types:
 - analytical: Question requiring SQL against a structured database (only if database tables exist). Example: "What was Q3 revenue from the finance database?"
 - cross_reference: Question spanning multiple source types (e.g., compare database data against a policy). Example: "Does our spending comply with policy?"
 - temporal: Question about changes over time or date-bounded searches. Example: "What changed last month?"
+- metadata: Question ABOUT the documents/files themselves (the catalog) rather than their content — counts, lists, upload dates, datasets, categories, who uploaded, or which files mention a term. Example: "How many PDFs do we have?", "When was the pay doc uploaded?", "Which files mention officers?", "What datasets exist?", "List files uploaded in May".
 
 IMPORTANT:
 - If the question asks about a SPECIFIC named entity (person, company, organization, contract number), use LOOKUP even if it mentions "contract" or "award". LOOKUP is for targeted searches; SWEEP is for exhaustive collection.
 - If the question asks for "all", "every", "total", or "sum" of items from documents, use SWEEP not analytical. Only use analytical if a structured database is explicitly needed.
 - If the question asks about a specific DATE (e.g. "on Jan 30th", "on February 5"), use SWEEP — the system has date-based document filtering for sweep queries.
+- Use METADATA only for questions ABOUT the files (catalog: counts, dates, datasets, filenames, which-files-mention). A question answered by the CONTENT of a file (e.g. "what does the pay doc SAY about officers?", "what is the pay for an O-4?") is NOT metadata — use lookup/analytical.
 
 Respond with ONLY valid JSON:
 {"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
@@ -137,11 +139,12 @@ def _classify_node_factory(schema_registry):
                     elif (mem_type is not None
                             and best["count"] >= settings.strategy_memory_min_runs
                             and best["margin"] >= settings.strategy_memory_margin):
-                        if llm_pick == QueryType.ANALYTICAL:
-                            # Capability-gated pick: ANALYTICAL is chosen only when a
-                            # relevant structured table is registered + ACL-visible. A
-                            # learned prior (trainable by cited-but-unhelpful answers)
-                            # must not veto it. Memory relearns once analytical runs.
+                        if llm_pick in (QueryType.ANALYTICAL, QueryType.METADATA):
+                            # ANALYTICAL/METADATA are capability-gated picks: ANALYTICAL is chosen only when a
+                            # relevant structured table is registered + ACL-visible; METADATA is chosen only
+                            # when a catalog capability is available. A learned prior
+                            # (trainable by cited-but-unhelpful answers)
+                            # must not veto it. Memory relearns once analytical/metadata runs.
                             memory_decision["reason"] = "protected"
                             logger.info("Strategy memory suppressed: analytical capability "
                                         "pick protected (memory wanted %s, n=%d, margin=%.0f%%)",
