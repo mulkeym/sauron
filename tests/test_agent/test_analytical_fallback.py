@@ -80,6 +80,25 @@ async def test_zero_rows_then_structured_empty_falls_back_to_map_reduce(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_zero_rows_structured_gated_skip_falls_back_to_map_reduce(monkeypatch):
+    # retrieve_structured can return only a structured_trace (no chunks/sql_results)
+    # when its relevance gate skips; that must still fall through to map-reduce.
+    trace = StructuredLookupTrace(query_type="analytical", status="ran", row_count=0, rows=[])
+    monkeypatch.setattr(structured, "run_structured_lookup", lambda *a, **k: trace)
+    async def _structured(state, vector_store, schema_registry):
+        return {"structured_trace": {"query_type": "sweep", "status": "skipped"}}
+    monkeypatch.setattr(structured, "retrieve_structured", _structured)
+    async def _map_reduce(state, vector_store):
+        return {"retrieved_chunks": [{"id": "mr"}]}
+    monkeypatch.setattr(map_reduce, "retrieve_map_reduce", _map_reduce)
+
+    out = await analytical.retrieve_analytical(_state(), vector_store=object(), schema_registry=_Registry())
+    assert out["retrieved_chunks"] == [{"id": "mr"}]
+    assert out["structured_trace"]["fell_back"] is True
+    assert out["structured_trace"]["query_type"] == "analytical"
+
+
+@pytest.mark.asyncio
 async def test_hard_error_still_falls_back_to_map_reduce(monkeypatch):
     trace = StructuredLookupTrace(query_type="analytical", status="error", error="bad sql")
     monkeypatch.setattr(structured, "run_structured_lookup", lambda *a, **k: trace)
