@@ -2,7 +2,11 @@
 table. Run against a running instance, scoping to the doc's STABLE dataset_id
 (auto-category is non-deterministic, so prefer --dataset):
 
-    python scripts/seed_military_paygrade_glossary.py --dataset 2 --column col_0
+    docker exec sauron-api-1 env PYTHONPATH=/app \
+        python scripts/seed_military_paygrade_glossary.py --dataset 2 --column col_0
+    docker compose restart api   # reload hints into the live process (startup hook)
+
+(PYTHONPATH=/app is required so `import src` resolves when run as a script.)
 
 The --column must match the AD pay table's actual key-column name. The grade
 column header is BLANK in the source PDF, so _safe_column_names names it
