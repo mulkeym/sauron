@@ -30,6 +30,7 @@ So the miss had two root causes: **(a)** the table was not extracted into a usab
 
 - **Auto-derivation of glossaries** for arbitrary future code schemes (LLM proposes a code→meaning mapping, operator approves). This is the reserved Phase 2/3 of the hint roadmap; this project seeds **one curated, verified** glossary and builds the mechanism, but does not auto-generate glossaries.
 - General document-layout reconstruction beyond prose + tables (figures, charts, form fields).
+- A migration/re-ingest script for existing PDFs — the operator will wipe all data and re-ingest from scratch.
 - Changing the retrieval/routing logic itself. This project changes *what gets stored*; existing classification/retrieval consume it unchanged.
 
 ## Constraints / decisions (from brainstorming)
@@ -129,7 +130,7 @@ In the `Dockerfile`:
 
 ## Re-ingestion
 
-Existing PDFs (the AD pay PDF and others already stored as flat text) only benefit after re-ingestion. Include a small operator step/script to re-ingest existing `pdf` docs through the new path. DuckDB single-writer still relies on `max_parallel_ingestion=1` (unchanged).
+**Out of scope.** Existing PDFs only benefit after re-ingestion, but the operator will wipe all data and re-ingest from scratch — no migration/re-ingest script is built here. DuckDB single-writer still relies on `max_parallel_ingestion=1` (unchanged).
 
 ## Testing
 
