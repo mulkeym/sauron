@@ -251,3 +251,39 @@ async def test_classify_node_respects_margin(monkeypatch):
     assert out["query_type"] == QueryType.LOOKUP        # not overridden
     assert out["strategy_memory"]["overrode"] is False
     assert out["strategy_memory"]["reason"] == "below gate"
+
+
+@pytest.mark.asyncio
+async def test_node_factory_injects_resolved_hint_notes(monkeypatch):
+    captured = {}
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        captured["system"] = system_prompt
+        return '{"query_type": "analytical", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _no_memory(q):
+        return None
+    monkeypatch.setattr(classifier, "get_best_strategy", _no_memory, raising=False)
+
+    from src.agent.strategies.hint_resolver import ResolvedHints
+    async def _fake_hints(schemas):
+        return {"doc_pay": ResolvedHints(table_notes=["U.S. military active-duty basic pay"])}
+    monkeypatch.setattr(classifier, "_resolve_hints_for_classifier", _fake_hints)
+
+    reg = SchemaRegistry()
+    reg.register(_schema(table="doc_pay", desc="financial values indexed by col_0", acl=["ALL"]))
+
+    node = _classify_node_factory(reg)
+    out = await node({"question": "pay range for an officer?", "user_groups": ["ALL"]})
+
+    assert "U.S. military active-duty basic pay" in captured["system"]
+    assert out["query_type"] == QueryType.ANALYTICAL
+
+
+@pytest.mark.asyncio
+async def test_resolve_hints_for_classifier_fails_open(monkeypatch):
+    # Any error resolving hints must yield {} (never break classification).
+    import src.agent.strategies.structured as structured
+    async def _boom(*a, **k):
+        raise RuntimeError("store down")
+    monkeypatch.setattr(structured, "resolve_hints_for_schemas", _boom)
+    assert await classifier._resolve_hints_for_classifier([_schema()]) == {}

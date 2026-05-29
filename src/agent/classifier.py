@@ -91,6 +91,18 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
     return {"query_type": query_type, "sub_tasks": sub_tasks}
 
 
+async def _resolve_hints_for_classifier(schemas) -> dict:
+    """Fail-open hint resolution for the classifier table view. Mirrors the call
+    retrieve_analytical uses; returns {} on any error so classification never breaks."""
+    try:
+        from src.agent.strategies.structured import resolve_hints_for_schemas
+        from src.api.routes_ingest import get_hint_store, get_metadata_store
+        return await resolve_hints_for_schemas(schemas, get_hint_store(), get_metadata_store())
+    except Exception:
+        logger.warning("Classifier hint resolution failed; using bare table descriptions", exc_info=True)
+        return {}
+
+
 def _classify_node_factory(schema_registry):
     """Build an async LangGraph 'classify' node: LLM classification, then a
     confidence-gated soft override from Strategy Memory."""
@@ -99,7 +111,8 @@ def _classify_node_factory(schema_registry):
         available = ""
         if schema_registry is not None:
             schemas = schema_registry.list_for_user(state.get("user_groups", ["ALL"]))
-            available = format_available_tables(schemas)
+            hints = await _resolve_hints_for_classifier(schemas)
+            available = format_available_tables(schemas, hints)
         # classify_query makes a blocking LLM call — run it off the event loop
         # (the old sync node was run by LangGraph in a threadpool).
         result = await asyncio.to_thread(classify_query, state, available)
