@@ -6,5 +6,7 @@ __pycache__/
 .gitignore
 data/
 tests/
+# but keep the tiny smoke PDF needed to bake offline OCR models at build time
+!tests/fixtures/pdf/tiny_smoke.pdf
 *.md
 !requirements.txt
