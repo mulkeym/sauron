@@ -189,3 +189,25 @@ async def test_classify_node_failopen(monkeypatch):
     node = clf._classify_node_factory(schema_registry=None)
     out = await node({"question": "q", "user_groups": ["ALL"]})
     assert out["query_type"] == QueryType.LOOKUP
+    assert "strategy_memory" in out
+    assert out["strategy_memory"]["reason"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_classify_node_respects_margin(monkeypatch):
+    import src.agent.classifier as clf
+
+    monkeypatch.setattr(clf, "classify_query",
+                        lambda state, available_tables="": {"query_type": QueryType.LOOKUP, "sub_tasks": ["q"]})
+    async def fake_best(q):
+        return {"strategy": "sweep", "count": 10, "margin": 0.05, "avg_cited": 8.0}  # margin below 0.15
+    monkeypatch.setattr(clf, "get_best_strategy", fake_best, raising=False)
+    monkeypatch.setattr(clf.settings, "strategy_memory_enabled", True)
+    monkeypatch.setattr(clf.settings, "strategy_memory_min_runs", 3)
+    monkeypatch.setattr(clf.settings, "strategy_memory_margin", 0.15)
+
+    node = clf._classify_node_factory(schema_registry=None)
+    out = await node({"question": "q", "user_groups": ["ALL"]})
+    assert out["query_type"] == QueryType.LOOKUP        # not overridden
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "below gate"

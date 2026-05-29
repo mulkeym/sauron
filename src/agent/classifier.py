@@ -91,8 +91,9 @@ def _classify_node_factory(schema_registry):
                         mem_type = QueryType(best["strategy"])
                     except ValueError:
                         mem_type = None
-                    if (mem_type is not None
-                            and mem_type != llm_pick
+                    if mem_type is not None and mem_type == llm_pick:
+                        memory_decision["reason"] = "agreed"
+                    elif (mem_type is not None
                             and best["count"] >= settings.strategy_memory_min_runs
                             and best["margin"] >= settings.strategy_memory_margin):
                         result["query_type"] = mem_type
@@ -100,6 +101,8 @@ def _classify_node_factory(schema_registry):
                         memory_decision["reason"] = "override"
                         logger.info("Strategy memory override: %s -> %s (n=%d, margin=%.0f%%)",
                                     llm_pick, mem_type, best["count"], best["margin"] * 100)
+                    # else: reason stays "below gate" (memory differs but a gate failed,
+                    # or mem_type is None/invalid)
             except Exception as e:
                 logger.warning("Strategy memory lookup failed, keeping LLM pick: %s", e)
                 memory_decision["reason"] = "error"
