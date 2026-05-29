@@ -44,6 +44,15 @@ So the miss had two root causes: **(a)** the table was not extracted into a usab
   - scanned/image pages → `unstructured` hi_res + tesseract OCR.
   - Rationale: robustness on dense numeric tables is the priority, and that is where a single layout-model engine (`unstructured` hi_res) is weakest (cell mis-alignment on wide numeric grids); OCR is confined to the rare scanned case.
 
+## Spike results (2026-05-29)
+
+Validated Approach B against the real `2025 April Dec AD Pay.pdf` with pdfplumber 0.11.9:
+- The chart is a **single page**; default `extract_tables()` (lattice/ruled) returns one **35×23** table.
+- Rank labels (`O-10`, `O-8`, `E-*`) are intact in **column 0**; the `2 or less / Over 2 … Over 40` year-of-service headers are intact; dollar values are aligned and **whole** (no shearing). Engine choice confirmed — no revisit needed.
+- **Default lattice is the right primary strategy** (text-strategy stays as fallback for borderless tables).
+- The grade column header is **blank**, so `_safe_column_names` will name it `col_0` → the Task 16 glossary seed should target `--column col_0` (confirm against the registered schema post-ingest).
+- Multi-page stitching is **not** needed for this file (single page) but is retained for multi-page tables in other PDFs.
+
 ## Architecture
 
 ### Common shape
