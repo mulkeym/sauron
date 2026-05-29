@@ -25,12 +25,40 @@ Respond with ONLY valid JSON:
 {"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
 
 
-def format_available_tables(schemas) -> str:
-    """One '- <table>: <description>' line per schema, sorted by table name for
-    a stable (run-to-run identical) classifier prompt."""
-    return "\n".join(
-        f"- {s.table}: {s.description}" for s in sorted(schemas, key=lambda s: s.table)
-    )
+_MAX_NOTE_CHARS = 200
+
+
+def _hint_note(rh) -> str:
+    """Compact, length-capped domain note for a table, built from its resolved
+    hints: table notes first, then the distinct glossary meanings (e.g. the human
+    labels behind coded values). Lets the classifier recognize what a generically
+    profiled table actually holds."""
+    parts = list(dict.fromkeys(n for n in rh.table_notes if n))  # order-preserving dedup
+    meanings: list[str] = []
+    for col_map in rh.column_glossaries.values():
+        for meaning in col_map.values():
+            if meaning and meaning not in meanings:
+                meanings.append(meaning)
+    if meanings:
+        parts.append(", ".join(meanings))
+    return "; ".join(parts)[:_MAX_NOTE_CHARS]
+
+
+def format_available_tables(schemas, hints=None) -> str:
+    """One '- <table>: <description>' line per schema, sorted by table name for a
+    stable (run-to-run identical) classifier prompt. When ``hints`` (table ->
+    ResolvedHints) supplies a note for a table, it is appended after an em dash.
+    With ``hints`` None/empty the output is byte-identical to before."""
+    hints = hints or {}
+    lines = []
+    for s in sorted(schemas, key=lambda s: s.table):
+        line = f"- {s.table}: {s.description}"
+        rh = hints.get(s.table)
+        note = _hint_note(rh) if rh is not None else ""
+        if note:
+            line += f" — {note}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def classify_query(state: AgentState, available_tables: str = "") -> dict:
@@ -63,6 +91,18 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
     return {"query_type": query_type, "sub_tasks": sub_tasks}
 
 
+async def _resolve_hints_for_classifier(schemas) -> dict:
+    """Fail-open hint resolution for the classifier table view. Mirrors the call
+    retrieve_analytical uses; returns {} on any error so classification never breaks."""
+    try:
+        from src.agent.strategies.structured import resolve_hints_for_schemas
+        from src.api.routes_ingest import get_hint_store, get_metadata_store
+        return await resolve_hints_for_schemas(schemas, get_hint_store(), get_metadata_store())
+    except Exception:
+        logger.warning("Classifier hint resolution failed; using bare table descriptions", exc_info=True)
+        return {}
+
+
 def _classify_node_factory(schema_registry):
     """Build an async LangGraph 'classify' node: LLM classification, then a
     confidence-gated soft override from Strategy Memory."""
@@ -71,7 +111,8 @@ def _classify_node_factory(schema_registry):
         available = ""
         if schema_registry is not None:
             schemas = schema_registry.list_for_user(state.get("user_groups", ["ALL"]))
-            available = format_available_tables(schemas)
+            hints = await _resolve_hints_for_classifier(schemas)
+            available = format_available_tables(schemas, hints)
         # classify_query makes a blocking LLM call — run it off the event loop
         # (the old sync node was run by LangGraph in a threadpool).
         result = await asyncio.to_thread(classify_query, state, available)
@@ -96,11 +137,21 @@ def _classify_node_factory(schema_registry):
                     elif (mem_type is not None
                             and best["count"] >= settings.strategy_memory_min_runs
                             and best["margin"] >= settings.strategy_memory_margin):
-                        result["query_type"] = mem_type
-                        memory_decision["overrode"] = True
-                        memory_decision["reason"] = "override"
-                        logger.info("Strategy memory override: %s -> %s (n=%d, margin=%.0f%%)",
-                                    llm_pick, mem_type, best["count"], best["margin"] * 100)
+                        if llm_pick == QueryType.ANALYTICAL:
+                            # Capability-gated pick: ANALYTICAL is chosen only when a
+                            # relevant structured table is registered + ACL-visible. A
+                            # learned prior (trainable by cited-but-unhelpful answers)
+                            # must not veto it. Memory relearns once analytical runs.
+                            memory_decision["reason"] = "protected"
+                            logger.info("Strategy memory suppressed: analytical capability "
+                                        "pick protected (memory wanted %s, n=%d, margin=%.0f%%)",
+                                        mem_type, best["count"], best["margin"] * 100)
+                        else:
+                            result["query_type"] = mem_type
+                            memory_decision["overrode"] = True
+                            memory_decision["reason"] = "override"
+                            logger.info("Strategy memory override: %s -> %s (n=%d, margin=%.0f%%)",
+                                        llm_pick, mem_type, best["count"], best["margin"] * 100)
                     # else: reason stays "below gate" (memory differs but a gate failed,
                     # or mem_type is None/invalid)
             except Exception as e:

@@ -26,7 +26,24 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
     except Exception:
         hints = None
     trace = await asyncio.to_thread(run_structured_lookup, question, schemas, "analytical", None, None, hints)
+
     if trace.status == "error":
+        from src.agent.strategies.map_reduce import retrieve_map_reduce
+        result = await retrieve_map_reduce(state, vector_store=vector_store)
+        result["structured_trace"] = trace.to_dict()
+        return result
+
+    # Runnable-but-empty SQL (e.g. WHERE col_0='officer' when values are O-1..O-10)
+    # is a miss, not an answer. Fall back to the structured row-narrative path so the
+    # glossary-annotated table_row chunks reach the synthesizer; then map-reduce.
+    if trace.status == "ran" and trace.row_count == 0:
+        trace.fell_back = True
+        from src.agent.strategies.structured import retrieve_structured
+        structured = await retrieve_structured(state, vector_store, schema_registry)
+        if structured.get("retrieved_chunks") or structured.get("sql_results"):
+            structured["structured_trace"] = trace.to_dict()
+            structured["retrieval_attempts"] = state.get("retrieval_attempts", 0) + 1
+            return structured
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         result = await retrieve_map_reduce(state, vector_store=vector_store)
         result["structured_trace"] = trace.to_dict()

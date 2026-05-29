@@ -7,6 +7,39 @@ from src.agent.classifier import format_available_tables, classify_query
 from src.db.schema_registry import TableSchema, ColumnSchema
 from src.agent.classifier import _classify_node_factory
 from src.db.schema_registry import SchemaRegistry
+from src.agent.classifier import _hint_note
+from src.agent.strategies.hint_resolver import ResolvedHints
+
+
+def test_hint_note_combines_table_notes_and_glossary_meanings():
+    rh = ResolvedHints(
+        column_glossaries={"col_0": {"O-1": "Commissioned Officer", "E-1": "Enlisted Member"}},
+        column_notes={},
+        table_notes=["U.S. military active-duty basic pay"],
+    )
+    note = _hint_note(rh)
+    assert "U.S. military active-duty basic pay" in note
+    assert "Commissioned Officer" in note
+    assert "Enlisted Member" in note
+
+
+def test_hint_note_is_length_capped():
+    rh = ResolvedHints(table_notes=["x" * 500])
+    assert len(_hint_note(rh)) <= 200
+
+
+def test_format_available_tables_appends_note_when_hint_present():
+    s = _schema(table="doc_pay", desc="financial values indexed by col_0")
+    hints = {"doc_pay": ResolvedHints(table_notes=["U.S. military active-duty basic pay"])}
+    line = format_available_tables([s], hints)
+    assert line.startswith("- doc_pay: financial values indexed by col_0")
+    assert "U.S. military active-duty basic pay" in line
+
+
+def test_format_available_tables_unchanged_without_hints():
+    # Byte-identical to pre-change behavior when no hints are supplied.
+    assert format_available_tables([_schema()]) == "- doc_x_pay: GS pay by grade and step"
+    assert format_available_tables([_schema()], {}) == "- doc_x_pay: GS pay by grade and step"
 
 
 def _schema(table="doc_x_pay", desc="GS pay by grade and step", acl=None):
@@ -193,6 +226,13 @@ async def test_classify_node_failopen(monkeypatch):
     assert out["strategy_memory"]["reason"] == "error"
 
 
+def test_hint_note_dedupes_table_notes():
+    rh = ResolvedHints(table_notes=["pay table", "pay table", "extra note"])
+    note = _hint_note(rh)
+    assert note.count("pay table") == 1
+    assert "extra note" in note
+
+
 @pytest.mark.asyncio
 async def test_classify_node_respects_margin(monkeypatch):
     import src.agent.classifier as clf
@@ -209,5 +249,124 @@ async def test_classify_node_respects_margin(monkeypatch):
     node = clf._classify_node_factory(schema_registry=None)
     out = await node({"question": "q", "user_groups": ["ALL"]})
     assert out["query_type"] == QueryType.LOOKUP        # not overridden
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "below gate"
+
+
+@pytest.mark.asyncio
+async def test_node_factory_injects_resolved_hint_notes(monkeypatch):
+    captured = {}
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        captured["system"] = system_prompt
+        return '{"query_type": "analytical", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _no_memory(q):
+        return None
+    monkeypatch.setattr(classifier, "get_best_strategy", _no_memory, raising=False)
+
+    from src.agent.strategies.hint_resolver import ResolvedHints
+    async def _fake_hints(schemas):
+        return {"doc_pay": ResolvedHints(table_notes=["U.S. military active-duty basic pay"])}
+    monkeypatch.setattr(classifier, "_resolve_hints_for_classifier", _fake_hints)
+
+    reg = SchemaRegistry()
+    reg.register(_schema(table="doc_pay", desc="financial values indexed by col_0", acl=["ALL"]))
+
+    node = _classify_node_factory(reg)
+    out = await node({"question": "pay range for an officer?", "user_groups": ["ALL"]})
+
+    assert "U.S. military active-duty basic pay" in captured["system"]
+    assert out["query_type"] == QueryType.ANALYTICAL
+
+
+@pytest.mark.asyncio
+async def test_resolve_hints_for_classifier_fails_open(monkeypatch):
+    # Any error resolving hints must yield {} (never break classification).
+    import src.agent.strategies.structured as structured
+    async def _boom(*a, **k):
+        raise RuntimeError("store down")
+    monkeypatch.setattr(structured, "resolve_hints_for_schemas", _boom)
+    assert await classifier._resolve_hints_for_classifier([_schema()]) == {}
+
+
+@pytest.mark.asyncio
+async def test_memory_does_not_override_analytical(monkeypatch):
+    # LLM picks ANALYTICAL (capability-gated); memory wants lookup past the gates.
+    # The override must be suppressed and recorded as "protected".
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "analytical", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "lookup", "count": 3, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+    async def _no_hints(schemas):
+        return {}
+    monkeypatch.setattr(classifier, "_resolve_hints_for_classifier", _no_hints)
+
+    reg = SchemaRegistry()
+    reg.register(_schema(table="doc_pay", desc="military pay", acl=["ALL"]))
+    node = _classify_node_factory(reg)
+    out = await node({"question": "pay range for an officer?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.ANALYTICAL
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "protected"
+    assert out["strategy_memory"]["memory_best"] == "lookup"
+
+
+@pytest.mark.asyncio
+async def test_memory_still_overrides_non_analytical(monkeypatch):
+    # Regression: a learned override among non-structured strategies still applies.
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "lookup", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "sweep", "count": 5, "margin": 0.5}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "list all contracts", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.SWEEP
+    assert out["strategy_memory"]["overrode"] is True
+    assert out["strategy_memory"]["reason"] == "override"
+
+
+@pytest.mark.asyncio
+async def test_memory_agreement_on_analytical_unchanged(monkeypatch):
+    # When memory agrees with an ANALYTICAL pick, reason stays "agreed".
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "analytical", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "analytical", "count": 3, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "pay range for an officer?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.ANALYTICAL
+    assert out["strategy_memory"]["overrode"] is False
+    assert out["strategy_memory"]["reason"] == "agreed"
+
+
+@pytest.mark.asyncio
+async def test_memory_below_gate_unchanged(monkeypatch):
+    # A differing memory pick that fails the count gate is "below gate", no override.
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
+    def fake_generate(system_prompt, user_prompt, **kwargs):
+        return '{"query_type": "lookup", "sub_tasks": []}'
+    monkeypatch.setattr(classifier, "generate", fake_generate)
+    async def _best(q):
+        return {"strategy": "sweep", "count": 1, "margin": 1.0}
+    monkeypatch.setattr(classifier, "get_best_strategy", _best, raising=False)
+
+    node = _classify_node_factory(None)
+    out = await node({"question": "who is John?", "user_groups": ["ALL"]})
+
+    assert out["query_type"] == QueryType.LOOKUP
     assert out["strategy_memory"]["overrode"] is False
     assert out["strategy_memory"]["reason"] == "below gate"
