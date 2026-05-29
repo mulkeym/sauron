@@ -167,3 +167,18 @@ async def test_empty_rows_falls_back_to_snapshot(monkeypatch):
     assert out["structured_trace"]["status"] == "ran"      # SQL ran fine, just no rows
     assert out["structured_trace"]["fell_back"] is True
     assert out["retrieved_chunks"][0].metadata.doc_id == "metadata-context"
+
+
+import json as _json
+
+@pytest.mark.asyncio
+async def test_datetime_rows_are_json_safe(monkeypatch):
+    store = _Store([_doc(doc_id="a", filename="pay.pdf")])
+    def fake_sql(schema_prompt, question, generate_fn=None):
+        return "SELECT filename, doc_id, created_at FROM files"
+    monkeypatch.setattr(mc, "generate_sql", fake_sql)
+    out = await mc.retrieve_metadata_catalog(_state("when uploaded?"), metadata_store=store)
+    # The whole result payload must be JSON-serializable (no raw datetime objects).
+    _json.dumps(out["sql_results"])
+    _json.dumps(out["structured_trace"])
+    assert isinstance(out["sql_results"][0]["created_at"], str)   # ISO string, not datetime

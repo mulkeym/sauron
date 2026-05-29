@@ -2,6 +2,7 @@
 DuckDB catalog of the documents the asking user can access."""
 import logging
 from collections import Counter
+from datetime import date, datetime
 
 from src.agent.strategies.structured import generate_sql, StructuredLookupTrace
 from src.ingestion.tabular_store import execute_duckdb_sql
@@ -69,6 +70,15 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
 _ALLOWED = {"files", "datasets", "categories"}
 
 
+def _json_safe_rows(rows):
+    """Convert datetime/date cell values to ISO strings so result rows are JSON-serializable
+    (the catalog `created_at` column is a TIMESTAMPTZ)."""
+    return [
+        {k: (v.isoformat() if isinstance(v, (datetime, date)) else v) for k, v in r.items()}
+        for r in rows
+    ]
+
+
 def _citations_from_rows(rows, docs) -> list:
     """Build file citations for result rows that name a real document (doc_id)."""
     by_id = {d.doc_id: d for d in docs}
@@ -132,6 +142,7 @@ async def retrieve_metadata_catalog(state, metadata_store=None, generate_fn=None
         try:
             trace.sql = generate_sql(CATALOG_SCHEMA, question, generate_fn=generate_fn)
             rows = execute_duckdb_sql(con, trace.sql, allowed_tables=_ALLOWED)
+            rows = _json_safe_rows(rows)
             trace.status = "ran"
             trace.rows = rows
             trace.row_count = len(rows)
