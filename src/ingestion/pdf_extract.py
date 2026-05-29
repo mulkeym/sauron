@@ -101,9 +101,60 @@ def _page_prose(page) -> str:
     return page.filter(outside_tables).extract_text() or ""
 
 
+def _html_to_grid(html: str, sheet_name: str) -> SheetGrid | None:
+    """Parse an unstructured Table element's text_as_html into a SheetGrid."""
+    from html.parser import HTMLParser
+
+    class _T(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows, self._row, self._cell, self._in = [], [], [], False
+        def handle_starttag(self, tag, attrs):
+            if tag == "tr": self._row = []
+            elif tag in ("td", "th"): self._in, self._cell = True, []
+        def handle_endtag(self, tag):
+            if tag in ("td", "th"):
+                self._row.append("".join(self._cell).strip()); self._in = False
+            elif tag == "tr":
+                self.rows.append(self._row)
+        def handle_data(self, data):
+            if self._in: self._cell.append(data)
+
+    p = _T(); p.feed(html or "")
+    g = normalize_grid(p.rows, sheet_name)
+    return g if g.rows else None
+
+
+def _partition_scanned(path: Path, page_no: int):
+    """Real OCR partition for one page (seam mocked in tests)."""
+    from unstructured.partition.pdf import partition_pdf
+    return partition_pdf(
+        filename=str(path), strategy="hi_res", infer_table_structure=True,
+        page_numbers=[page_no + 1],   # unstructured is 1-indexed
+    )
+
+
 def _extract_scanned_page(path: Path, page_no: int):
-    """OCR a single scanned page. Implemented in Cycle 2."""
-    return [], []
+    blocks: list[ProseBlock] = []
+    grids: list[SheetGrid] = []
+    try:
+        elements = _partition_scanned(path, page_no)
+    except Exception as e:
+        logger.warning(f"OCR partition failed on page {page_no} of {path.name}: {e}")
+        return blocks, grids
+    n = 0
+    for el in elements:
+        cat = getattr(el, "category", "")
+        if cat == "Table":
+            html = getattr(getattr(el, "metadata", None), "text_as_html", None)
+            g = _html_to_grid(html, f"p{page_no}_ocr{n}") if html else None
+            if g:
+                grids.append(g); n += 1
+        else:
+            txt = str(el).strip()
+            if txt:
+                blocks.append(ProseBlock(text=txt, page=page_no))
+    return blocks, grids
 
 
 def extract_pdf(path: Path) -> ExtractedPdf:
