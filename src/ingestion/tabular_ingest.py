@@ -181,9 +181,12 @@ async def ingest_grids(grids, doc_id, filename, doc_type, acl_groups, category,
 
 async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_groups,
                                    category, vector_store, metadata_store,
-                                   schema_registry=None, generate_fn=None):
+                                   schema_registry=None, generate_fn=None,
+                                   dataset_id=None, hint_store=None):
     """Read a spreadsheet's sheets once, then structured-ingest them via
-    ingest_grids. Returns (grids, classifications, ingested_names)."""
+    ingest_grids. Returns (grids, classifications, ingested_names). dataset_id is
+    forwarded so dataset-scoped glossaries (more stable than auto-category)
+    annotate the row narratives."""
     try:
         grids = read_sheets(Path(file_path))
     except Exception as e:
@@ -192,7 +195,7 @@ async def ingest_structured_sheets(file_path, doc_id, filename, doc_type, acl_gr
     classifications, ingested = await ingest_grids(
         grids, doc_id, filename, doc_type, acl_groups, category,
         vector_store, metadata_store, schema_registry=schema_registry,
-        generate_fn=generate_fn)
+        generate_fn=generate_fn, dataset_id=dataset_id, hint_store=hint_store)
     logger.info(f"Tabular ingest: structured {len(ingested)} clean sheet(s) from {filename}")
     return grids, classifications, ingested
 

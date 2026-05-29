@@ -40,6 +40,7 @@ async def ingest_document(
     chunk_overlap=100,
     auto_categorize=False,
     original_filename="",
+    dataset_id=None,
 ):
     doc_id = str(uuid.uuid4())
     parsed = parse_document(Path(file_path))
@@ -108,6 +109,7 @@ async def ingest_document(
         grids, classifications, ingested = await ingest_structured_sheets(
             file_path, doc_id, parsed.filename, parsed.doc_type,
             acl_groups, category, vector_store, metadata_store,
+            dataset_id=dataset_id,
         )
         text_sheets = sheets_needing_text(grids, classifications, ingested)
     elif is_pdf:
@@ -116,6 +118,7 @@ async def ingest_document(
             await ingest_grids(
                 extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
                 acl_groups, category, vector_store, metadata_store,
+                dataset_id=dataset_id,
             )
             pdf_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
             logger.info(f"PDF structured extract [{parsed.filename}]: "

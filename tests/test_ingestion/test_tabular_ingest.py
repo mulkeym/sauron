@@ -464,3 +464,35 @@ async def test_ingest_grids_applies_seeded_glossary_to_narratives(monkeypatch):
     )
     joined = "\n".join(t for texts, _ in vs.upserts for t in texts)
     assert "Enlisted Member" in joined
+
+
+@pytest.mark.asyncio
+async def test_ingest_structured_sheets_forwards_dataset_id_for_glossary(tmp_path, monkeypatch):
+    """A DATASET-scoped glossary must annotate narratives when dataset_id is
+    threaded through ingest_structured_sheets. Auto-category is unreliable, so
+    glossaries are scoped to the stable dataset_id. The doc's category here does
+    NOT match any hint; only the dataset scope does."""
+    from src.config import settings
+    from src.db.hint_store import HintStore, SchemaHint
+    p = tmp_path / "pay.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Pay"
+    for row in [["grade", "over2", "over4"], ["O-1", "3998", "5031"],
+                ["O-2", "4606", "6042"], ["E-1", "2017", "2017"]]:
+        ws.append(row)
+    wb.save(p)
+    monkeypatch.setattr("src.ingestion.tabular_ingest.embed_texts",
+                        lambda texts, *a, **k: [[0.0, 0.0, 0.0] for _ in texts])
+    monkeypatch.setattr(settings, "tabular_duckdb_path", str(tmp_path / "t.duckdb"))
+    hs = HintStore()
+    hs.register(SchemaHint(scope_type="dataset", scope_value="2",
+                hint_type="value_glossary", target_column="grade",
+                payload={"E-*": "Enlisted Member", "O-*": "Commissioned Officer"}))
+    vs, ms, reg = _FakeVectorStore(), _FakeMetadataStore(), _FakeRegistry()
+    await ingest_structured_sheets(
+        str(p), "docDS", "pay.xlsx", "xlsx", ["g"], "unrelated_category",
+        vs, ms, schema_registry=reg,
+        generate_fn=lambda **k: '{"key_columns":["grade"],"measure_columns":["over2","over4"],'
+                                '"column_descriptions":{},"table_description":"pay"}',
+        dataset_id=2, hint_store=hs)
+    joined = "\n".join(t for texts, _ in vs.upserts for t in texts)
+    assert "Commissioned Officer" in joined   # resolved via dataset scope, not category
