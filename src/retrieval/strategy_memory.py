@@ -151,8 +151,6 @@ async def get_best_strategy(query_text: str) -> dict | None:
         "margin": round(margin, 3),
     }
 
-    if best:
-        logger.info(f"Strategy memory: pattern='{pattern}' -> best={best['strategy']} "
-                   f"(cited={best['avg_cited']}, margin={best['margin']:.0%}, n={best['count']})")
-
+    logger.info(f"Strategy memory: pattern='{pattern}' -> best={best['strategy']} "
+               f"(cited={best['avg_cited']}, margin={best['margin']:.0%}, n={best['count']})")
     return best
