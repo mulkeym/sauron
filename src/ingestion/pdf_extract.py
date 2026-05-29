@@ -83,6 +83,13 @@ def _page_tables(page, page_no: int) -> list[SheetGrid]:
     for n, raw in enumerate(raw_tables):
         g = normalize_grid(raw, sheet_name=f"p{page_no}_table{n}")
         if g.rows:
+            # Check integrity on the RAW table (before normalize pads it), so a
+            # sheared/mis-aligned extraction is visible rather than silently
+            # rectangularized. Fail-open: still ingest; classify_sheet routes it.
+            if not grid_width_consistent(SheetGrid(sheet_name=g.sheet_name, rows=raw)):
+                logger.warning(
+                    "PDF table %s has inconsistent row widths (possible "
+                    "mis-extraction); ingesting anyway", g.sheet_name)
             grids.append(g)
     return grids
 
