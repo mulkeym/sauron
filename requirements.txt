@@ -13,6 +13,7 @@ cryptography>=43.0.0
 
 # Ingestion
 unstructured[pdf,docx,xlsx]>=0.22.0
+pdfplumber>=0.11.0  # digital PDF table + prose extraction
 python-docx>=1.2.0
 openpyxl>=3.1.0
 xlrd>=2.0.1  # legacy binary .xls parsing (openpyxl only reads .xlsx)
