@@ -94,6 +94,21 @@ def profile_table(sheet_name: str, col_names: list[str], column_dtypes: list[str
         return _heuristic_profile(col_names, column_dtypes)
 
 
+def glossary_lookup(glossary: dict, value) -> str | None:
+    """Map a cell value to its meaning. Exact match wins; otherwise a glossary
+    key ending in ``*`` matches values starting with the prefix (e.g. ``E-*``
+    matches ``E-3``). Returns None if nothing matches."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s in glossary:
+        return glossary[s]
+    for code, meaning in glossary.items():
+        if isinstance(code, str) and code.endswith("*") and s.startswith(code[:-1]):
+            return meaning
+    return None
+
+
 def _fmt_cell(value) -> str:
     """Render a cell for a narrative; missing values are explicit, never faked."""
     if value is None:

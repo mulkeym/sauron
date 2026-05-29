@@ -2,6 +2,7 @@
 import json
 
 from src.ingestion.table_profiler import TableProfile, _heuristic_profile, profile_table, _fmt_cell, row_narrative, build_row_narratives
+from src.ingestion.table_profiler import glossary_lookup
 
 
 def test_heuristic_profile_splits_keys_and_measures_by_dtype():
@@ -140,3 +141,11 @@ def test_build_row_narratives_without_context():
 
 def test_build_row_narratives_empty_rows():
     assert build_row_narratives(["grade"], _PROFILE, []) == []
+
+
+def test_glossary_lookup_exact_then_prefix():
+    g = {"GS": "base", "E-*": "Enlisted Member", "O-*": "Commissioned Officer"}
+    assert glossary_lookup(g, "GS") == "base"          # exact wins
+    assert glossary_lookup(g, "E-3") == "Enlisted Member"
+    assert glossary_lookup(g, "O-10") == "Commissioned Officer"
+    assert glossary_lookup(g, "W-2") is None           # no match
