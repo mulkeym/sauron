@@ -79,6 +79,8 @@ class Settings(BaseSettings):
 
     # Strategy memory
     strategy_memory_enabled: bool = True
+    strategy_memory_min_runs: int = 3   # min recorded runs before memory may override routing
+    strategy_memory_margin: float = 0.15  # min normalized composite margin to override
 
     # Final-N reranking
     rerank_final_enabled: bool = True
