@@ -8,9 +8,11 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 FROM python:3.11-slim
 WORKDIR /app
 
-# System dependencies for document parsing
+# System dependencies for document parsing.
+# libgl1 + libglib2.0-0 are required by OpenCV (cv2), which unstructured hi_res
+# imports for scanned-PDF OCR layout/table detection.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tesseract-ocr libmagic1 poppler-utils curl \
+    tesseract-ocr libmagic1 poppler-utils curl libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from builder
