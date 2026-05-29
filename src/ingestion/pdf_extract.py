@@ -41,3 +41,18 @@ def normalize_grid(raw_rows: list[list], sheet_name: str) -> SheetGrid:
     keep = [i for i in range(width) if any(r[i] != "" for r in rows)]
     rows = [[r[i] for i in keep] for r in rows]
     return SheetGrid(sheet_name=sheet_name, rows=rows)
+
+
+def stitch_tables(grids: list[SheetGrid]) -> list[SheetGrid]:
+    """Merge consecutive grids whose first (header) row is identical, dropping
+    the repeated header on continuations. Header-equality is the merge key so
+    unrelated adjacent tables stay separate."""
+    out: list[SheetGrid] = []
+    for g in grids:
+        if not g.rows:
+            continue
+        if out and out[-1].rows and out[-1].rows[0] == g.rows[0]:
+            out[-1].rows.extend(g.rows[1:])      # append data rows, drop dup header
+        else:
+            out.append(SheetGrid(sheet_name=g.sheet_name, rows=[list(r) for r in g.rows]))
+    return out
