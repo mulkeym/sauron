@@ -25,3 +25,17 @@ def test_stitch_merges_consecutive_tables_with_matching_header():
     assert len(out) == 2
     assert out[0].rows == [["Grade", "Over 2"], ["O-1", "3998"], ["E-1", "2017"]]
     assert out[1].rows == [["Loc", "Pct"], ["RUS", "16.5"]]
+
+
+from src.ingestion.pdf_extract import grid_width_consistent
+
+
+def test_grid_width_consistent_detects_ragged_data():
+    good = SheetGrid("t", [["Grade", "A", "B"], ["O-1", "1", "2"], ["E-1", "3", "4"]])
+    bad = SheetGrid("t", [["Grade", "A", "B"], ["O-1", "1"], ["E-1", "3", "4", "5"]])
+    assert grid_width_consistent(good) is True
+    assert grid_width_consistent(bad) is False
+
+
+def test_grid_width_consistent_trivially_true_for_tiny_grid():
+    assert grid_width_consistent(SheetGrid("t", [["only one row"]])) is True

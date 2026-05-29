@@ -56,3 +56,13 @@ def stitch_tables(grids: list[SheetGrid]) -> list[SheetGrid]:
         else:
             out.append(SheetGrid(sheet_name=g.sheet_name, rows=[list(r) for r in g.rows]))
     return out
+
+
+def grid_width_consistent(grid: SheetGrid) -> bool:
+    """True if every data row has the same cell count as the header row. A
+    mismatch signals a sheared/misaligned extraction; such a grid should be
+    demoted to messy-region narratives rather than loaded as a DuckDB table."""
+    if len(grid.rows) < 2:
+        return True
+    header_w = len(grid.rows[0])
+    return all(len(r) == header_w for r in grid.rows[1:])
