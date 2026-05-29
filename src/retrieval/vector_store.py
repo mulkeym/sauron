@@ -48,6 +48,7 @@ class VectorStore:
         """Lazy-load and cache a raw sentence_transformers CrossEncoder for
         scoring explicit (query, text) pairs (the lancedb reranker only drives
         Lance query pipelines)."""
+        # NOTE: cached for the process lifetime; changing settings.rerank_model needs a restart.
         if cls._cross_encoder_model is None:
             from sentence_transformers import CrossEncoder
             cls._cross_encoder_model = CrossEncoder(settings.rerank_model)

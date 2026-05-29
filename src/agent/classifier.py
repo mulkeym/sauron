@@ -107,6 +107,6 @@ def _classify_node_factory(schema_registry):
                 logger.warning("Strategy memory lookup failed, keeping LLM pick: %s", e)
                 memory_decision["reason"] = "error"
 
-        result["strategy_memory"] = memory_decision
+        result["strategy_memory"] = memory_decision if settings.strategy_memory_enabled else None
         return result
     return classify_node

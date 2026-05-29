@@ -273,6 +273,7 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
     except Exception:
         chunks = []
 
+    _boosts = {}
     try:
         _boosts = await get_feedback_boosts(qv, user_groups)
         chunks = apply_feedback_boosts_to_chunks(chunks, _boosts)
@@ -280,4 +281,4 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
         pass
 
     return {"sql_results": trace.rows, "retrieved_chunks": chunks,
-            "structured_trace": trace.to_dict()}
+            "structured_trace": trace.to_dict(), "feedback_boosts": _boosts}
