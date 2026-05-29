@@ -1,7 +1,9 @@
 """Catalog-build helpers for file-metadata Q&A."""
+import pytest
 from types import SimpleNamespace
 from datetime import datetime, timezone
 
+from src.agent.strategies import metadata_catalog as mc
 from src.agent.strategies.metadata_catalog import (
     _flatten_tags, build_catalog_connection, CATALOG_SCHEMA,
 )
@@ -85,10 +87,6 @@ def test_build_catalog_created_at_date_filter():
     assert rows == [{"doc_id": "may"}]
 
 
-import pytest
-from src.agent.strategies import metadata_catalog as mc
-
-
 class _Store:
     def __init__(self, docs):
         self._docs = docs
@@ -156,3 +154,16 @@ async def test_sql_error_falls_back_to_snapshot(monkeypatch):
     snap = out["retrieved_chunks"][0]
     assert snap.metadata.doc_id == "metadata-context"
     assert "Total documents" in snap.text
+
+
+@pytest.mark.asyncio
+async def test_empty_rows_falls_back_to_snapshot(monkeypatch):
+    store = _Store([_doc(doc_id="a")])
+    def fake_sql(schema_prompt, question, generate_fn=None):
+        return "SELECT filename, doc_id FROM files WHERE doc_type = 'nonexistent'"
+    monkeypatch.setattr(mc, "generate_sql", fake_sql)
+    out = await mc.retrieve_metadata_catalog(_state(), metadata_store=store)
+    assert out["sql_results"] == []
+    assert out["structured_trace"]["status"] == "ran"      # SQL ran fine, just no rows
+    assert out["structured_trace"]["fell_back"] is True
+    assert out["retrieved_chunks"][0].metadata.doc_id == "metadata-context"

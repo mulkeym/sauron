@@ -1,6 +1,11 @@
 """File-metadata (catalog) Q&A: text-to-SQL over an ACL-pre-filtered in-memory
 DuckDB catalog of the documents the asking user can access."""
 import logging
+from collections import Counter
+
+from src.agent.strategies.structured import generate_sql, StructuredLookupTrace
+from src.ingestion.tabular_store import execute_duckdb_sql
+from src.retrieval.models import RetrievedChunk, ChunkMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +66,6 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
     return con
 
 
-from collections import Counter
-
-from src.agent.strategies.structured import generate_sql, StructuredLookupTrace
-from src.ingestion.tabular_store import execute_duckdb_sql
-from src.retrieval.models import RetrievedChunk, ChunkMetadata
-
 _ALLOWED = {"files", "datasets", "categories"}
 
 
@@ -81,7 +80,7 @@ def _citations_from_rows(rows, docs) -> list:
             d = by_id[did]
             chunks.append(RetrievedChunk(
                 text=f"{d.filename} (type: {d.doc_type}): {getattr(d, 'summary', '') or ''}",
-                score=0.9,
+                score=0.9,  # catalog hits rank high vs. vector chunks
                 metadata=ChunkMetadata(
                     doc_id=d.doc_id, filename=d.filename, doc_type=d.doc_type,
                     chunk_index=0, start_char=0,
@@ -95,7 +94,7 @@ def _catalog_snapshot_chunk(docs) -> RetrievedChunk:
     by_type = Counter(d.doc_type for d in docs)
     lines = [f"Total documents you can access: {len(docs)}",
              "By type: " + ", ".join(f"{k}: {v}" for k, v in sorted(by_type.items()))]
-    for d in docs[:50]:
+    for d in docs[:50]:  # cap the inline list to keep the snapshot within the LLM context budget
         lines.append(f"- {d.filename} (type {d.doc_type}, {getattr(d, 'chunk_count', 0) or 0} chunks)")
     return RetrievedChunk(
         text="Document catalog (metadata):\n" + "\n".join(lines),
@@ -141,6 +140,7 @@ async def retrieve_metadata_catalog(state, metadata_store=None, generate_fn=None
             con.close()
     except Exception as e:
         trace.status = "error"
+        trace.fell_back = True
         trace.error = str(e)
         logger.warning("Metadata catalog SQL failed: %s", e)
 
