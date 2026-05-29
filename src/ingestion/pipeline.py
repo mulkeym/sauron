@@ -1,3 +1,4 @@
+import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -5,12 +6,19 @@ from pathlib import Path
 from src.ingestion.parser import parse_document
 from src.ingestion.chunker import chunk_text
 from src.ingestion.embedder import embed_texts
-from src.ingestion.tabular_ingest import ingest_structured_sheets, SPREADSHEET_DOC_TYPES
+from src.ingestion.tabular_ingest import ingest_structured_sheets, ingest_grids, SPREADSHEET_DOC_TYPES
 from src.ingestion.tabular_chunker import sheets_needing_text, build_tier_chunks
+from src.ingestion.pdf_extract import extract_pdf
 from src.retrieval.models import ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 from src.db.metadata import MetadataStore
 from src.knowledge.categorizer import categorize_document
+
+logger = logging.getLogger(__name__)
+
+
+def _is_structured_pdf(doc_type: str) -> bool:
+    return doc_type == "pdf"
 
 
 @dataclass
@@ -90,7 +98,9 @@ async def ingest_document(
     chunks = []  # medium-tier chunks, retained for the return/entity count
 
     is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
+    is_pdf = _is_structured_pdf(parsed.doc_type)
     text_sheets = None
+    pdf_prose = None
     if is_spreadsheet:
         # Structured: clean sheets -> DuckDB + schema + row narratives; messy
         # sheets -> deterministic region narratives. Returns which clean sheets
@@ -100,12 +110,28 @@ async def ingest_document(
             acl_groups, category, vector_store, metadata_store,
         )
         text_sheets = sheets_needing_text(grids, classifications, ingested)
+    elif is_pdf:
+        try:
+            extracted = extract_pdf(Path(file_path))
+            await ingest_grids(
+                extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
+                acl_groups, category, vector_store, metadata_store,
+            )
+            pdf_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
+            logger.info(f"PDF structured extract [{parsed.filename}]: "
+                        f"{len(extracted.table_grids)} table(s), method={extracted.method}")
+        except Exception as e:
+            logger.warning(f"PDF structured extract failed for {parsed.filename}, "
+                           f"falling back to flat text: {e}")
+            is_pdf = False   # fall back to parsed.text chunking below
 
     for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
         if is_spreadsheet:
             # Structure-aware, row-atomic chunks for messy + failed-clean sheets
             # only. Clean sheets already in the structured store contribute none.
             tier_chunks = build_tier_chunks(text_sheets, chunk_size=tier_size)
+        elif is_pdf:
+            tier_chunks = chunk_text(pdf_prose or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
         else:
             tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
         texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]

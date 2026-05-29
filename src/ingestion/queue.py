@@ -14,6 +14,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _is_structured_pdf(doc_type: str) -> bool:
+    return doc_type == "pdf"
+
+
 class IngestStep(StrEnum):
     QUEUED = "queued"
     PARSING = "parsing"
@@ -189,8 +193,9 @@ class IngestQueue:
         from src.ingestion.parser import parse_document
         from src.ingestion.chunker import chunk_text
         from src.ingestion.embedder import embed_texts
-        from src.ingestion.tabular_ingest import ingest_structured_sheets, SPREADSHEET_DOC_TYPES
+        from src.ingestion.tabular_ingest import ingest_structured_sheets, ingest_grids, SPREADSHEET_DOC_TYPES
         from src.ingestion.tabular_chunker import sheets_needing_text, build_tier_chunks
+        from src.ingestion.pdf_extract import extract_pdf
         from src.knowledge.categorizer import categorize_document
         from src.retrieval.models import ChunkMetadata
 
@@ -292,7 +297,9 @@ class IngestQueue:
         # which clean sheets fully succeeded so we de-dup their full text below.
         # Mirrors the sync pipeline so both ingestion paths behave identically.
         is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
+        is_pdf = _is_structured_pdf(parsed.doc_type)
         text_sheets = None
+        pdf_prose = None
         if is_spreadsheet:
             self.update_step(job.job_id, IngestStep.STORING, "Structured spreadsheet ingest (DuckDB + narratives)")
             grids, classifications, ingested = await ingest_structured_sheets(
@@ -300,6 +307,19 @@ class IngestQueue:
                 job.acl_groups, category, vector_store, metadata_store,
             )
             text_sheets = sheets_needing_text(grids, classifications, ingested)
+        elif is_pdf:
+            self.update_step(job.job_id, IngestStep.STORING, "Structured PDF ingest (tables -> DuckDB + narratives)")
+            try:
+                extracted = await asyncio.to_thread(extract_pdf, Path(file_path))
+                await ingest_grids(
+                    extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
+                    job.acl_groups, category, vector_store, metadata_store,
+                )
+                pdf_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
+            except Exception as e:
+                logger.warning(f"PDF structured extract failed for {parsed.filename}, "
+                               f"falling back to flat text: {e}")
+                is_pdf = False
 
         for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
             self.update_step(job.job_id, IngestStep.CHUNKING, f"Chunking at {tier_name} ({tier_size} chars)")
@@ -307,6 +327,8 @@ class IngestQueue:
                 # Structure-aware, row-atomic chunks for messy + failed-clean sheets
                 # only. Clean sheets already in the structured store contribute none.
                 tier_chunks = build_tier_chunks(text_sheets, chunk_size=tier_size)
+            elif is_pdf:
+                tier_chunks = chunk_text(pdf_prose or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
             else:
                 tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
 
