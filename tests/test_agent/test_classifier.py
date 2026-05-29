@@ -293,6 +293,7 @@ async def test_resolve_hints_for_classifier_fails_open(monkeypatch):
 async def test_memory_does_not_override_analytical(monkeypatch):
     # LLM picks ANALYTICAL (capability-gated); memory wants lookup past the gates.
     # The override must be suppressed and recorded as "protected".
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
     def fake_generate(system_prompt, user_prompt, **kwargs):
         return '{"query_type": "analytical", "sub_tasks": []}'
     monkeypatch.setattr(classifier, "generate", fake_generate)
@@ -317,6 +318,7 @@ async def test_memory_does_not_override_analytical(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_still_overrides_non_analytical(monkeypatch):
     # Regression: a learned override among non-structured strategies still applies.
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
     def fake_generate(system_prompt, user_prompt, **kwargs):
         return '{"query_type": "lookup", "sub_tasks": []}'
     monkeypatch.setattr(classifier, "generate", fake_generate)
@@ -335,6 +337,7 @@ async def test_memory_still_overrides_non_analytical(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_agreement_on_analytical_unchanged(monkeypatch):
     # When memory agrees with an ANALYTICAL pick, reason stays "agreed".
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
     def fake_generate(system_prompt, user_prompt, **kwargs):
         return '{"query_type": "analytical", "sub_tasks": []}'
     monkeypatch.setattr(classifier, "generate", fake_generate)
@@ -353,6 +356,7 @@ async def test_memory_agreement_on_analytical_unchanged(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_below_gate_unchanged(monkeypatch):
     # A differing memory pick that fails the count gate is "below gate", no override.
+    monkeypatch.setattr(classifier.settings, "strategy_memory_enabled", True)
     def fake_generate(system_prompt, user_prompt, **kwargs):
         return '{"query_type": "lookup", "sub_tasks": []}'
     monkeypatch.setattr(classifier, "generate", fake_generate)
