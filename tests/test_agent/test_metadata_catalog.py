@@ -15,7 +15,7 @@ def _doc(doc_id="d1", filename="pay.pdf", doc_type="pdf", dataset_id=2,
         category=category, acl_groups=["executives"], chunk_count=5,
         source_url="", summary="active duty pay", uploaded_by="mike",
         created_at=datetime(2025, 5, 1, tzinfo=timezone.utc),
-        metadata_tags=tags or {"organizations": ["DoD"], "topics": ["Officer pay"]},
+        metadata_tags=(tags if tags is not None else {"organizations": ["DoD"], "topics": ["Officer pay"]}),
     )
 
 
@@ -71,3 +71,15 @@ def test_build_catalog_optional_datasets_categories():
 
 def test_catalog_schema_mentions_files_and_tags():
     assert "files" in CATALOG_SCHEMA and "tags" in CATALOG_SCHEMA
+
+
+def test_build_catalog_created_at_date_filter():
+    docs = [_doc(doc_id="may")]  # created_at = 2025-05-01 (UTC)
+    apr = _doc(doc_id="apr")
+    apr.created_at = datetime(2025, 4, 1, tzinfo=timezone.utc)
+    con = build_catalog_connection([*docs, apr], dataset_names={2: "DoD"})
+    rows = execute_duckdb_sql(
+        con,
+        "SELECT doc_id FROM files WHERE created_at >= '2025-05-01' AND created_at < '2025-06-01'",
+        allowed_tables={"files"})
+    assert rows == [{"doc_id": "may"}]

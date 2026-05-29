@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 CATALOG_SCHEMA = """Table "files" — one row per document the user can access:
   doc_id VARCHAR, filename VARCHAR, doc_type VARCHAR (e.g. 'pdf','xlsx','docx'),
   dataset VARCHAR (dataset name), category VARCHAR, uploaded_by VARCHAR,
-  created_at TIMESTAMP (when the file was uploaded), chunk_count INTEGER,
+  created_at TIMESTAMPTZ (when the file was uploaded), chunk_count INTEGER,
   summary VARCHAR, tags VARCHAR (lowercased extracted entities/organizations/amounts/topics/identifiers).
 Table "datasets" — name VARCHAR, description VARCHAR.
 Table "categories" — name VARCHAR, description VARCHAR.
@@ -35,7 +35,7 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
     con = duckdb.connect(":memory:", config={"enable_external_access": False})
     con.execute("""CREATE TABLE files (
         doc_id VARCHAR, filename VARCHAR, doc_type VARCHAR, dataset VARCHAR,
-        category VARCHAR, uploaded_by VARCHAR, created_at TIMESTAMP,
+        category VARCHAR, uploaded_by VARCHAR, created_at TIMESTAMPTZ,
         chunk_count INTEGER, summary VARCHAR, tags VARCHAR)""")
     for d in docs:
         con.execute(
