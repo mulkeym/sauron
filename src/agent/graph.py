@@ -17,6 +17,15 @@ from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 
 
+def _skip_enrich(state) -> bool:
+    """True when knowledge-graph enrichment should be skipped: explicitly via
+    skip_graph, or for METADATA (catalog) queries where graph context is noise."""
+    from src.agent.state import QueryType
+    if state.get("skip_graph"):
+        return True
+    return state.get("query_type") == QueryType.METADATA
+
+
 def _rerank_merge(state, vector_store) -> dict:
     """Final-N rerank of the consolidated chunk set (mutates chunk.score in
     place; consumers sort by score). Fail-open + flag-guarded."""
@@ -200,7 +209,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
     # Knowledge graph query — runs in parallel with retrieve (only needs question + user_groups)
     async def enrich_with_graph(state: AgentState) -> dict:
-        if state.get("skip_graph"):
+        if _skip_enrich(state):
             return {}
 
         question = state.get("question", "")
