@@ -137,3 +137,19 @@ async def test_lookup_then_structured_skips_when_sql_present(monkeypatch):
                                           vector_store=None, schema_registry=None)
     assert out["sql_results"] == [{"y": 2}]
     assert calls["struct"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_agent_temporal_does_not_nameerror():
+    # TEMPORAL (and the default else) branch used to reference an undefined
+    # _asyncio_lookup; they now route through _lookup_then_structured like LOOKUP.
+    mock_store = MagicMock()
+    mock_store.hybrid_search_reranked.return_value = [_make_chunk("Something dated 2025")]
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
+    with patch("src.agent.classifier.generate", return_value='{"query_type": "temporal", "sub_tasks": ["when"]}'):
+        with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024), \
+             patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
+            with patch("src.agent.synthesizer.generate", return_value="Here is the dated info [1]."):
+                from src.db.schema_registry import SchemaRegistry
+                result = await run_agent(question="what changed in 2025?", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
+    assert result.answer  # completed without NameError

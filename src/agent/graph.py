@@ -167,9 +167,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         elif query_type == QueryType.CROSS_REFERENCE:
             result = await retrieve_cross_reference(retry_state, vector_store=vector_store, schema_registry=schema_registry)
         elif query_type == QueryType.TEMPORAL:
-            result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
+            result = await _lookup_then_structured(retry_state, vector_store, schema_registry)
         else:
-            result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
+            result = await _lookup_then_structured(retry_state, vector_store, schema_registry)
 
         # Sub-task decomposition: run additional searches for each sub-task IN PARALLEL.
         # Skipped for METADATA: catalog answers come entirely from the catalog SQL, so
