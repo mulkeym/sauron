@@ -430,7 +430,15 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
             return {"structured_trace": trace.to_dict()}
         return {}
 
-    trace = await asyncio.to_thread(run_structured_lookup, question, relevant, "sweep", gate)
+    # Resolve domain hints (value glossaries, column/table notes) and pass them to
+    # the SQL generator — parity with retrieve_analytical. Without this the SWEEP
+    # SQL path saw bare locality codes and e.g. couldn't map "florida" -> MFL/PB.
+    try:
+        from src.api.routes_ingest import get_hint_store, get_metadata_store
+        hints = await resolve_hints_for_schemas(relevant, get_hint_store(), get_metadata_store())
+    except Exception:
+        hints = None
+    trace = await asyncio.to_thread(run_structured_lookup, question, relevant, "sweep", gate, None, hints)
 
     chunks: list = []
     try:

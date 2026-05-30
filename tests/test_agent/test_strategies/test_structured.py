@@ -109,9 +109,13 @@ async def test_retrieve_structured_returns_sql_and_narratives(monkeypatch):
     monkeypatch.setattr(structured, "tables_relevant_scored",
                         lambda q, s: [(schemas[0], 0.71, True)])
     monkeypatch.setattr(structured, "run_structured_lookup",
-                        lambda q, s, query_type, gate=None: StructuredLookupTrace(
+                        lambda q, s, query_type, gate=None, generate_fn=None, hints=None: StructuredLookupTrace(
                             query_type="sweep", gate=gate, status="ran", sql="SELECT 1",
                             row_count=1, sample_rows=[{"salary": 86415.0}], rows=[{"salary": 86415.0}]))
+
+    async def _no_hints(schemas_arg, hint_store, metadata_store):
+        return {}
+    monkeypatch.setattr(structured, "resolve_hints_for_schemas", _no_hints)
     monkeypatch.setattr(structured, "embed_query", lambda q: [0.0])
 
     class _VS:
@@ -142,6 +146,50 @@ async def test_retrieve_structured_skipped_trace_when_gate_misses(monkeypatch):
     assert "sql_results" not in out
     assert out["structured_trace"]["status"] == "skipped"
     assert out["structured_trace"]["gate"] == [["t_pay", 0.1, False]]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_structured_passes_resolved_hints(monkeypatch):
+    """The SWEEP structured path must resolve domain hints (value glossaries) and
+    pass them to run_structured_lookup — parity with retrieve_analytical. Without
+    this the SQL generator sees bare locality codes and can't map e.g. 'florida'."""
+    schemas = [SimpleNamespace(table="t_pay", description="pay",
+                               columns=[SimpleNamespace(name="locname")])]
+
+    class _Reg:
+        def list_for_user(self, g):
+            return schemas
+
+    monkeypatch.setattr(structured, "tables_relevant_scored",
+                        lambda q, s: [(schemas[0], 0.71, True)])
+    import src.api.routes_ingest as ri
+    monkeypatch.setattr(ri, "get_hint_store", lambda: "HS")
+    monkeypatch.setattr(ri, "get_metadata_store", lambda: "MS")
+
+    SENTINEL = {"t_pay": "RESOLVED"}
+
+    async def fake_resolve(schemas_arg, hint_store, metadata_store):
+        return SENTINEL
+    monkeypatch.setattr(structured, "resolve_hints_for_schemas", fake_resolve)
+
+    captured = {}
+
+    def fake_run(q, s, query_type, gate=None, generate_fn=None, hints=None):
+        captured["hints"] = hints
+        return StructuredLookupTrace(query_type="sweep", gate=gate, status="ran",
+                                     sql="SELECT 1", row_count=1,
+                                     sample_rows=[{"x": 1}], rows=[{"x": 1}])
+    monkeypatch.setattr(structured, "run_structured_lookup", fake_run)
+    monkeypatch.setattr(structured, "embed_query", lambda q: [0.0])
+
+    class _VS:
+        def search(self, **kw):
+            return []
+
+    await structured.retrieve_structured(
+        {"question": "what is the pay rate for florida?", "user_groups": ["ALL"]},
+        vector_store=_VS(), schema_registry=_Reg())
+    assert captured["hints"] == SENTINEL
 
 
 @pytest.mark.asyncio
