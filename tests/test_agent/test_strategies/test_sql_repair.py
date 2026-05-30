@@ -227,3 +227,59 @@ def test_generate_sql_omits_thinking_when_false():
     def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
         return "SELECT 1"
     assert S.generate_sql("SCHEMA", "q", generate_fn=fake_gen) == "SELECT 1"
+
+
+def test_fit_enables_thinking_on_wide_table(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    monkeypatch.setattr("src.config.settings.sql_wide_table_cell_threshold", 1)  # pay (9 cells) counts as wide
+    monkeypatch.setattr("src.config.settings.sql_thinking_on_wide_table", True)
+    seen = {}
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048, **kwargs):
+        seen["thinking"] = kwargs.get("thinking", False)
+        return "SELECT * FROM pay"
+    con = _make_con_with_pay()
+    S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert seen["thinking"] is True
+
+
+def test_fit_no_thinking_on_small_table(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    monkeypatch.setattr("src.config.settings.sql_wide_table_cell_threshold", 100000)  # not wide
+    monkeypatch.setattr("src.config.settings.sql_thinking_on_wide_table", True)
+    seen = {}
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048, **kwargs):
+        seen["thinking"] = kwargs.get("thinking", False)
+        return "SELECT * FROM pay"
+    con = _make_con_with_pay()
+    S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert seen["thinking"] is False
+
+
+def test_fit_thinking_disabled_by_config(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    monkeypatch.setattr("src.config.settings.sql_wide_table_cell_threshold", 1)  # wide
+    monkeypatch.setattr("src.config.settings.sql_thinking_on_wide_table", False)  # but master switch off
+    seen = {}
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048, **kwargs):
+        seen["thinking"] = kwargs.get("thinking", False)
+        return "SELECT * FROM pay"
+    con = _make_con_with_pay()
+    S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert seen["thinking"] is False
+
+
+def test_fit_judge_call_never_thinks(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", True)
+    monkeypatch.setattr("src.config.settings.sql_wide_table_cell_threshold", 1)   # wide -> sql gen thinks
+    monkeypatch.setattr("src.config.settings.sql_thinking_on_wide_table", True)
+    monkeypatch.setattr("src.config.settings.sql_result_budget_chars", 10)        # force too_large -> judge runs
+    monkeypatch.setattr("src.config.settings.sql_repair_max_retries", 1)
+    judge_thinking = []
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048, **kwargs):
+        if system_prompt == S._JUDGE_PROMPT:
+            judge_thinking.append(kwargs.get("thinking", False))
+            return '{"helpful": true}'
+        return "SELECT * FROM pay"
+    con = _make_con_with_pay()
+    S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert judge_thinking and all(t is False for t in judge_thinking)

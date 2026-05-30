@@ -250,6 +250,7 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
     allowed = {s.table for s in schemas}
     base_schema_prompt = schema_prompt_with_values(schemas, con, hints=hints)
     steering = _wide_table_steering(con, schemas)
+    thinking = bool(steering) and settings.sql_thinking_on_wide_table
 
     best = None            # (sql, rows) best valid result seen
     best_verdict = "error"
@@ -262,7 +263,8 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
         sql = ""
         try:
             sql = generate_sql(base_schema_prompt, question, generate_fn=gen,
-                               extra_user_context=extra, temperature=temperature)
+                               extra_user_context=extra, temperature=temperature,
+                               thinking=thinking)
             rows = run_sql(con, sql, allowed)
         except Exception as e:
             last_error = str(e)
