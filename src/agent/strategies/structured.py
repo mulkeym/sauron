@@ -197,14 +197,17 @@ class StructuredLookupTrace:
         }
 
 
-def generate_sql(schema_prompt: str, question: str, generate_fn=None) -> str:
+def generate_sql(schema_prompt: str, question: str, generate_fn=None,
+                 *, extra_user_context: str = "", temperature: float = 0.0) -> str:
     """LLM text-to-SQL for one question + rendered schema prompt; returns the
-    extracted SQL string (robust to prose/code-fence wrapping)."""
+    extracted SQL string (robust to prose/code-fence wrapping). ``extra_user_context``
+    carries pre-flight steering or retry feedback; ``temperature`` is raised on
+    retries so the model does not deterministically regenerate the same query."""
     gen = generate_fn or generate
     raw = gen(
         system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
-        user_prompt=f"Question: {question}",
-        temperature=0.0,
+        user_prompt=f"Question: {question}{extra_user_context}",
+        temperature=temperature,
         max_tokens=2048,
     )
     sql = _extract_sql(raw)

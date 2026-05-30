@@ -96,3 +96,17 @@ def test_relevance_judge_defaults_helpful_on_bad_json():
     helpful, reason = S._relevance_judge(fake_gen, "q", [{"a": 1}])
     assert helpful is True
     assert reason == ""
+
+
+def test_generate_sql_passes_extra_context_and_temp():
+    seen = {}
+    def fake_gen(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
+        seen["user"] = user_prompt
+        seen["temp"] = temperature
+        return "SELECT 1"
+    sql = S.generate_sql("SCHEMA", "my question", generate_fn=fake_gen,
+                         extra_user_context="\nNOTE: aggregate please", temperature=0.3)
+    assert sql == "SELECT 1"
+    assert "my question" in seen["user"]
+    assert "aggregate please" in seen["user"]
+    assert seen["temp"] == 0.3
