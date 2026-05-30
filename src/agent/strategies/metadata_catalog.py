@@ -14,7 +14,8 @@ CATALOG_SCHEMA = """Table "files" — one row per document the user can access:
   doc_id VARCHAR, filename VARCHAR, doc_type VARCHAR (e.g. 'pdf','xlsx','docx'),
   dataset VARCHAR (dataset name), category VARCHAR, uploaded_by VARCHAR,
   created_at TIMESTAMPTZ (when the file was uploaded), chunk_count INTEGER,
-  summary VARCHAR, tags VARCHAR (lowercased extracted entities/organizations/amounts/topics/identifiers).
+  summary VARCHAR, source_url VARCHAR (origin URL for web-connector files; '' if uploaded directly),
+  tags VARCHAR (lowercased extracted entities/organizations/amounts/topics/identifiers).
 Table "datasets" — name VARCHAR, description VARCHAR.
 Table "categories" — name VARCHAR, description VARCHAR.
 Rules: use ILIKE for case-insensitive text/tag matching; use COUNT for "how many";
@@ -43,10 +44,10 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
     con.execute("""CREATE TABLE files (
         doc_id VARCHAR, filename VARCHAR, doc_type VARCHAR, dataset VARCHAR,
         category VARCHAR, uploaded_by VARCHAR, created_at TIMESTAMPTZ,
-        chunk_count INTEGER, summary VARCHAR, tags VARCHAR)""")
+        chunk_count INTEGER, summary VARCHAR, source_url VARCHAR, tags VARCHAR)""")
     for d in docs:
         con.execute(
-            "INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [d.doc_id, d.filename, d.doc_type,
              dataset_names.get(getattr(d, "dataset_id", 0), ""),
              getattr(d, "category", "") or "",
@@ -54,6 +55,7 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
              getattr(d, "created_at", None),
              getattr(d, "chunk_count", 0) or 0,
              getattr(d, "summary", "") or "",
+             getattr(d, "source_url", "") or "",
              _flatten_tags(getattr(d, "metadata_tags", None))])
     if datasets is not None:
         con.execute("CREATE TABLE datasets (name VARCHAR, description VARCHAR)")
