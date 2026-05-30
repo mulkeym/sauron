@@ -55,6 +55,22 @@ def test_catalog_schema_mentions_source_url():
     assert "source_url" in CATALOG_SCHEMA
 
 
+def test_build_catalog_decodes_urlencoded_filename():
+    # Web-connector filenames are stored URL-encoded (%20); the catalog should
+    # expose them human-readable so a natural-language name matches.
+    con = build_catalog_connection(
+        [_doc(filename="HRFC%20Newsletter%20January%202021.pdf")],
+        dataset_names={2: "DoD"})
+    rows = execute_duckdb_sql(
+        con, "SELECT filename FROM files WHERE filename = 'HRFC Newsletter January 2021.pdf'",
+        allowed_tables={"files"})
+    assert rows == [{"filename": "HRFC Newsletter January 2021.pdf"}]
+
+
+def test_catalog_schema_notes_human_readable_filenames():
+    assert "human-readable" in CATALOG_SCHEMA
+
+
 def test_build_catalog_count_aggregate():
     docs = [_doc(doc_id="a", doc_type="pdf"), _doc(doc_id="b", doc_type="pdf"),
             _doc(doc_id="c", doc_type="xlsx")]

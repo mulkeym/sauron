@@ -3,6 +3,7 @@ DuckDB catalog of the documents the asking user can access."""
 import logging
 from collections import Counter
 from datetime import date, datetime
+from urllib.parse import unquote
 
 from src.agent.strategies.structured import generate_sql, StructuredLookupTrace
 from src.ingestion.tabular_store import execute_duckdb_sql
@@ -19,8 +20,17 @@ CATALOG_SCHEMA = """Table "files" — one row per document the user can access:
 Table "datasets" — name VARCHAR, description VARCHAR.
 Table "categories" — name VARCHAR, description VARCHAR.
 Rules: use ILIKE for case-insensitive text/tag matching; use COUNT for "how many";
+filenames are stored human-readable (spaces, not %20) — match them with ILIKE and
+wildcards (e.g. filename ILIKE '%newsletter january 2021%'), not exact =, since the
+user may give a partial or differently-spaced name;
 when listing specific files, always SELECT filename AND doc_id;
 add LIMIT 100 when listing rows, unless the question asks for all rows or for a count."""
+
+
+def _clean_filename(name) -> str:
+    """Decode URL-encoded filenames (web-connector docs are stored with %20 etc.)
+    so the catalog exposes human-readable names that match natural-language queries."""
+    return unquote(name or "")
 
 
 def _flatten_tags(metadata_tags) -> str:
@@ -48,7 +58,7 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
     for d in docs:
         con.execute(
             "INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            [d.doc_id, d.filename, d.doc_type,
+            [d.doc_id, _clean_filename(d.filename), d.doc_type,
              dataset_names.get(getattr(d, "dataset_id", 0), ""),
              getattr(d, "category", "") or "",
              getattr(d, "uploaded_by", "") or "",
