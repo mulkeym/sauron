@@ -110,3 +110,61 @@ def test_generate_sql_passes_extra_context_and_temp():
     assert "my question" in seen["user"]
     assert "aggregate please" in seen["user"]
     assert seen["temp"] == 0.3
+
+
+def _make_con_with_pay():
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE pay AS SELECT * FROM (VALUES "
+                "('Tampa','GS-12',86415),('Boston','GS-12',92000),('Denver','GS-13',99000)) "
+                "AS t(locality, grade, salary)")
+    return con
+
+
+def test_fit_clean_result_one_generation():
+    calls = []
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        calls.append(user_prompt)
+        return "SELECT * FROM pay"
+    con = _make_con_with_pay()
+    res = S._generate_run_fit(con, "what are the pay rates?", [_schema("pay", 3)],
+                              generate_fn=fake_gen)
+    assert res.verdict == "satisfactory"
+    assert res.attempts == 1
+    assert len(res.rows) == 3
+    assert len(calls) == 1  # no retry, no judge
+
+
+def test_fit_retries_when_first_is_empty(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    seq = iter(["SELECT * FROM pay WHERE locality='nowhere'",  # empty
+                "SELECT * FROM pay"])                          # good
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        return next(seq)
+    con = _make_con_with_pay()
+    res = S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert res.verdict == "satisfactory"
+    assert res.attempts == 2
+    assert len(res.rows) == 3
+
+
+def test_fit_exhausts_and_returns_best_valid(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    monkeypatch.setattr("src.config.settings.sql_result_budget_chars", 10)  # force too_large
+    monkeypatch.setattr("src.config.settings.sql_repair_max_retries", 2)
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        return "SELECT * FROM pay"  # always too_large under budget=10
+    con = _make_con_with_pay()
+    res = S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert res.verdict == "too_large"
+    assert res.attempts == 3  # orig + 2 retries
+    assert len(res.rows) == 3  # best valid result kept, not discarded
+
+
+def test_fit_raises_when_all_attempts_error(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        return "SELEKT bad sql"  # raises in run_sql
+    con = _make_con_with_pay()
+    import pytest
+    with pytest.raises(Exception):
+        S._generate_run_fit(con, "q", [_schema("pay", 3)], generate_fn=fake_gen)

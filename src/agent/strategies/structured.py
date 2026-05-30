@@ -224,6 +224,68 @@ def run_sql(con, sql: str, allowed_tables: set) -> list[dict]:
     return rows
 
 
+@dataclass
+class SqlFitResult:
+    """Outcome of the gate + bounded repair loop."""
+    sql: str
+    rows: list = field(default_factory=list)
+    attempts: int = 0
+    verdict: str = "satisfactory"
+
+
+def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=None) -> SqlFitResult:
+    """Pre-flight wide-table gate, then a bounded generate->run->classify loop.
+    Returns the first satisfactory result, or the best valid (non-error) result
+    after exhausting retries. Raises only if EVERY attempt errored (no valid
+    result was ever produced) so callers' existing error paths still engage.
+
+    Uses one read-only connection supplied by the caller. Synchronous."""
+    from src.config import settings
+    from src.ingestion.tabular_store import schema_prompt_with_values
+    gen = generate_fn or generate
+    allowed = {s.table for s in schemas}
+    base_schema_prompt = schema_prompt_with_values(schemas, con, hints=hints)
+    steering = _wide_table_steering(con, schemas)
+
+    best = None            # (sql, rows) best valid result seen
+    best_verdict = "error"
+    extra = steering       # first attempt carries the gate steering
+    last_error = ""
+    max_attempts = settings.sql_repair_max_retries + 1
+
+    for attempt in range(max_attempts):
+        temperature = 0.0 if attempt == 0 else 0.3
+        sql = generate_sql(base_schema_prompt, question, generate_fn=gen,
+                           extra_user_context=extra, temperature=temperature)
+        try:
+            rows = run_sql(con, sql, allowed)
+        except Exception as e:
+            last_error = str(e)
+            verdict = "error"
+            extra = "\n" + _repair_feedback("error", rows=[], sql=sql,
+                                            question=question, error=last_error)
+            continue
+
+        verdict = _classify_sql_result(rows)
+        if verdict == "satisfactory":
+            return SqlFitResult(sql=sql, rows=rows, attempts=attempt + 1, verdict=verdict)
+
+        best = (sql, rows)          # valid but unsatisfactory — keep as fallback
+        best_verdict = verdict
+        if attempt < max_attempts - 1:
+            reason = ""
+            if settings.sql_relevance_judge_enabled:
+                helpful, reason = _relevance_judge(gen, question, rows)
+                if helpful:
+                    reason = ""
+            extra = "\n" + _repair_feedback(verdict, rows=rows, sql=sql,
+                                            question=question, judge_reason=reason)
+
+    if best is not None:
+        return SqlFitResult(sql=best[0], rows=best[1], attempts=max_attempts, verdict=best_verdict)
+    raise RuntimeError(f"text-to-SQL produced no valid query: {last_error}")
+
+
 def run_structured_lookup(question: str, schemas, query_type: str,
                           gate: list | None = None, generate_fn=None, hints=None) -> StructuredLookupTrace:
     """Generate + run SQL and capture a full trace. Never raises: a failure is
