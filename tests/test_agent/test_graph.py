@@ -35,10 +35,9 @@ async def test_run_agent_lookup():
     with patch("src.agent.classifier.generate", return_value='{"query_type": "lookup", "sub_tasks": ["Find policy 4.2"]}'):
         with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024), \
              patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
-            with patch("src.agent.evaluator.generate", return_value='{"sufficient": true, "reason": "ok"}'):
-                with patch("src.agent.synthesizer.generate", return_value="Policy 4.2 requires approval for expenses over $500 [1]."):
-                    from src.db.schema_registry import SchemaRegistry
-                    result = await run_agent(question="What is policy 4.2?", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
+            with patch("src.agent.synthesizer.generate", return_value="Policy 4.2 requires approval for expenses over $500 [1]."):
+                from src.db.schema_registry import SchemaRegistry
+                result = await run_agent(question="What is policy 4.2?", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
     assert "approval" in result.answer.lower() or "500" in result.answer
     assert len(result.citations) >= 1
 
