@@ -255,9 +255,10 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
 
     for attempt in range(max_attempts):
         temperature = 0.0 if attempt == 0 else 0.3
-        sql = generate_sql(base_schema_prompt, question, generate_fn=gen,
-                           extra_user_context=extra, temperature=temperature)
+        sql = ""
         try:
+            sql = generate_sql(base_schema_prompt, question, generate_fn=gen,
+                               extra_user_context=extra, temperature=temperature)
             rows = run_sql(con, sql, allowed)
         except Exception as e:
             last_error = str(e)
@@ -308,7 +309,6 @@ def run_structured_lookup(question: str, schemas, query_type: str,
         trace.rows = fit.rows
         trace.row_count = len(fit.rows)
         trace.sample_rows = fit.rows[:5]
-        trace.fell_back = fit.attempts > 1  # signal the loop had to retry
     except Exception as e:
         trace.status = "error"
         trace.error = str(e)

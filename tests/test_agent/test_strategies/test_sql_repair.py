@@ -195,3 +195,19 @@ def test_structured_sql_rows_uses_loop(monkeypatch):
         return next(seq)
     rows = S.structured_sql_rows("pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
     assert len(rows) == 3  # recovered after empty first attempt
+
+
+def test_loop_passes_judge_reason_into_retry(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", True)
+    monkeypatch.setattr("src.config.settings.sql_result_budget_chars", 10)  # force too_large
+    monkeypatch.setattr("src.config.settings.sql_repair_max_retries", 1)
+    sql_prompts = []
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        if system_prompt == S._JUDGE_PROMPT:
+            return '{"helpful": false, "reason": "wrong entity"}'
+        sql_prompts.append(user_prompt)
+        return "SELECT * FROM pay"
+    con = _make_con_with_pay()
+    S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    # the second SQL-generation prompt must carry the judge's reason as feedback
+    assert any("wrong entity" in p for p in sql_prompts[1:])
