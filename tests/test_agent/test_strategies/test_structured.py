@@ -235,6 +235,15 @@ def test_extract_sql_from_prose_without_fence():
     assert structured._extract_sql(resp) == "SELECT a FROM t WHERE x = 1"
 
 
+def test_extract_sql_returns_empty_when_no_sql_keyword():
+    """Reasoning prose that never commits to a SELECT/WITH (e.g. thinking that ran
+    out of tokens mid-ramble and leaked via reasoning_content) must NOT be passed
+    to the executor as a query. Return '' so the caller fails cleanly into the
+    repair loop instead of running reasoning text against DuckDB."""
+    prose = "Actually, I'll just use locname='FL'. Wait, let me check the list again. Hmm."
+    assert structured._extract_sql(prose) == ""
+
+
 from src.agent.strategies.structured import (
     StructuredLookupTrace, run_structured_lookup, tables_relevant_scored,
 )

@@ -68,8 +68,13 @@ def _extract_sql(response: str) -> str:
     candidates = [f.strip() for f in fences if f.strip()]
     block = candidates[-1] if candidates else text
     m = _SQL_START.search(block)
-    if m:
-        block = block[m.start():]
+    if not m:
+        # No SELECT/WITH anywhere — this is prose (e.g. leaked reasoning that ran
+        # out of tokens before committing to a query), not SQL. Return "" so the
+        # executor rejects it cleanly and the repair loop retries, rather than
+        # passing reasoning text to DuckDB.
+        return ""
+    block = block[m.start():]
     return block.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
 
 
