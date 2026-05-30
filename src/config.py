@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     llm_seed: int = 0  # fixed seed for deterministic LLM sampling (classification stability)
     map_doc_char_budget: int = 80000  # max chars per MAP extraction call (~20K tokens); tighter than llm_max_context so one oversized doc can't run to the request timeout
 
+    # Structured/SQL consolidation + repair loop
+    sql_result_budget_chars: int = 130000  # serialized SQL-result size (chars) that counts as "too large"; ~65% of llm_max_context, kept under the synthesizer cap. Effective budget is min(this, 0.65*llm_max_context).
+    sql_wide_table_cell_threshold: int = 5000  # rows*cols above which the pre-flight gate steers text-to-SQL away from SELECT *
+    sql_repair_max_retries: int = 2  # retries after the first generation (so max 3 generations total)
+    sql_relevance_judge_enabled: bool = True  # on a flagged result, ask the LLM why it's unhelpful and feed that into the retry
+
     # Relevance feedback
     feedback_enabled: bool = True
     feedback_similarity_threshold: float = 0.85
