@@ -74,3 +74,8 @@ def test_wide_table_gate_silent_for_small_table(monkeypatch):
     con = duckdb.connect(":memory:")
     con.execute("CREATE TABLE small AS SELECT range AS c0 FROM range(3)")
     assert S._wide_table_steering(con, [_schema("small", 1)]) == ""
+
+
+def test_prompt_no_longer_prefers_select_star():
+    assert "prefer `SELECT *`" not in S.TEXT_TO_SQL_PROMPT
+    assert "narrowest set of columns" in S.TEXT_TO_SQL_PROMPT
