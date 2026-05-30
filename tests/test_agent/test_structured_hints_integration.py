@@ -56,9 +56,9 @@ def test_text_to_sql_prompt_directs_self_explanatory_projection():
     # measure columns (annual1..annual10) and dropped the identifying `grade`/
     # `locname` columns, leaving rows of bare numbers the synthesizer couldn't
     # interpret. The prompt must tell the model to include the label/identifying
-    # columns and prefer SELECT * when unsure.
+    # columns and prefer the narrowest set of columns that answers the question.
     from src.agent.strategies.structured import TEXT_TO_SQL_PROMPT
     p = TEXT_TO_SQL_PROMPT.lower()
     assert "self-explanatory" in p
     assert "identifying" in p
-    assert "select *" in p
+    assert "narrowest set of columns" in p
