@@ -79,3 +79,20 @@ def test_wide_table_gate_silent_for_small_table(monkeypatch):
 def test_prompt_no_longer_prefers_select_star():
     assert "prefer `SELECT *`" not in S.TEXT_TO_SQL_PROMPT
     assert "narrowest set of columns" in S.TEXT_TO_SQL_PROMPT
+
+
+def test_relevance_judge_parses_unhelpful():
+    def fake_gen(system_prompt, user_prompt, **kw):
+        return '{"helpful": false, "reason": "rows are about grades not localities"}'
+    helpful, reason = S._relevance_judge(fake_gen, "what are pay rates by locality?",
+                                         [{"grade": "GS-12"}])
+    assert helpful is False
+    assert "localities" in reason
+
+
+def test_relevance_judge_defaults_helpful_on_bad_json():
+    def fake_gen(system_prompt, user_prompt, **kw):
+        return "not json at all"
+    helpful, reason = S._relevance_judge(fake_gen, "q", [{"a": 1}])
+    assert helpful is True
+    assert reason == ""

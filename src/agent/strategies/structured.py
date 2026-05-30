@@ -144,6 +144,27 @@ def _wide_table_steering(con, schemas) -> str:
             "the question.")
 
 
+_JUDGE_PROMPT = """You check whether SQL result rows answer a user's question.
+Respond with ONLY a JSON object: {"helpful": true|false, "reason": "<short reason if not helpful>"}.
+Mark helpful=false only when the rows clearly do not address the question (wrong entity,
+wrong columns, off-topic). If they plausibly answer it, mark helpful=true."""
+
+
+def _relevance_judge(gen, question: str, rows: list[dict]) -> tuple[bool, str]:
+    """Ask the LLM whether a sample of rows answers the question. Fail-open:
+    any parse/LLM problem returns (True, '') so we never block on the judge."""
+    sample = json.dumps(rows[:5], default=str)
+    try:
+        raw = gen(system_prompt=_JUDGE_PROMPT,
+                  user_prompt=f"Question: {question}\nResult rows (sample): {sample}",
+                  temperature=0.0, max_tokens=256)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+        return bool(data.get("helpful", True)), str(data.get("reason", "") or "")
+    except Exception:
+        return True, ""
+
+
 @dataclass
 class StructuredLookupTrace:
     """Per-query record of the structured/SQL retrieval attempt, for the
