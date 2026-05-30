@@ -292,3 +292,21 @@ def test_no_sql_citation_when_zero_rows(monkeypatch):
         )
         result = synthesize_answer(state)
     assert all(c.doc_id != "docpay" for c in result["citations"])
+
+
+def test_synthesis_context_caps_wide_sql_result():
+    from src.agent.synthesizer import build_synthesis_context
+    from src.config import settings
+    # Realistic OPM GS shape: 885 rows x 32 cols of real-looking values.
+    big = [{f"col_{c}": f"value_{r}_{c}_xxxxxxxxxx" for c in range(32)} for r in range(885)]
+    state = AgentState(
+        question="what are the pay rates?",
+        user_groups=["finance"],
+        query_type=QueryType.ANALYTICAL,
+        retrieved_chunks=[],
+        sql_results=big,
+        structured_trace={"sql": "SELECT * FROM gs_pay", "schema_context": "gs_pay(...)"},
+    )
+    ctx = build_synthesis_context(state)
+    assert len(ctx) <= settings.llm_max_context          # never overflows
+    assert "showing" in ctx and "of 885" in ctx          # truncation is disclosed
