@@ -283,3 +283,14 @@ def test_fit_judge_call_never_thinks(monkeypatch):
     con = _make_con_with_pay()
     S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
     assert judge_thinking and all(t is False for t in judge_thinking)
+
+
+def test_wide_table_steering_leads_with_aggregation_example(monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "sql_wide_table_cell_threshold", 100)
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE big AS SELECT range AS c0, range AS c1 FROM range(60)")
+    block = S._wide_table_steering(con, [_schema("big", 2)])
+    assert "GROUP BY" in block            # worked aggregation example present
+    assert "aggregation" in block.lower()
+    assert "LIMIT" not in block            # no longer offered as an equal option

@@ -138,10 +138,13 @@ def _wide_table_steering(con, schemas) -> str:
             wide.append(f'{s.table} (~{nrows} rows x {ncols} cols)')
     if not wide:
         return ""
-    return ("\nNOTE: " + "; ".join(wide) + " — returning every row is unhelpful and will be "
-            "truncated. Prefer aggregation (MIN/MAX/AVG with GROUP BY on low-cardinality "
-            "columns such as locality/grade) or scope with WHERE/LIMIT to directly answer "
-            "the question.")
+    first = wide[0].split(" ")[0]  # a representative wide table name for the example
+    return ("\nNOTE: " + "; ".join(wide) + " — returning every row is rarely what's wanted. "
+            "The most useful answer is usually an aggregation — for example "
+            f"`SELECT grade, MIN(annual1), MAX(annual10) FROM {first} GROUP BY grade`. "
+            "Aggregate the measure columns over the low-cardinality identifying columns "
+            "(e.g. grade, locality). Only return raw rows if the question genuinely asks "
+            "for specific records.")
 
 
 _JUDGE_PROMPT = """You check whether SQL result rows answer a user's question.
