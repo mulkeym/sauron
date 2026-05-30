@@ -1,5 +1,7 @@
 import json
+import duckdb
 from src.agent.strategies import structured as S
+from src.db.schema_registry import TableSchema, ColumnSchema
 
 
 def test_classify_empty():
@@ -48,3 +50,27 @@ def test_feedback_includes_judge_reason():
     fb = S._repair_feedback("too_large", rows=rows, sql="SELECT * FROM t",
                             question="q", judge_reason="wrong column")
     assert "wrong column" in fb
+
+
+def _schema(table, ncols):
+    return TableSchema(database="tab", table=table,
+                       columns=[ColumnSchema(name=f"c{i}", dtype="DOUBLE") for i in range(ncols)])
+
+
+def test_wide_table_gate_fires_for_big_table(monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "sql_wide_table_cell_threshold", 100)
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE big AS SELECT range AS c0, range AS c1 FROM range(60)")  # 60 rows
+    schema = _schema("big", 2)  # 60*2 = 120 > 100
+    block = S._wide_table_steering(con, [schema])
+    assert "big" in block
+    assert "aggregat" in block.lower()
+
+
+def test_wide_table_gate_silent_for_small_table(monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "sql_wide_table_cell_threshold", 100000)
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE small AS SELECT range AS c0 FROM range(3)")
+    assert S._wide_table_steering(con, [_schema("small", 1)]) == ""

@@ -121,6 +121,29 @@ def _repair_feedback(verdict: str, *, rows: list[dict], sql: str, question: str,
     return "\n".join(parts)
 
 
+def _wide_table_steering(con, schemas) -> str:
+    """Pre-flight: for each candidate table, estimate rows*cols. If any exceeds
+    the configured cell threshold, return a steering block telling the model to
+    aggregate/scope rather than SELECT *. Returns '' when no table is wide.
+    Never raises — a missing/unreadable table is simply skipped."""
+    from src.config import settings
+    wide = []
+    for s in schemas:
+        try:
+            nrows = con.execute(f'SELECT COUNT(*) FROM "{s.table}"').fetchone()[0]
+        except Exception:
+            continue
+        ncols = len(s.columns)
+        if nrows * ncols > settings.sql_wide_table_cell_threshold:
+            wide.append(f'{s.table} (~{nrows} rows x {ncols} cols)')
+    if not wide:
+        return ""
+    return ("\nNOTE: " + "; ".join(wide) + " — returning every row is unhelpful and will be "
+            "truncated. Prefer aggregation (MIN/MAX/AVG with GROUP BY on low-cardinality "
+            "columns such as locality/grade) or scope with WHERE/LIMIT to directly answer "
+            "the question.")
+
+
 @dataclass
 class StructuredLookupTrace:
     """Per-query record of the structured/SQL retrieval attempt, for the
