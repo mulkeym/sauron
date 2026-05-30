@@ -168,3 +168,18 @@ def test_fit_raises_when_all_attempts_error(monkeypatch):
     import pytest
     with pytest.raises(Exception):
         S._generate_run_fit(con, "q", [_schema("pay", 3)], generate_fn=fake_gen)
+
+
+def test_run_structured_lookup_uses_loop(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    # connect_tabular returns our in-memory con with a pay table
+    con = _make_con_with_pay()
+    monkeypatch.setattr("src.ingestion.tabular_store.connect_tabular",
+                        lambda read_only=False: con)
+    seq = iter(["SELECT * FROM pay WHERE locality='nope'", "SELECT * FROM pay"])
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        return next(seq)
+    trace = S.run_structured_lookup("pay rates?", [_schema("pay", 3)], "analytical",
+                                    generate_fn=fake_gen)
+    assert trace.status == "ran"
+    assert trace.row_count == 3      # recovered after the empty first attempt

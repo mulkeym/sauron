@@ -283,34 +283,39 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
 
     if best is not None:
         return SqlFitResult(sql=best[0], rows=best[1], attempts=max_attempts, verdict=best_verdict)
-    raise RuntimeError(f"text-to-SQL produced no valid query: {last_error}")
+    exc = RuntimeError(f"text-to-SQL produced no valid query: {last_error}")
+    exc.last_sql = sql  # type: ignore[attr-defined]  # caller can surface this in the trace
+    raise exc
 
 
 def run_structured_lookup(question: str, schemas, query_type: str,
                           gate: list | None = None, generate_fn=None, hints=None) -> StructuredLookupTrace:
-    """Generate + run SQL and capture a full trace. Never raises: a failure is
-    recorded as status='error' (with the SQL, if generated) and fell_back=True so
-    the caller can fall back. Sync (run via asyncio.to_thread from async callers)."""
+    """Generate + run SQL (with the bounded repair loop) and capture a full trace.
+    Never raises: a failure is recorded as status='error' (with the SQL, if
+    generated) and fell_back=True so the caller can fall back. Sync (run via
+    asyncio.to_thread from async callers)."""
     from src.ingestion.tabular_store import (
-        connect_tabular, schema_prompt_with_values, schema_context_for_synthesis)
+        connect_tabular, schema_context_for_synthesis)
     trace = StructuredLookupTrace(query_type=query_type, gate=gate)
     con = connect_tabular(read_only=True)
     try:
-        trace.sql = generate_sql(schema_prompt_with_values(schemas, con, hints=hints), question,
-                                 generate_fn=generate_fn)
+        fit = _generate_run_fit(con, question, schemas, hints=hints, generate_fn=generate_fn)
+        trace.sql = fit.sql
         # Carry the meaning of the queried table(s) forward to the synthesizer.
-        # Scope to the tables the SQL actually referenced so the context stays small.
-        referenced = [s for s in schemas if s.table in trace.sql] or list(schemas)
+        referenced = [s for s in schemas if s.table in fit.sql] or list(schemas)
         trace.schema_context = schema_context_for_synthesis(referenced, hints=hints)
-        rows = run_sql(con, trace.sql, {s.table for s in schemas})
         trace.status = "ran"
-        trace.rows = rows
-        trace.row_count = len(rows)
-        trace.sample_rows = rows[:5]
+        trace.rows = fit.rows
+        trace.row_count = len(fit.rows)
+        trace.sample_rows = fit.rows[:5]
+        trace.fell_back = fit.attempts > 1  # signal the loop had to retry
     except Exception as e:
         trace.status = "error"
         trace.error = str(e)
         trace.fell_back = True
+        # Surface the last-attempted SQL even on all-error runs so callers can log it.
+        if not trace.sql:
+            trace.sql = getattr(e, "last_sql", "")
     finally:
         con.close()
     return trace
