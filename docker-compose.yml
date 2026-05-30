@@ -5,7 +5,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8080:8080"
+      - "8880:8080"
     environment:
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
@@ -30,7 +30,7 @@ services:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "src.mcp.run"]
     ports:
-      - "8090:8090"
+      - "8890:8090"
     environment:
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
@@ -56,7 +56,7 @@ services:
       - "host.docker.internal:host-gateway"
     entrypoint: ["mcpo", "--port", "8091", "--", "python", "-m", "src.mcp.run_stdio"]
     ports:
-      - "8091:8091"
+      - "8891:8091"
     environment:
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
