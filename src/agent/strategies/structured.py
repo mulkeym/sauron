@@ -322,19 +322,15 @@ def run_structured_lookup(question: str, schemas, query_type: str,
 
 
 def structured_sql_rows(question: str, schemas, generate_fn=None, hints=None) -> list[dict]:
-    """Generate SQL from the (value-enriched) schema prompt and run it against
-    the tabular DuckDB, restricted to ``schemas`` as the allowlist.
-
-    One read-only connection; raises on any failure (LLM, blocked/empty SQL,
-    execution) — callers decide the fallback. Synchronous (run via
-    ``asyncio.to_thread`` from async callers).
-    """
-    from src.ingestion.tabular_store import connect_tabular, schema_prompt_with_values
+    """Generate SQL (with the bounded repair loop) and run it against the tabular
+    DuckDB, restricted to ``schemas`` as the allowlist. One read-only connection;
+    raises only if no valid query could be produced. Synchronous (run via
+    ``asyncio.to_thread`` from async callers)."""
+    from src.ingestion.tabular_store import connect_tabular
     con = connect_tabular(read_only=True)
     try:
-        sql = generate_sql(schema_prompt_with_values(schemas, con, hints=hints), question,
-                           generate_fn=generate_fn)
-        return run_sql(con, sql, {s.table for s in schemas})
+        fit = _generate_run_fit(con, question, schemas, hints=hints, generate_fn=generate_fn)
+        return fit.rows
     finally:
         con.close()
 

@@ -183,3 +183,15 @@ def test_run_structured_lookup_uses_loop(monkeypatch):
                                     generate_fn=fake_gen)
     assert trace.status == "ran"
     assert trace.row_count == 3      # recovered after the empty first attempt
+
+
+def test_structured_sql_rows_uses_loop(monkeypatch):
+    monkeypatch.setattr("src.config.settings.sql_relevance_judge_enabled", False)
+    con = _make_con_with_pay()
+    monkeypatch.setattr("src.ingestion.tabular_store.connect_tabular",
+                        lambda read_only=False: con)
+    seq = iter(["SELECT * FROM pay WHERE grade='none'", "SELECT * FROM pay"])
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        return next(seq)
+    rows = S.structured_sql_rows("pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
+    assert len(rows) == 3  # recovered after empty first attempt
