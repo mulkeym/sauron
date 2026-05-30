@@ -94,6 +94,33 @@ def _classify_sql_result(rows: list[dict]) -> str:
     return "satisfactory"
 
 
+def _repair_feedback(verdict: str, *, rows: list[dict], sql: str, question: str,
+                     error: str = "", judge_reason: str = "") -> str:
+    """Failure-specific guidance appended to the next text-to-SQL attempt."""
+    if verdict == "too_large":
+        chars = len(json.dumps(rows, default=str))
+        base = (f"Your previous query returned {len(rows)} rows (~{chars} chars), too large "
+                f"to use. Rewrite it to summarize/aggregate (MIN/MAX/AVG with GROUP BY on "
+                f"low-cardinality columns) or scope it more tightly with WHERE/LIMIT, while "
+                f"still answering the question.")
+    elif verdict == "empty":
+        base = ("Your previous query returned no rows. Your filter or a column name may be "
+                "wrong — loosen the filter, check the column names, or pick the closest "
+                "available value.")
+    elif verdict == "degenerate":
+        base = ("Your previous query returned only NULLs. The selected columns are probably "
+                "wrong for this question — choose different columns.")
+    elif verdict == "error":
+        base = f"Your previous query failed to run: {error}. Fix the SQL."
+    else:
+        base = "Improve the previous query to better answer the question."
+    parts = [base, f"Previous SQL: {sql}"]
+    if judge_reason:
+        parts.append(f"It also does not answer the question well because: {judge_reason}.")
+    parts.append(f"Question: {question}")
+    return "\n".join(parts)
+
+
 @dataclass
 class StructuredLookupTrace:
     """Per-query record of the structured/SQL retrieval attempt, for the
