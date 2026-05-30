@@ -46,6 +46,24 @@ def _rerank_merge(state, vector_store) -> dict:
     return {}
 
 
+async def _lookup_then_structured(retry_state, vector_store, schema_registry) -> dict:
+    """LOOKUP retrieval plus a capability-aware escalation. LOOKUP never queries
+    structured tables, so if no SQL was produced and a registered table is relevant
+    to the question, also run the gated SQL path (retrieve_structured) and merge its
+    results. The relevance gate inside retrieve_structured IS the capability check;
+    it uses the original question and carries domain hints. retrieve_structured
+    returns {} (no-op) when no table is relevant, so plain lookups are unchanged."""
+    import asyncio
+    result = await asyncio.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
+    if not result.get("sql_results"):
+        struct = await retrieve_structured(retry_state, vector_store, schema_registry)
+        if struct.get("sql_results"):
+            result["sql_results"] = struct["sql_results"]
+            result["structured_trace"] = struct.get("structured_trace")
+            result.setdefault("retrieved_chunks", []).extend(struct.get("retrieved_chunks", []))
+    return result
+
+
 def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None, include_synthesize: bool = True):
     graph = StateGraph(AgentState)
 
@@ -65,8 +83,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             retry_state = state
 
         if query_type == QueryType.LOOKUP:
-            import asyncio as _asyncio_lookup
-            result = await _asyncio_lookup.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
+            result = await _lookup_then_structured(retry_state, vector_store, schema_registry)
         elif query_type == QueryType.SWEEP:
             # Run both sweep (raw chunks) and map-reduce (per-doc extraction), merge results
             import asyncio as _asyncio

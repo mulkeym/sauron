@@ -89,3 +89,52 @@ async def test_run_agent_no_results():
             from src.db.schema_registry import SchemaRegistry
             result = await run_agent(question="Something obscure", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
     assert "could not find" in result.answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_lookup_then_structured_merges_sql(monkeypatch):
+    from src.agent import graph as g
+    def fake_lookup(state, vector_store=None):
+        return {"retrieved_chunks": ["L"], "retrieval_attempts": 1}
+    async def fake_struct(state, vector_store, schema_registry):
+        return {"sql_results": [{"x": 1}], "structured_trace": {"status": "ran"},
+                "retrieved_chunks": ["S"]}
+    monkeypatch.setattr(g, "retrieve_lookup", fake_lookup)
+    monkeypatch.setattr(g, "retrieve_structured", fake_struct)
+    out = await g._lookup_then_structured({"question": "q", "user_groups": ["x"]},
+                                          vector_store=None, schema_registry=None)
+    assert out["sql_results"] == [{"x": 1}]
+    assert out["structured_trace"] == {"status": "ran"}
+    assert out["retrieved_chunks"] == ["L", "S"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_then_structured_no_table_unchanged(monkeypatch):
+    from src.agent import graph as g
+    def fake_lookup(state, vector_store=None):
+        return {"retrieved_chunks": ["L"], "retrieval_attempts": 1}
+    async def fake_struct(state, vector_store, schema_registry):
+        return {}
+    monkeypatch.setattr(g, "retrieve_lookup", fake_lookup)
+    monkeypatch.setattr(g, "retrieve_structured", fake_struct)
+    out = await g._lookup_then_structured({"question": "q", "user_groups": ["x"]},
+                                          vector_store=None, schema_registry=None)
+    assert "sql_results" not in out
+    assert out["retrieved_chunks"] == ["L"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_then_structured_skips_when_sql_present(monkeypatch):
+    from src.agent import graph as g
+    calls = {"struct": 0}
+    def fake_lookup(state, vector_store=None):
+        return {"retrieved_chunks": ["L"], "sql_results": [{"y": 2}]}
+    async def fake_struct(state, vector_store, schema_registry):
+        calls["struct"] += 1
+        return {"sql_results": [{"z": 3}]}
+    monkeypatch.setattr(g, "retrieve_lookup", fake_lookup)
+    monkeypatch.setattr(g, "retrieve_structured", fake_struct)
+    out = await g._lookup_then_structured({"question": "q", "user_groups": ["x"]},
+                                          vector_store=None, schema_registry=None)
+    assert out["sql_results"] == [{"y": 2}]
+    assert calls["struct"] == 0
