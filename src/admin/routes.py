@@ -784,28 +784,18 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
             import time, html as html_mod
             import asyncio as _asyncio
 
-            # Check query cache first (unless skip_cache is set)
+            # Check query cache first (unless skip_cache is set) — shared decision
+            # (same embed -> lookup -> judge path the public query API uses).
             _skip_cache = skip_cache == "true"
             _playground_jobs[query_id]["step"] = "cache_check"
-            from src.retrieval.query_cache import cache_lookup, cache_store
-            from src.ingestion.embedder import embed_query
-            cache_start = time.time()
-            query_vector = await _asyncio.to_thread(embed_query, question)
-            cached = cache_lookup(query_vector, user_groups) if not _skip_cache else None
-            cache_time = round(time.time() - cache_start, 2)
-
-            if cached:
-                # LLM judge: validate cache applicability
-                from src.retrieval.query_cache import cache_judge
-                judge_start = time.time()
-                judgment = await cache_judge(
-                    original_query=cached.get("cached_query", ""),
-                    new_query=question,
-                    cached_answer=cached.get("answer", ""),
-                )
-                judge_time = round(time.time() - judge_start, 2)
-
-            cache_accepted = cached and judgment.get("applicable", False)
+            from src.retrieval.query_cache import judged_cache_lookup, cache_store
+            _decision = await judged_cache_lookup(question, user_groups, skip_cache=_skip_cache)
+            query_vector = _decision.query_vector
+            cached = _decision.cached
+            cache_time = _decision.cache_time
+            judge_time = _decision.judge_time
+            judgment = _decision.judgment or {}
+            cache_accepted = _decision.accepted
 
             if cached and not cache_accepted:
                 # Judge rejected — clear cached so we fall through to full pipeline
