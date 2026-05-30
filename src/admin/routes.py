@@ -1182,11 +1182,12 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                     for c in citations
                 ]
                 source_ids = list({c.doc_id for c in citations})
-                cache_store(
-                    query_text=question, query_vector=query_vector,
-                    answer=answer, citations=citation_dicts,
-                    user_groups=user_groups, source_doc_ids=source_ids,
-                )
+                if query_vector is not None:  # skip store when embed failed (fail-open)
+                    cache_store(
+                        query_text=question, query_vector=query_vector,
+                        answer=answer, citations=citation_dicts,
+                        user_groups=user_groups, source_doc_ids=source_ids,
+                    )
             except Exception:
                 pass
 
