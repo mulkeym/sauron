@@ -6,6 +6,7 @@ the SWEEP branch. `tables_relevant_to` is a cheap (no-LLM) gate. `retrieve_struc
 combines them, fail-open, for the SWEEP strategy.
 """
 import asyncio
+import json
 import logging
 import math
 import re
@@ -70,6 +71,27 @@ def _extract_sql(response: str) -> str:
     if m:
         block = block[m.start():]
     return block.strip().strip("`").removeprefix("sql\n").removeprefix("sql").strip()
+
+
+def _effective_sql_budget() -> int:
+    """Char budget for a SQL result before it counts as too large. Capped at
+    65% of the model context so it always leaves room for the rest of the
+    synthesis context even if the knob is set high."""
+    from src.config import settings
+    return min(settings.sql_result_budget_chars, int(settings.llm_max_context * 0.65))
+
+
+def _classify_sql_result(rows: list[dict]) -> str:
+    """Label a SQL result for the repair loop. One of:
+    'empty' | 'degenerate' | 'too_large' | 'satisfactory'.
+    Errors are handled separately (the query raised), not here."""
+    if not rows:
+        return "empty"
+    if all(v is None for r in rows for v in r.values()):
+        return "degenerate"
+    if len(json.dumps(rows, default=str)) > _effective_sql_budget():
+        return "too_large"
+    return "satisfactory"
 
 
 @dataclass
