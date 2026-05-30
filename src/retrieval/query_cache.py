@@ -7,15 +7,18 @@ so "army contracts" and "What did the army award?" can share a cache entry.
 ACL-aware: cached results are only returned if the user's groups match
 the groups that were used when the cache entry was created.
 """
+import asyncio
 import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 
 import numpy as np
 import pyarrow as pa
 
 from src.config import settings
+from src.ingestion.embedder import embed_query
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +205,56 @@ Respond with ONLY JSON:
     except Exception as e:
         logger.warning(f"Cache judge failed: {e}")
         return {"applicable": True, "confidence": 0.5, "reason": "Judge unavailable, using cache"}
+
+
+@dataclass
+class CacheDecision:
+    """Outcome of the shared cache lookup+judge sequence.
+    Both the API (agent_query) and the admin playground consume this so the
+    cache decision lives in exactly one place."""
+    query_vector: list | None = None   # reuse for cache_store; None if embed failed
+    hit: bool = False                  # cache_lookup found a vector+ACL+freshness match
+    accepted: bool = False             # hit AND judge applicable -> serve the cache
+    cached: dict | None = None         # the cache_lookup result
+    judgment: dict | None = None       # {applicable, confidence, reason}; None if no hit
+    cache_time: float = 0.0            # seconds: embed + lookup
+    judge_time: float = 0.0            # seconds: judge (0 if no hit)
+
+
+async def judged_cache_lookup(question: str, user_groups: list,
+                              *, skip_cache: bool = False) -> CacheDecision:
+    """Embed the question, look up the cache, and (on a hit) run the LLM
+    applicability judge. Single source of truth for "is there a usable cache
+    hit". Fail-open throughout: embed failure -> no hit (and no vector to store);
+    cache_judge already returns applicable=True on its own error."""
+    d = CacheDecision()
+    t0 = time.time()
+    try:
+        d.query_vector = await asyncio.to_thread(embed_query, question)
+    except Exception as e:
+        logger.warning(f"Cache embed failed: {e}")
+        d.cache_time = round(time.time() - t0, 2)
+        return d
+
+    if skip_cache:
+        d.cache_time = round(time.time() - t0, 2)
+        return d
+
+    d.cached = cache_lookup(d.query_vector, user_groups)
+    d.cache_time = round(time.time() - t0, 2)
+    if not d.cached:
+        return d
+
+    d.hit = True
+    tj = time.time()
+    d.judgment = await cache_judge(
+        original_query=d.cached.get("cached_query", ""),
+        new_query=question,
+        cached_answer=d.cached.get("answer", ""),
+    )
+    d.judge_time = round(time.time() - tj, 2)
+    d.accepted = bool(d.judgment.get("applicable", False))
+    return d
 
 
 def cache_store(query_text: str, query_vector: list[float], answer: str,
