@@ -205,7 +205,22 @@ def build_synthesis_context(state: AgentState) -> str:
             block += f"\nTable & column reference:\n{trace['schema_context']}"
         if trace.get("sql"):
             block += f"\nExecuted SQL:\n{trace['sql']}"
-        block += f"\nResult rows:\n{json.dumps(sql_results, indent=2)}"
+        # Cap the serialized rows: a broad SELECT * (e.g. the 885-row GS pay
+        # table) would otherwise blow past the model's context window. Use
+        # compact JSON (indent=2 inflated the payload ~1.2-2.4x) and fit the
+        # block within the remaining char budget, dropping rows until it fits.
+        total_rows = len(sql_results)
+        shown = sql_results[:SQL_RESULT_MAX_ROWS]
+        remaining_budget = max(0, MAX_CONTEXT_CHARS - total_chars - len(block) - 200)
+        rows_json = json.dumps(shown)
+        while shown and len(rows_json) > remaining_budget:
+            shown = shown[: len(shown) // 2]
+            rows_json = json.dumps(shown)
+        if len(shown) < total_rows:
+            block += (f"\nResult rows (showing {len(shown)} of {total_rows}; "
+                      f"refine the question for specific rows):\n{rows_json}")
+        else:
+            block += f"\nResult rows:\n{rows_json}"
         context_parts.append(block)
     context = "\n\n".join(context_parts)
     logger.info(f"Synthesizer context: {len(context):,} chars from {len(context_parts)} parts")
