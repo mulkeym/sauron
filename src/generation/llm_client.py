@@ -22,9 +22,15 @@ class LLMConnectionError(LLMError):
     """Could not reach the LLM endpoint. Transient — worth retrying."""
 
 
-def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -> str:
-    """Call LLM via requests to an OpenAI-compatible endpoint."""
-    logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}")
+def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
+              *, thinking: bool = False) -> str:
+    """Call LLM via requests to an OpenAI-compatible endpoint. When ``thinking``
+    is set, enable the model's reasoning (chat-template toggle) and raise the
+    token budget. If the served template ignores the toggle, generation simply
+    proceeds non-thinking — never an error."""
+    if thinking:
+        max_tokens = settings.sql_thinking_max_tokens
+    logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}, thinking={thinking}")
 
     payload = {
         "model": model,
@@ -33,6 +39,8 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int) -
         "max_tokens": max_tokens,
         "seed": settings.llm_seed,
     }
+    if thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
 
     headers = {}
     if settings.vllm_api_key:
@@ -158,8 +166,8 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
             yield buffer
 
 
-def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
-    """Generate text using the LLM."""
+def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048, *, thinking=False):
+    """Generate text using the LLM. ``thinking`` enables model reasoning for this call."""
     original_content = _call_llm(
         messages=[
             {"role": "system", "content": system_prompt},
@@ -168,6 +176,7 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
         model=settings.vllm_model_name,
         temperature=temperature,
         max_tokens=max_tokens,
+        thinking=thinking,
     )
 
     # Strip <think> blocks, preserve content outside them
