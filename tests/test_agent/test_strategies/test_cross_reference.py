@@ -37,8 +37,9 @@ def registry():
 @pytest.mark.asyncio
 async def test_cross_reference_combines_doc_and_sql(registry):
     mock_store = MagicMock()
-    mock_store.search.return_value = [_make_chunk("Policy 4.2: Expenses over $500 need approval")]
-    with patch("src.agent.strategies.cross_reference.embed_query", return_value=[0.1] * 1024):
+    mock_store.hybrid_search_reranked.return_value = [_make_chunk("Policy 4.2: Expenses over $500 need approval")]
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
+    with patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
         with patch(
             "src.agent.strategies.cross_reference.retrieve_analytical",
             new_callable=AsyncMock,
@@ -95,9 +96,10 @@ async def test_cross_reference_returns_feedback_boosts(monkeypatch):
 @pytest.mark.asyncio
 async def test_cross_reference_doc_only_when_no_db():
     mock_store = MagicMock()
-    mock_store.search.return_value = [_make_chunk("Some policy content")]
+    mock_store.hybrid_search_reranked.return_value = [_make_chunk("Some policy content")]
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
     empty_registry = SchemaRegistry()
-    with patch("src.agent.strategies.cross_reference.embed_query", return_value=[0.1] * 1024):
+    with patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
         state = AgentState(
             question="Compare policy A with policy B",
             user_groups=["finance"],

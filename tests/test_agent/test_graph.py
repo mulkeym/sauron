@@ -30,9 +30,11 @@ def test_create_agent_graph_includes_synthesize_by_default():
 @pytest.mark.asyncio
 async def test_run_agent_lookup():
     mock_store = MagicMock()
-    mock_store.search.return_value = [_make_chunk("Policy 4.2 says expenses over $500 need approval")]
+    mock_store.hybrid_search_reranked.return_value = [_make_chunk("Policy 4.2 says expenses over $500 need approval")]
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
     with patch("src.agent.classifier.generate", return_value='{"query_type": "lookup", "sub_tasks": ["Find policy 4.2"]}'):
-        with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024):
+        with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024), \
+             patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
             with patch("src.agent.evaluator.generate", return_value='{"sufficient": true, "reason": "ok"}'):
                 with patch("src.agent.synthesizer.generate", return_value="Policy 4.2 requires approval for expenses over $500 [1]."):
                     from src.db.schema_registry import SchemaRegistry
@@ -79,9 +81,11 @@ def test_merge_results_noop_when_disabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_agent_no_results():
     mock_store = MagicMock()
-    mock_store.search.return_value = []
+    mock_store.hybrid_search_reranked.return_value = []
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
     with patch("src.agent.classifier.generate", return_value='{"query_type": "lookup", "sub_tasks": ["search"]}'):
-        with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024):
+        with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024), \
+             patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
             from src.db.schema_registry import SchemaRegistry
             result = await run_agent(question="Something obscure", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
     assert "could not find" in result.answer.lower()

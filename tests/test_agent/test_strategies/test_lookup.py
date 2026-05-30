@@ -11,7 +11,8 @@ def mock_chunks():
 
 def test_lookup_returns_chunks(mock_chunks):
     mock_store = MagicMock()
-    mock_store.search.return_value = mock_chunks
+    mock_store.hybrid_search_reranked.return_value = mock_chunks
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
     with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024):
         state = AgentState(question="What is the expense policy?", user_groups=["finance"], query_type=QueryType.LOOKUP, retrieved_chunks=[], retrieval_attempts=0)
         result = retrieve_lookup(state, vector_store=mock_store)
@@ -20,7 +21,8 @@ def test_lookup_returns_chunks(mock_chunks):
 
 def test_lookup_empty_results():
     mock_store = MagicMock()
-    mock_store.search.return_value = []
+    mock_store.hybrid_search_reranked.return_value = []
+    mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
     with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024):
         state = AgentState(question="Something obscure", user_groups=["finance"], query_type=QueryType.LOOKUP, retrieved_chunks=[], retrieval_attempts=0)
         result = retrieve_lookup(state, vector_store=mock_store)
