@@ -40,3 +40,5 @@ class CitationResponse(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     citations: list[CitationResponse]
+    cached: bool = False
+    cached_query: str | None = None
