@@ -6,6 +6,12 @@ from src.retrieval.models import Citation
 
 logger = logging.getLogger(__name__)
 
+# Max structured/SQL rows serialized into the synthesis context. A broad
+# SELECT * can return hundreds of rows (the GS pay table is 885 rows x 32 cols);
+# serializing all of them overflows the model context window. The synthesizer
+# also fits the block within MAX_CONTEXT_CHARS as a hard backstop.
+SQL_RESULT_MAX_ROWS = 100
+
 SYSTEM_PROMPT = """You are a knowledgeable assistant that answers questions based on provided context.
 
 Rules:
