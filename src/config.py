@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     sql_wide_table_cell_threshold: int = 5000  # rows*cols above which the pre-flight gate steers text-to-SQL away from SELECT *
     sql_repair_max_retries: int = 2  # retries after the first generation (so max 3 generations total)
     sql_relevance_judge_enabled: bool = True  # on a flagged result, ask the LLM why it's unhelpful and feed that into the retry
+    sql_thinking_on_wide_table: bool = True  # enable model reasoning for SQL generation when the wide-table gate fires (off elsewhere for speed)
+    sql_thinking_max_tokens: int = 4096  # max_tokens for a thinking SQL-generation call (reasoning + SQL needs more than the default 2048)
 
     # Relevance feedback
     feedback_enabled: bool = True
