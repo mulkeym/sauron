@@ -198,17 +198,21 @@ class StructuredLookupTrace:
 
 
 def generate_sql(schema_prompt: str, question: str, generate_fn=None,
-                 *, extra_user_context: str = "", temperature: float = 0.0) -> str:
+                 *, extra_user_context: str = "", temperature: float = 0.0,
+                 thinking: bool = False) -> str:
     """LLM text-to-SQL for one question + rendered schema prompt; returns the
     extracted SQL string (robust to prose/code-fence wrapping). ``extra_user_context``
     carries pre-flight steering or retry feedback; ``temperature`` is raised on
-    retries so the model does not deterministically regenerate the same query."""
+    retries; ``thinking`` enables model reasoning for this generation. ``thinking``
+    is forwarded to ``gen`` only when True so non-thinking stubs stay compatible."""
     gen = generate_fn or generate
+    extra_kwargs = {"thinking": True} if thinking else {}
     raw = gen(
         system_prompt=TEXT_TO_SQL_PROMPT.format(schema=schema_prompt),
         user_prompt=f"Question: {question}{extra_user_context}",
         temperature=temperature,
         max_tokens=2048,
+        **extra_kwargs,
     )
     sql = _extract_sql(raw)
     logger.info("Text-to-SQL for %r -> %s", question, sql)

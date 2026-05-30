@@ -211,3 +211,19 @@ def test_loop_passes_judge_reason_into_retry(monkeypatch):
     S._generate_run_fit(con, "pay rates?", [_schema("pay", 3)], generate_fn=fake_gen)
     # the second SQL-generation prompt must carry the judge's reason as feedback
     assert any("wrong entity" in p for p in sql_prompts[1:])
+
+
+def test_generate_sql_forwards_thinking_when_true():
+    seen = {}
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048, **kwargs):
+        seen.update(kwargs)
+        return "SELECT 1"
+    assert S.generate_sql("SCHEMA", "q", generate_fn=fake_gen, thinking=True) == "SELECT 1"
+    assert seen.get("thinking") is True
+
+
+def test_generate_sql_omits_thinking_when_false():
+    # Stub WITHOUT **kwargs: if generate_sql passed thinking when False, this raises.
+    def fake_gen(system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+        return "SELECT 1"
+    assert S.generate_sql("SCHEMA", "q", generate_fn=fake_gen) == "SELECT 1"
