@@ -117,3 +117,28 @@ def test_top_nav_drops_moved_links():
     for gone in ['/admin/categories', '/admin/proposals', '/admin/connectors', '/admin/hints', '/admin/audit']:
         assert gone not in nav, gone
     assert '/admin/settings' in nav  # Settings stays
+
+
+def test_apply_settings_update_partial_other_direction():
+    # Symmetric to the Models test: posting SECURITY fields must leave Models/System untouched.
+    settings.admin_username = "OLD_ADMIN"
+    settings.vllm_model_name = "MODEL_KEEP"
+    settings.mcp_port = 9999
+    _apply_settings_update({"admin_username": "NEW_ADMIN"})
+    assert settings.admin_username == "NEW_ADMIN"     # submitted -> updated
+    assert settings.vllm_model_name == "MODEL_KEEP"    # absent -> untouched
+    assert settings.mcp_port == 9999                   # absent -> untouched
+
+
+def test_categories_page_renders_in_shell():
+    from unittest.mock import patch, AsyncMock
+    c = _client()
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store") as mg:
+        store = AsyncMock()
+        store.list_categories.return_value = []
+        mg.return_value = store
+        resp = c.get("/admin/categories")
+    assert resp.status_code == 200
+    assert 'href="/admin/settings/security"' in resp.text   # rendered inside the settings shell
+    assert 'class="subnav-item active"' in resp.text         # an item is active (Categories)
