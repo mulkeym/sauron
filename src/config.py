@@ -52,6 +52,8 @@ class Settings(BaseSettings):
 
     # Concurrency
     max_parallel_ingestion: int = 3  # concurrent file ingestion jobs
+    max_parallel_async_query: int = 3  # concurrent async query worker slots
+    async_query_ttl_seconds: int = 3600  # how long finished async jobs are retained
     llm_concurrency: int = 4  # concurrent LLM calls (map-reduce, entity extraction)
 
     # Metadata extraction
