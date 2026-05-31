@@ -22,6 +22,50 @@ class LLMConnectionError(LLMError):
     """Could not reach the LLM endpoint. Transient — worth retrying."""
 
 
+# OpenAI reasoning models (o-series, gpt-5 family) speak a stricter dialect of the
+# chat-completions API than vLLM/Gemma or the standard gpt-4* chat models:
+#   - the token budget field is `max_completion_tokens`, not `max_tokens`
+#   - only the default `temperature` (1) is accepted; any other value 400s
+# We also drop `seed` for them: it isn't honoured at the fixed reasoning temperature
+# and risks an "unsupported parameter" 400 on some of these models.
+_REASONING_MODEL_RE = re.compile(r"^(o\d|gpt-5)", re.IGNORECASE)
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return bool(_REASONING_MODEL_RE.match((model or "").strip()))
+
+
+def _is_openai_endpoint(base_url: str) -> bool:
+    """True for the hosted OpenAI API. `chat_template_kwargs` is a vLLM-only
+    extension that OpenAI rejects on every model, so it must never be sent here."""
+    return "api.openai.com" in (base_url or "")
+
+
+def _build_payload(messages: list, model: str, temperature: float, max_tokens: int,
+                   *, thinking: bool = False, stream: bool = False) -> dict:
+    """Build a chat-completions payload adapted to the target model/endpoint.
+
+    Standard models (gpt-4*, vLLM/Gemma) keep the historical fields. Reasoning
+    models get `max_completion_tokens` and no `temperature`/`seed`. The vLLM-only
+    `chat_template_kwargs` thinking toggle is only attached for non-OpenAI endpoints.
+    """
+    payload = {"model": model, "messages": messages}
+    if stream:
+        payload["stream"] = True
+
+    if _is_reasoning_model(model):
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["temperature"] = temperature
+        payload["max_tokens"] = max_tokens
+        payload["seed"] = settings.llm_seed
+
+    if thinking and not _is_openai_endpoint(settings.vllm_base_url):
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
+
+    return payload
+
+
 def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
               *, thinking: bool = False) -> str:
     """Call LLM via requests to an OpenAI-compatible endpoint. When ``thinking``
@@ -32,15 +76,7 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
         max_tokens = settings.sql_thinking_max_tokens
     logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}, thinking={thinking}")
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "seed": settings.llm_seed,
-    }
-    if thinking:
-        payload["chat_template_kwargs"] = {"enable_thinking": True}
+    payload = _build_payload(messages, model, temperature, max_tokens, thinking=thinking)
 
     headers = {}
     if settings.vllm_api_key:
@@ -61,7 +97,15 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
     except requests.ConnectionError as e:
         raise LLMConnectionError(f"LLM connection failed: {e}")
     except requests.HTTPError as e:
-        raise LLMError(f"LLM HTTP error: {e}")
+        # Surface the endpoint's response body — for OpenAI a 400 names the exact
+        # offending parameter (e.g. "Unsupported parameter: max_tokens"), which the
+        # bare HTTPError status line omits.
+        body = ""
+        try:
+            body = resp.text[:500]
+        except Exception:
+            pass
+        raise LLMError(f"LLM HTTP error: {e}" + (f"; body: {body}" if body else ""))
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Invalid JSON from LLM: {e}\nResponse: {resp.text[:500]}")
 
@@ -109,16 +153,13 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
 
 def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
     """Stream tokens from the LLM. Yields content strings as they arrive."""
-    payload = {
-        "model": settings.vllm_model_name,
-        "messages": [
+    payload = _build_payload(
+        [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": True,
-    }
+        settings.vllm_model_name, temperature, max_tokens, stream=True,
+    )
 
     headers = {}
     if settings.vllm_api_key:
