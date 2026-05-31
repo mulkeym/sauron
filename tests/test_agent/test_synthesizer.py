@@ -310,3 +310,20 @@ def test_synthesis_context_caps_wide_sql_result():
     ctx = build_synthesis_context(state)
     assert len(ctx) <= settings.llm_max_context          # never overflows
     assert "showing" in ctx and "of 885" in ctx          # truncation is disclosed
+
+
+def test_prompts_instruct_direct_answer_first():
+    """Guard the intent: both prompt constants must impose a 'direct answer first,
+    then detail' structure so answers don't open with a data dump."""
+    from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+    sys_l = SYSTEM_PROMPT.lower()
+    usr_l = USER_PROMPT_TEMPLATE.lower()
+    # System prompt sets up the lead->detail structure.
+    assert "direct" in sys_l and "answer" in sys_l
+    assert "start with" in sys_l          # the lead instruction
+    assert "supporting detail" in sys_l or "then" in sys_l
+    # User prompt still demands completeness AND a direct lead first.
+    assert "first" in usr_l and "direct" in usr_l
+    # Completeness guarantees are preserved (don't drop the list-everything behavior).
+    assert "every unique item" in usr_l
+    assert "deduplicat" in usr_l

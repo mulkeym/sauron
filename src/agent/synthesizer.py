@@ -19,9 +19,17 @@ Rules:
 - Cite sources by filename, e.g. (2026-01-08_4373866.md). Each context chunk is labeled with its filename.
 - If SQL results are provided, reference them in your answer.
 - If the context does not contain enough information, say so clearly.
-- Be THOROUGH and COMPLETE. Include ALL relevant information from the context, not just the first match.
-- When asked about what someone said or asked, list EVERY instance found in the context.
-- When listing items, use bullet points or numbered lists for clarity.
+
+Structure every answer this way:
+- START with a direct, 1-2 sentence answer to the exact question asked. Lead with
+  the bottom line — the specific value, range, count, or finding — before any
+  breakdown. For a list-type question, the opening sentence states what the list
+  contains and how many (e.g. "Twelve DHA contracts were awarded in January 2026:").
+- THEN provide the supporting detail. Here be THOROUGH and COMPLETE: include ALL
+  relevant information from the context, not just the first match; when asked what
+  someone said or asked, list EVERY instance; use bullet points or numbered lists,
+  and group related items under short headings when it aids clarity.
+- Do not restate the same facts in both the opening and the detail.
 
 IMPORTANT: Output ONLY the final answer. Do NOT show your reasoning, self-corrections, internal checks, or thought process. Just provide the clean, organized answer."""
 
@@ -30,10 +38,11 @@ USER_PROMPT_TEMPLATE = """Context:
 
 Question: {question}
 
-Provide a clean, organized answer based on ALL the context above.
-CRITICAL: Include EVERY unique item from the context. Do NOT summarize, skip, or omit ANY entries. If 50 contracts are in the context, list all 50. If you run out of space, prioritize listing items over adding descriptions.
-DEDUPLICATION: The same item may appear in multiple context sources. Deduplicate by contract number, entity name, or other identifier. If two sources mention the same contract, list it ONCE with the most complete details and cite both sources.
-Cite sources by filename (e.g. 2026-01-08_4373866.md). Do NOT include your reasoning process — only the final answer."""
+Answer using ALL the context above, in two parts:
+FIRST, open with a direct 1-2 sentence answer to the exact question — the specific value, range, count, or finding. For a list, state what it contains and how many.
+THEN, give the complete supporting detail. Include EVERY unique item from the context — do NOT summarize away or omit ANY entries. If 50 contracts are in the context, list all 50 in the detail. If you run out of space, prioritize listing items over adding descriptions.
+DEDUPLICATION: The same item may appear in multiple context sources. Deduplicate by contract number, entity name, or other identifier. If two sources mention the same item, list it ONCE with the most complete details and cite both sources.
+Cite sources by filename (e.g. 2026-01-08_4373866.md). Output only the final answer — do NOT include your reasoning process."""
 
 def _strip_reasoning_artifacts(text: str) -> str:
     """Remove thinking model reasoning that leaked into the answer."""
