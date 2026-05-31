@@ -74,6 +74,16 @@ p { color: var(--text-secondary); }
 .section-desc { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem; }
 .result-card { background: var(--bg-card); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
 
+/* === Settings shell sub-nav (theme-aware: matches body text) === */
+.settings-shell { display: flex; gap: 1.5rem; align-items: flex-start; }
+.settings-pane { flex: 1; min-width: 0; }
+.settings-subnav { min-width: 190px; flex: 0 0 auto; }
+.subnav-group { margin-bottom: 1rem; }
+.subnav-group-title { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; margin: 0 0 0.25rem 0.25rem; }
+.subnav-item { display: block; padding: 0.35rem 0.6rem; border-radius: 6px; text-decoration: none; color: var(--text); }
+.subnav-item:hover { background: var(--bg-card-alt); }
+.subnav-item.active { font-weight: 600; color: var(--text); background: var(--bg-card-alt); }
+
 /* === Tables === */
 table { width: 100%; border-collapse: collapse; background: var(--bg-card); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
 th { background: var(--bg-card-alt); padding: 0.75rem 1rem; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border-light); color: var(--text); }
