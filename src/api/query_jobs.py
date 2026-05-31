@@ -55,13 +55,23 @@ class QueryJob:
 
 _TERMINAL = (QueryStatus.COMPLETE, QueryStatus.FAILED)
 
+# Generic, caller-facing message. The full exception is logged server-side; we do
+# not return raw exception text to external callers (the sync /query path returns
+# a generic 500 with no body, so the async path must not leak more than that).
+_GENERIC_ERROR = "Query processing failed"
+
+
+class QueueFullError(Exception):
+    """Raised by enqueue when the queue is at capacity (mapped to HTTP 503)."""
+
 
 class QueryJobQueue:
-    def __init__(self, ttl_seconds: int | None = None):
-        if ttl_seconds is None:
-            from src.config import settings
-            ttl_seconds = settings.async_query_ttl_seconds
-        self._ttl = ttl_seconds
+    def __init__(self, ttl_seconds: int | None = None, max_jobs: int | None = None,
+                 job_timeout: int | None = None):
+        from src.config import settings
+        self._ttl = ttl_seconds if ttl_seconds is not None else settings.async_query_ttl_seconds
+        self._max_jobs = max_jobs if max_jobs is not None else settings.max_async_query_jobs
+        self._job_timeout = job_timeout if job_timeout is not None else settings.async_query_timeout_seconds
         self._jobs: dict[str, QueryJob] = {}
         self._queue: asyncio.Queue | None = None
         self._worker_running = False
@@ -79,6 +89,10 @@ class QueryJobQueue:
 
     def enqueue(self, question: str, username: str, groups: list[str]) -> str:
         self._evict_expired()
+        # Cap total tracked jobs so an authenticated caller can't grow the queue
+        # without bound (only terminal jobs are TTL-evicted; queued/processing are not).
+        if len(self._jobs) >= self._max_jobs:
+            raise QueueFullError(f"async query queue is full ({self._max_jobs} jobs)")
         token = str(uuid.uuid4())
         self._jobs[token] = QueryJob(token=token, question=question, username=username, groups=groups)
         if self._queue is not None:
@@ -145,11 +159,17 @@ class QueryJobQueue:
             try:
                 vector_store, schema_registry, metadata_store = self._stores
                 job.status = QueryStatus.PROCESSING
-                result = await agent_query_streamed(
-                    question=job.question, user_groups=job.groups,
-                    vector_store=vector_store, schema_registry=schema_registry,
-                    metadata_store=metadata_store,
-                    step_callback=lambda node, _t=token: self.update_step(_t, node),
+                # Cap each job so a wedged query (e.g. a hung vLLM call) can't hold
+                # a worker slot forever. The ceiling is generous — this mode exists
+                # for long queries — and only catches genuinely stuck work.
+                result = await asyncio.wait_for(
+                    agent_query_streamed(
+                        question=job.question, user_groups=job.groups,
+                        vector_store=vector_store, schema_registry=schema_registry,
+                        metadata_store=metadata_store,
+                        step_callback=lambda node, _t=token: self.update_step(_t, node),
+                    ),
+                    timeout=self._job_timeout,
                 )
                 citation_dicts = [
                     {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
@@ -159,9 +179,13 @@ class QueryJobQueue:
                 ]
                 self.complete(token, answer=result.answer, citations=citation_dicts,
                               cached=result.cached, cached_query=result.cached_query)
+            except asyncio.TimeoutError:
+                logger.error(f"Async query {token} timed out after {self._job_timeout}s")
+                self.fail(token, "Query timed out")
             except Exception as e:
+                # Log the full detail server-side; return only a generic message.
                 logger.error(f"Async query {token} failed: {e}\n{traceback.format_exc()}")
-                self.fail(token, str(e))
+                self.fail(token, _GENERIC_ERROR)
             self._queue.task_done()
 
 

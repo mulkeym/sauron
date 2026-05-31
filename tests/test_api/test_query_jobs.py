@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.api.query_jobs import QueryJobQueue, QueryStatus, STEP_LABELS
+from src.api.query_jobs import QueryJobQueue, QueryStatus, STEP_LABELS, QueueFullError
 
 
 def test_enqueue_returns_token_and_queued_job():
@@ -101,7 +101,8 @@ async def test_worker_marks_failed_on_exception():
             await asyncio.sleep(0.02)
     job = q.get_job(token)
     assert job.status == QueryStatus.FAILED
-    assert "kaboom" in job.error
+    # Raw exception text is logged server-side, not returned to the caller.
+    assert job.error == "Query processing failed"
 
 
 @pytest.mark.asyncio
@@ -129,3 +130,32 @@ async def test_worker_pool_respects_max_parallel():
             await asyncio.sleep(0.02)
     assert peak <= 2
     assert all(q.get_job(t).status == QueryStatus.COMPLETE for t in tokens)
+
+
+def test_enqueue_rejects_when_full():
+    q = QueryJobQueue(max_jobs=2)
+    q.enqueue(question="a", username="m", groups=[])
+    q.enqueue(question="b", username="m", groups=[])
+    with pytest.raises(QueueFullError):
+        q.enqueue(question="c", username="m", groups=[])
+
+
+@pytest.mark.asyncio
+async def test_worker_times_out_long_job():
+    q = QueryJobQueue(job_timeout=0.05)
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(1.0)
+        from src.generation.rag_chain import RAGResponse
+        return RAGResponse(answer="late", citations=[])
+
+    with patch("src.api.query_jobs.agent_query_streamed", side_effect=slow):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        token = q.enqueue(question="q", username="m", groups=[])
+        for _ in range(50):
+            if q.get_job(token).status == QueryStatus.FAILED:
+                break
+            await asyncio.sleep(0.02)
+    job = q.get_job(token)
+    assert job.status == QueryStatus.FAILED
+    assert job.error == "Query timed out"

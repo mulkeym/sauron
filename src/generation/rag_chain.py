@@ -65,6 +65,11 @@ async def agent_query_streamed(
     question: str, user_groups: list[str], vector_store, schema_registry,
     metadata_store=None, step_callback=None,
 ) -> RAGResponse:
+    # Surface the cache lookup as the first observable step. It runs before the
+    # graph, so it is not a graph node — emit it explicitly (the spec's data flow
+    # lists "checking cache" as a step callers should see).
+    if step_callback is not None:
+        step_callback("cache_check")
     # Shared cache decision (embed -> lookup -> LLM applicability judge) — same
     # path the admin playground uses, so the two cannot diverge.
     decision = await judged_cache_lookup(question, user_groups)

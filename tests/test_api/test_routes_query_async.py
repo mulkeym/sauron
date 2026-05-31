@@ -1,9 +1,10 @@
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from src.main import create_app
 from src.auth.jwt import create_token
-from src.api.query_jobs import query_queue, QueryStatus, QueryJob
+from src.api.query_jobs import query_queue, QueryStatus, QueryJob, QueueFullError
 
 
 @pytest.fixture
@@ -50,7 +51,7 @@ def test_poll_returns_completed_answer(client, auth_headers):
         status=QueryStatus.COMPLETE, step="complete", answer="done!",
         citations=[{"doc_id": "d1", "filename": "p.pdf", "doc_type": "pdf",
                     "chunk_index": 0, "page": 3, "snippet": "s", "relevance": 0.9}],
-        completed_at=123.0,
+        completed_at=time.time(),
     )
     resp = client.get("/api/v1/query/async/tok-1", headers=auth_headers)
     assert resp.status_code == 200
@@ -77,3 +78,13 @@ def test_poll_other_users_token_404(client, auth_headers):
 def test_poll_requires_auth(client):
     resp = client.get("/api/v1/query/async/whatever")
     assert resp.status_code in (401, 403)
+
+
+def test_submit_returns_503_when_full(client, auth_headers):
+    with patch("src.api.routes_query.query_queue.start_worker", new_callable=AsyncMock):
+        with patch("src.api.routes_query.query_queue.enqueue", side_effect=QueueFullError("full")):
+            with patch("src.api.routes_query.get_vector_store", return_value=MagicMock()):
+                with patch("src.api.routes_query.get_schema_registry", return_value=MagicMock()):
+                    with patch("src.api.routes_query.get_metadata_store", return_value=MagicMock()):
+                        resp = client.post("/api/v1/query/async", json={"question": "x"}, headers=auth_headers)
+    assert resp.status_code == 503

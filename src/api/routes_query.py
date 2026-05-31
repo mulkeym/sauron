@@ -7,7 +7,7 @@ from src.api.routes_ingest import get_vector_store, get_schema_registry, get_met
 from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.generation.rag_chain import agent_query
-from src.api.query_jobs import query_queue
+from src.api.query_jobs import query_queue, QueueFullError
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 
@@ -30,14 +30,17 @@ async def query(request: QueryRequest, user: UserContext = Depends(require_auth)
 async def query_async(request: QueryRequest, user: UserContext = Depends(require_auth)):
     """Submit a question for async processing. Returns a token to poll for status/result."""
     await query_queue.start_worker(get_vector_store(), get_schema_registry(), get_metadata_store())
-    token = query_queue.enqueue(question=request.question, username=user.username, groups=user.groups)
+    try:
+        token = query_queue.enqueue(question=request.question, username=user.username, groups=user.groups)
+    except QueueFullError:
+        raise HTTPException(status_code=503, detail="Query queue is full; please retry shortly")
     return AsyncQuerySubmitResponse(token=token, status="queued")
 
 
 @router.get("/query/async/{token}", response_model=AsyncQueryStatusResponse)
 async def query_async_status(token: str, user: UserContext = Depends(require_auth)):
     """Poll an async query by token. Owner-scoped: another user's token returns 404."""
-    job = query_queue._jobs.get(token)
+    job = query_queue.get_job(token)
     if job is None or job.username != user.username:
         raise HTTPException(status_code=404, detail="Job not found")
     return AsyncQueryStatusResponse(
