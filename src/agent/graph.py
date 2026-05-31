@@ -308,6 +308,39 @@ async def run_agent(question: str, user_groups: list[str], vector_store: VectorS
     )
 
 
+async def run_agent_streamed(
+    question: str,
+    user_groups: list[str],
+    vector_store: VectorStore,
+    schema_registry: SchemaRegistry,
+    metadata_store: MetadataStore | None = None,
+    step_callback=None,
+) -> RAGResponse:
+    """Run the agent graph once, emitting step_callback(node_name) per node.
+
+    Single-pass: the final state is accumulated from the stream itself, so the
+    graph executes exactly once (unlike run_agent_with_trace).
+    """
+    graph = create_agent_graph(vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
+    initial_state = AgentState(
+        question=question, original_question=question, user_groups=user_groups,
+        query_type=None, sub_tasks=[], retrieved_chunks=[], sql_results=[],
+        retrieval_attempts=0, needs_reretrieval=False, reformulated_query="",
+        answer="", citations=[], warnings=[],
+    )
+    final_state = dict(initial_state)
+    async for event in graph.astream(initial_state, stream_mode="updates"):
+        for node_name, node_output in event.items():
+            if isinstance(node_output, dict):
+                final_state.update(node_output)
+            if step_callback is not None:
+                step_callback(node_name)
+    return RAGResponse(
+        answer=final_state.get("answer", "I could not find any relevant information."),
+        citations=final_state.get("citations", []),
+    )
+
+
 @dataclass
 class AgentTrace:
     steps: list = field(default_factory=list)
