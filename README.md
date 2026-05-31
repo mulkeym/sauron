@@ -321,9 +321,12 @@ VLLM_BASE_URL=http://192.168.1.181:8080/v1
 VLLM_MODEL_NAME=gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
 VLLM_REQUEST_TIMEOUT=300  # increase for thinking models
 
-# Embeddings
-EMBEDDING_API_URL=http://192.168.1.117:8080/v1
-EMBEDDING_MODEL_NAME=llama-embed-nemotron-8b.Q8_0.gguf
+# Embeddings (default: local CPU, no GPU needed)
+EMBEDDING_MODE=local
+EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
+# Or point at an external OpenAI-compatible embedding provider:
+# EMBEDDING_MODE=api
+# EMBEDDING_API_URL=http://your-embedding-host:8000/v1
 
 # Vector store (embedded, no server needed)
 LANCEDB_PATH=data/lancedb

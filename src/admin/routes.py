@@ -2072,7 +2072,7 @@ async def test_embedding_connection(
             return HTMLResponse(f'<span class="status-ok">Connected to {url}. Model: {model_name}, Dimension: {dim}</span>')
         else:
             from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(model_name, device=settings.embedding_device, trust_remote_code=True)
+            model = SentenceTransformer(model_name, device="cpu", trust_remote_code=True)
             dim = model.get_embedding_dimension() if hasattr(model, 'get_embedding_dimension') else model.get_sentence_embedding_dimension()
             return HTMLResponse(f'<span class="status-ok">Loaded locally. Model: {model_name}, Dimension: {dim}</span>')
     except Exception as e:

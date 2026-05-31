@@ -15,8 +15,7 @@ class Settings(BaseSettings):
     embedding_mode: str = "local"  # "local" (sentence-transformers, no server needed) or "api" (external endpoint)
     embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint (only used when mode=api)
     embedding_model_name: str = "nomic-ai/nomic-embed-text-v1"  # local default; set to API model name when mode=api
-    embedding_device: str = "cpu"  # "cpu", "cuda", "cuda:0", or "multi-gpu" (only used when mode=local)
-    embedding_batch_size: int = 64  # batch size for local embedding
+    embedding_batch_size: int = 64  # batch size for local embedding (CPU)
     embedding_dimension: int = 0  # auto-detect from first embedding call if 0
 
     # LanceDB
@@ -129,7 +128,9 @@ class Settings(BaseSettings):
         pairs = [p.strip() for p in self.registered_databases.split(",") if "=" in p]
         return {k.strip(): v.strip() for p in pairs for k, v in [p.split("=", 1)]}
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # extra="ignore": tolerate leftover/deprecated env vars (e.g. a removed
+    # EMBEDDING_DEVICE still present in a deployed .env) instead of crashing startup.
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 def _load_persisted_settings(s: Settings) -> Settings:
