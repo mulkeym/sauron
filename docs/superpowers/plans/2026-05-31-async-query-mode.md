@@ -6,7 +6,7 @@
 
 **Architecture:** An in-memory, TTL-bounded job queue (`QueryJobQueue`) with a bounded pool of background asyncio workers, mirroring the existing `src/ingestion/queue.py`. Each worker runs the agent pipeline through a shared streaming helper that reports per-node progress via a callback while preserving the existing cache-parity path. Two new endpoints on the existing `/api/v1` query router; results are owner-scoped.
 
-**Tech Stack:** FastAPI, Pydantic, LangGraph (`astream`), asyncio, pytest (`asyncio_mode = "auto"`).
+**Tech Stack:** FastAPI, Pydantic, LangGraph (`astream`), asyncio, pytest + pytest-asyncio. NOTE: this repo does **not** use asyncio auto-mode — every `async def test_*` needs an explicit `@pytest.mark.asyncio` decorator (matching all 29 existing async test files).
 
 **Reference spec:** `docs/superpowers/specs/2026-05-31-async-query-mode-design.md`
 
@@ -129,11 +129,13 @@ git commit -m "feat: single-pass run_agent_streamed with per-node step callback"
 Create `tests/test_generation/test_agent_query_streamed.py`:
 
 ```python
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.generation.rag_chain import agent_query_streamed, agent_query, RAGResponse
 from src.retrieval.models import Citation
 
 
+@pytest.mark.asyncio
 async def test_streamed_fires_callback_per_node_on_cache_miss():
     seen = []
     miss = MagicMock(accepted=False, query_vector=None)
@@ -155,6 +157,7 @@ async def test_streamed_fires_callback_per_node_on_cache_miss():
     assert seen == ["classify", "retrieve", "synthesize"]
 
 
+@pytest.mark.asyncio
 async def test_streamed_returns_cached_without_running_graph():
     cached = {"answer": "cached!", "citations": [], "cached_query": "old q"}
     decision = MagicMock(accepted=True, cached=cached, query_vector=None)
@@ -166,6 +169,7 @@ async def test_streamed_returns_cached_without_running_graph():
     run.assert_not_awaited()
 
 
+@pytest.mark.asyncio
 async def test_agent_query_delegates_with_no_callback():
     miss = MagicMock(accepted=False, query_vector=None)
     resp = RAGResponse(answer="Z", citations=[])
@@ -277,6 +281,7 @@ Create `tests/test_api/test_query_jobs.py`:
 
 ```python
 import asyncio
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.api.query_jobs import QueryJobQueue, QueryStatus, STEP_LABELS
 
@@ -492,9 +497,10 @@ Add the bounded background worker that drains the queue and runs the pipeline vi
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_api/test_query_jobs.py`:
+Append to `tests/test_api/test_query_jobs.py` (it already imports `asyncio`, `patch`, `MagicMock`; add `import pytest` at the top of the file if not present):
 
 ```python
+@pytest.mark.asyncio
 async def test_worker_processes_job_to_complete():
     q = QueryJobQueue()
     from src.generation.rag_chain import RAGResponse
@@ -516,6 +522,7 @@ async def test_worker_processes_job_to_complete():
     assert job.answer == "42"
 
 
+@pytest.mark.asyncio
 async def test_worker_marks_failed_on_exception():
     q = QueryJobQueue()
 
@@ -534,6 +541,7 @@ async def test_worker_marks_failed_on_exception():
     assert "kaboom" in job.error
 
 
+@pytest.mark.asyncio
 async def test_worker_pool_respects_max_parallel():
     q = QueryJobQueue()
     q.max_parallel = 2
