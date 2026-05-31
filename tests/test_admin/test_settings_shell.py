@@ -99,3 +99,21 @@ def test_management_pages_render_in_shell():
     assert 'href="/admin/settings/security"' in resp.text
     # Schema Hints is the active sub-nav item
     assert 'class="subnav-item active"' in resp.text
+
+
+def test_top_nav_drops_moved_links():
+    from unittest.mock import patch, AsyncMock
+    c = _client()
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store") as mg:
+        store = AsyncMock()
+        store.list_documents.return_value = []
+        store.list_categories.return_value = []
+        store.list_proposals.return_value = []
+        mg.return_value = store
+        resp = c.get("/admin/")  # dashboard extends base.html (no settings sub-nav)
+    assert resp.status_code == 200
+    nav = resp.text.split("<nav>")[1].split("</nav>")[0]
+    for gone in ['/admin/categories', '/admin/proposals', '/admin/connectors', '/admin/hints', '/admin/audit']:
+        assert gone not in nav, gone
+    assert '/admin/settings' in nav  # Settings stays
