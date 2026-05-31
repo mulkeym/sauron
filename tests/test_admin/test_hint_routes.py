@@ -105,3 +105,19 @@ def test_hints_page_renders():
     assert resp.status_code == 200
     assert "payroll_compensation" in resp.text
     assert "State of Alaska" in resp.text
+
+
+def test_build_hints_view_tolerates_non_dict_payload():
+    # A malformed hint (payload not a dict) must render blank, not crash.
+    hints = [
+        SchemaHint(scope_type="category", scope_value="X", hint_type="value_glossary",
+                   target_column="c", payload="oops-not-a-dict"),
+        SchemaHint(scope_type="category", scope_value="X", hint_type="table_note",
+                   target_column=None, payload=None),
+    ]
+    groups = _build_hints_view(hints, [])
+    hints_out = groups[0]["hints"]
+    gloss = next(h for h in hints_out if h["hint_type"] == "value_glossary")
+    assert gloss["entries"] == [] and gloss["count"] == 0
+    note = next(h for h in hints_out if h["hint_type"] == "table_note")
+    assert note["text"] == ""
