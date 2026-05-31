@@ -82,3 +82,20 @@ def test_each_config_section_renders_with_active_marker():
         assert resp.status_code == 200, key
         assert 'class="subnav-item active"' in resp.text, key
         assert f'href="/admin/settings/{key}"' in resp.text, key
+
+
+def test_management_pages_render_in_shell():
+    from unittest.mock import patch, AsyncMock
+    c = _client()
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store") as mg:
+        store = AsyncMock()
+        store.load_all_hints.return_value = []
+        store.list_datasets.return_value = []
+        mg.return_value = store
+        resp = c.get("/admin/hints")
+    assert resp.status_code == 200
+    # rendered inside the settings shell -> sub-nav (a link to a settings section) is present
+    assert 'href="/admin/settings/security"' in resp.text
+    # Schema Hints is the active sub-nav item
+    assert 'class="subnav-item active"' in resp.text

@@ -151,7 +151,7 @@ async def categories_page(request: Request):
         return redirect
     store = get_metadata_store()
     categories = await store.list_categories()
-    return templates.TemplateResponse(request, "categories.html", {"categories": categories})
+    return templates.TemplateResponse(request, "categories.html", {"categories": categories, "active": "categories"})
 
 @router.get("/proposals", response_class=HTMLResponse)
 async def proposals_page(request: Request):
@@ -160,7 +160,7 @@ async def proposals_page(request: Request):
         return redirect
     store = get_metadata_store()
     proposals = await store.list_proposals(status="pending")
-    return templates.TemplateResponse(request, "proposals.html", {"proposals": proposals})
+    return templates.TemplateResponse(request, "proposals.html", {"proposals": proposals, "active": "proposals"})
 
 @router.get("/datasets", response_class=HTMLResponse)
 async def datasets_page(request: Request):
@@ -218,7 +218,7 @@ async def connectors_page(request: Request):
     store = get_metadata_store()
     connectors = await store.list_web_connectors(active_only=False)
     apps = await store.list_datasets()
-    return templates.TemplateResponse(request, "connectors.html", {"connectors": connectors, "datasets": apps})
+    return templates.TemplateResponse(request, "connectors.html", {"connectors": connectors, "datasets": apps, "active": "connectors"})
 
 
 @router.post("/api/connectors/create")
@@ -337,7 +337,7 @@ async def audit_page(request: Request):
                 entries.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    return templates.TemplateResponse(request, "audit.html", {"entries": entries})
+    return templates.TemplateResponse(request, "audit.html", {"entries": entries, "active": "audit"})
 
 async def _recategorize_uncategorized(store):
     """Sweep uncategorized documents and try to assign them to existing categories."""
@@ -591,7 +591,7 @@ async def hints_page(request: Request):
     hints = await store.load_all_hints()
     datasets = await store.list_datasets(active_only=False)
     return templates.TemplateResponse(request, "hints.html",
-                                      {"groups": _build_hints_view(hints, datasets)})
+                                      {"groups": _build_hints_view(hints, datasets), "active": "hints"})
 
 
 @router.delete("/api/hints/{hint_id}")
