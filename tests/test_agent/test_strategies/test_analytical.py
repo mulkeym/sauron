@@ -117,6 +117,25 @@ async def test_analytical_narrows_tables_before_sql(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analytical_falls_back_when_no_answerable_table(tmp_path, monkeypatch):
+    """A question no table can answer (model declines to write SQL) must skip the
+    structured step cleanly and fall back to map-reduce — not surface an error."""
+    reg, table = _make_pay_duckdb(tmp_path, monkeypatch)
+    monkeypatch.setattr(structured, "generate",
+                        lambda **kw: "No table here contains contract data.")
+    import src.agent.strategies.map_reduce as mr
+
+    async def fake_mr(state, vector_store):
+        return {"retrieved_chunks": [], "fellback_mr": True}
+    monkeypatch.setattr(mr, "retrieve_map_reduce", fake_mr)
+
+    state = {"question": "list DHA contracts", "user_groups": ["ALL"], "retrieval_attempts": 0}
+    result = await retrieve_analytical(state, vector_store=MagicMock(), schema_registry=reg)
+    assert result.get("fellback_mr") is True
+    assert result["structured_trace"]["status"] == "skipped"
+
+
+@pytest.mark.asyncio
 async def test_analytical_emits_structured_trace(tmp_path, monkeypatch):
     from src.agent.strategies import structured
     schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)

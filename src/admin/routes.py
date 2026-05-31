@@ -60,7 +60,8 @@ def _format_structured_lookup(trace: dict) -> str:
                      f"padding:0.5rem; border-radius:4px;\">{_h.escape(sql)}</pre>")
     status = trace.get("status", "ran")
     if status == "skipped":
-        parts.append(f"<strong>Result:</strong> skipped — {_h.escape(trace.get('skip_reason', ''))}")
+        note = " (used document search instead)" if trace.get("fell_back") else ""
+        parts.append(f"<strong>Result:</strong> skipped — {_h.escape(trace.get('skip_reason', ''))}{note}")
     elif status == "error":
         fb = " (fell back to map-reduce)" if trace.get("fell_back") else ""
         parts.append(f"<strong>Result:</strong> error — {_h.escape(trace.get('error', ''))}{fb}")

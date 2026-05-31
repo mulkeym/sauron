@@ -346,6 +346,14 @@ def run_sql(con, sql: str, allowed_tables: set) -> list[dict]:
     return rows
 
 
+class NoAnswerableSql(Exception):
+    """Raised when text-to-SQL never produced a runnable SELECT across all
+    attempts — i.e. the model judged that none of the available tables can answer
+    the question (it returned prose / no SELECT). This is a clean SKIP, not an
+    error: callers should fall back to document retrieval, not surface a SQL-guard
+    message like 'Only SELECT queries are allowed'."""
+
+
 @dataclass
 class SqlFitResult:
     """Outcome of the gate + bounded repair loop."""
@@ -375,6 +383,7 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
     best_verdict = "error"
     extra = steering       # first attempt carries the gate steering
     last_error = ""
+    produced_sql = False   # did any attempt yield a runnable SELECT?
     max_attempts = settings.sql_repair_max_retries + 1
 
     for attempt in range(max_attempts):
@@ -384,6 +393,15 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
             sql = generate_sql(base_schema_prompt, question, generate_fn=gen,
                                extra_user_context=extra, temperature=temperature,
                                thinking=thinking)
+            if not sql.strip():
+                # The model returned no SELECT (prose / a refusal). Don't run it
+                # through the executor — that yields the misleading "Only SELECT
+                # queries are allowed". Nudge for a query and retry.
+                last_error = "no SQL statement was produced"
+                extra = ("\nYou did not output a SQL query. Output a single SELECT "
+                         "against the schema above, or nothing can run.")
+                continue
+            produced_sql = True
             rows = run_sql(con, sql, allowed)
         except Exception as e:
             last_error = str(e)
@@ -409,6 +427,11 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
 
     if best is not None:
         return SqlFitResult(sql=best[0], rows=best[1], attempts=max_attempts, verdict=best_verdict)
+    if not produced_sql:
+        # The model never committed to a SELECT — no table can answer this.
+        # A clean skip, not an error (callers fall back to document retrieval).
+        raise NoAnswerableSql(
+            "No available table contained data relevant to the question.")
     exc = RuntimeError(f"text-to-SQL produced no valid query: {last_error}")
     exc.last_sql = sql  # type: ignore[attr-defined]  # caller can surface this in the trace
     raise exc
@@ -434,6 +457,12 @@ def run_structured_lookup(question: str, schemas, query_type: str,
         trace.rows = fit.rows
         trace.row_count = len(fit.rows)
         trace.sample_rows = fit.rows[:5]
+    except NoAnswerableSql as e:
+        # Not an error: text-to-SQL judged no table can answer this. Record a
+        # clean skip so the playground shows it as such, and fall back.
+        trace.status = "skipped"
+        trace.skip_reason = str(e)
+        trace.fell_back = True
     except Exception as e:
         trace.status = "error"
         trace.error = str(e)

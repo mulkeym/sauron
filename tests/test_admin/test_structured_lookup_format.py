@@ -26,6 +26,17 @@ def test_format_skipped_shows_reason_no_sql():
     assert "SELECT" not in html
 
 
+def test_format_skipped_notes_fallback_when_fell_back():
+    """A skip that fell back should reassure the reader the question was still
+    answered via document search."""
+    trace = {"query_type": "analytical", "gate": None, "sql": "",
+             "status": "skipped", "skip_reason": "No available table contained relevant data.",
+             "error": "", "row_count": 0, "sample_rows": [], "fell_back": True}
+    html = _format_structured_lookup(trace)
+    assert "skipped" in html
+    assert "document search" in html
+
+
 def test_format_error_shows_message_and_fallback():
     trace = {"query_type": "analytical", "gate": None, "sql": "SELECT bad",
              "status": "error", "skip_reason": "", "error": "Parser Error",

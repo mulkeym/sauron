@@ -340,6 +340,21 @@ def test_run_structured_lookup_error_captures_sql(tmp_path, monkeypatch):
     assert 'doc_other_secret' in trace.sql
 
 
+def test_run_structured_lookup_skips_when_model_declines(tmp_path, monkeypatch):
+    """When text-to-SQL never produces a SELECT (the model judges that no
+    available table can answer the question), that is a clean SKIP — not an
+    error. The misleading 'Only SELECT queries are allowed' must not surface."""
+    schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(structured, "generate",
+                        lambda **kw: "These tables hold pay data, not contract awards, so I cannot answer.")
+    trace = run_structured_lookup("list DHA contracts", [schema], query_type="analytical")
+    assert trace.status == "skipped"
+    assert trace.fell_back is True
+    assert trace.error == ""                       # not surfaced as an error
+    assert "Only SELECT" not in trace.skip_reason  # no confusing SQL-guard message
+    assert trace.skip_reason                        # has a human reason
+
+
 def test_run_structured_lookup_zero_rows(tmp_path, monkeypatch):
     schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)
     monkeypatch.setattr(

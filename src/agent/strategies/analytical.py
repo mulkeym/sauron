@@ -32,7 +32,9 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
         hints = None
     trace = await asyncio.to_thread(run_structured_lookup, question, schemas, "analytical", None, None, hints)
 
-    if trace.status == "error":
+    if trace.status in ("error", "skipped"):
+        # "error" = SQL failed; "skipped" = no table can answer this question.
+        # Either way the structured path has no answer -> fall back to map-reduce.
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         result = await retrieve_map_reduce(state, vector_store=vector_store)
         result["structured_trace"] = trace.to_dict()
