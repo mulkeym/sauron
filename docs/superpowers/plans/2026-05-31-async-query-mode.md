@@ -911,3 +911,31 @@ git commit -m "test: async query mode regression verification notes" || echo "no
 **Type consistency:** `agent_query_streamed(step_callback=...)` defined in Task 3, called in Task 5. `QueryJobQueue.start_worker(vector_store, schema_registry, metadata_store)` defined Task 5, called Task 7. `QueryJob` fields used in Task 7 (`username`, `status`, `step`, `answer`, `citations`, `cached`, `cached_query`, `error`, `created_at`, `completed_at`) all defined Task 4. `complete(token, answer, citations, cached, cached_query)` signature consistent across Tasks 4/5. `CitationResponse(**c)` requires `c` dicts to carry exactly the CitationResponse fields — the worker (Task 5) and the test seed (Task 7) both produce those keys. ✓
 
 **Placeholder scan:** No TBD/TODO; every code step shows full code; commands have expected output. ✓
+
+---
+
+## Execution & Verification (2026-05-31)
+
+All 8 tasks executed via subagent-driven development, then a final code review pass.
+
+**New tests (all pass):** `test_agent_query_streamed.py` (3), `test_query_jobs.py` (12), `test_routes_query_async.py` (7) = 22 new, + 3 sync-path regression. Per-file: 3 / 12 / 7 green.
+
+**Baseline:** full suite shows 20 failures on BOTH this branch and the master baseline (`53ba9dc`), verified by sorted-ID diff in a throwaway worktree → **zero new failures introduced**. The 20 are pre-existing rot (Qdrant→migration: `qdrant_port`, `QdrantClient` patches; embedder/pipeline/mcp env deps), NOT the "5–6 admin auth" failures an older note claimed.
+
+**Final review → 4 fixes applied (commit 9094f49):**
+- M-1: emit `cache_check` step so "checking cache" is observable.
+- I-1: `max_async_query_jobs` cap (enqueue → `QueueFullError` → HTTP 503) + `async_query_timeout_seconds` per-job `asyncio.wait_for` ceiling (generous default 600s; only catches wedged jobs).
+- I-2: return generic "Query processing failed" to callers; full detail logged server-side only (matches sync path's opaque 500).
+- M-3: poll uses `get_job` (eviction-consistent), not raw `_jobs`.
+
+**Manual smoke (run against a deployed instance — not CI):**
+```bash
+TOKEN=$(curl -s -X POST localhost:8000/api/v1/auth/token -H 'Content-Type: application/json' \
+  -d '{"username":"mike","password":"x","groups":["executives"]}' | jq -r .access_token)
+TOK=$(curl -s -X POST localhost:8000/api/v1/query/async \
+  -H "Authorization: Bearer $TOKEN" -H 'X-API-Key: dev-key-1' -H 'Content-Type: application/json' \
+  -d '{"question":"what is the pay rate for florida?"}' | jq -r .token)
+curl -s localhost:8000/api/v1/query/async/$TOK \
+  -H "Authorization: Bearer $TOKEN" -H 'X-API-Key: dev-key-1' | jq
+# expect: queued -> processing (step "retrieving documents") -> complete with answer + citations
+```
