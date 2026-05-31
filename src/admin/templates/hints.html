@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Schema Hints - SAURON{% endblock %}
+{% block content %}
+<h1>Schema Hints <span style="font-size:0.8rem;color:#888;">(read-only)</span></h1>
+<p class="section-desc">Domain knowledge injected into text-to-SQL: value glossaries (code &rarr; meaning) and column/table notes, grouped by scope.</p>
+
+{% if not groups %}
+<p>No schema hints yet &mdash; they're added by seed scripts (e.g. <code>scripts/seed_military_paygrade_glossary.py</code>).</p>
+{% else %}
+{% for g in groups %}
+<div class="settings-section">
+  <h2>{{ g.scope_label }}</h2>
+  {% for h in g.hints %}
+    {% if h.hint_type == "value_glossary" %}
+    <details>
+      <summary>value_glossary &middot; column "{{ h.target_column }}" &middot; {{ h.provenance }} &middot; {{ h.count }} values</summary>
+      <table style="margin:0.5rem 0;">
+        {% for e in h.entries %}<tr><td style="padding-right:1rem;"><code>{{ e.code }}</code></td><td>&rarr; {{ e.meaning }}</td></tr>{% endfor %}
+      </table>
+    </details>
+    {% else %}
+    <p><strong>{{ h.hint_type }}</strong>{% if h.target_column %} &middot; column "{{ h.target_column }}"{% endif %} &middot; {{ h.provenance }}<br>
+       <span style="color:#555;">{{ h.text }}</span></p>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

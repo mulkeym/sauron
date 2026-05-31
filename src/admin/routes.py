@@ -582,6 +582,18 @@ def _build_hints_view(hints, datasets):
     return out
 
 
+@router.get("/hints", response_class=HTMLResponse)
+async def hints_page(request: Request):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
+    store = get_metadata_store()
+    hints = await store.load_all_hints()
+    datasets = await store.list_datasets(active_only=False)
+    return templates.TemplateResponse(request, "hints.html",
+                                      {"groups": _build_hints_view(hints, datasets)})
+
+
 @router.delete("/api/hints/{hint_id}")
 async def delete_hint_route(hint_id: int):
     await delete_hint_impl(hint_id)

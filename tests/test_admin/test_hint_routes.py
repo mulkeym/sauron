@@ -84,3 +84,24 @@ def test_build_hints_view_unknown_dataset_falls_back_to_id():
                     target_column=None, payload={"text": "x"})]
     groups = _build_hints_view(h, [])
     assert groups[0]["scope_label"] == "dataset = 9"
+
+
+def test_hints_page_renders():
+    from unittest.mock import patch, AsyncMock
+    from fastapi.testclient import TestClient
+    from src.main import create_app
+    client = TestClient(create_app())
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store") as mock_get:
+        store = AsyncMock()
+        store.load_all_hints.return_value = [
+            SchemaHint(scope_type="category", scope_value="payroll_compensation",
+                       hint_type="value_glossary", target_column="locname",
+                       payload={"AK": "State of Alaska"}),
+        ]
+        store.list_datasets.return_value = []
+        mock_get.return_value = store
+        resp = client.get("/admin/hints")
+    assert resp.status_code == 200
+    assert "payroll_compensation" in resp.text
+    assert "State of Alaska" in resp.text
