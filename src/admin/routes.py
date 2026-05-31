@@ -1871,12 +1871,25 @@ async def knowledge_graph_details(entity_id: int = Form(0)):
     return HTMLResponse(html)
 
 
-@router.get("/settings", response_class=HTMLResponse)
+@router.get("/settings")
 async def settings_page(request: Request):
     redirect = _require_login(request)
     if redirect:
         return redirect
-    return templates.TemplateResponse(request, "settings.html", {"settings": settings})
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/admin/settings/security", status_code=307)
+
+
+@router.get("/settings/{section}", response_class=HTMLResponse)
+async def settings_section_page(request: Request, section: str):
+    redirect = _require_login(request)
+    if redirect:
+        return redirect
+    if section not in ("security", "models", "retrieval", "system", "maintenance"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404)
+    return templates.TemplateResponse(request, f"settings_{section}.html",
+                                      {"settings": settings, "active": section})
 
 
 # Form field -> caster. Membership mirrors the persisted settings dict.

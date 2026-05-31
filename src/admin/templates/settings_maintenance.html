@@ -1,0 +1,73 @@
+{% extends "settings_base.html" %}
+{% block title %}Maintenance - Settings{% endblock %}
+{% block settings_content %}
+<h1>Maintenance</h1>
+    <div class="settings-section">
+        <h3>Query Result Cache</h3>
+        <p class="section-desc">Cached answers are reused for semantically similar questions. Purge to force fresh answers.</p>
+        <button type="button" hx-post="/admin/api/settings/purge-cache" hx-target="#cache-status" hx-swap="innerHTML" hx-confirm="Purge all cached query results?">Purge Cache</button>
+        <span id="cache-status" style="margin-left:0.5rem;"
+              hx-get="/admin/api/settings/cache-stats" hx-trigger="load" hx-swap="innerHTML">
+        </span>
+    </div>
+
+    <div class="settings-section">
+        <h3>Knowledge Graph</h3>
+        <p class="section-desc">Purge the LightRAG knowledge graph or backfill metadata for older documents.</p>
+        <button type="button" hx-post="/admin/api/settings/purge-knowledge-graph" hx-target="#kg-status" hx-swap="innerHTML" hx-confirm="This will delete ALL knowledge graph data. Continue?">Purge Knowledge Graph</button>
+        <span id="kg-status" style="margin-left:0.5rem;"></span>
+        <div style="margin-top:0.75rem;">
+            <button type="button" hx-post="/admin/api/settings/purge-orphan-chunks" hx-target="#orphan-status" hx-swap="innerHTML" hx-confirm="Delete vector chunks that have no metadata record? (Refused if ingestion is running or metadata is empty.)">Purge Orphaned Chunks</button>
+            <span id="orphan-status" style="margin-left:0.5rem;"></span>
+            <p class="section-desc" style="margin-top:0.25rem;">Remove vector-store chunks left behind by interrupted ingestions (no owning document).</p>
+        </div>
+        <div style="margin-top:0.75rem;">
+            <button type="button" hx-post="/admin/api/settings/backfill-metadata" hx-target="#metadata-status" hx-swap="innerHTML">Backfill Document Metadata</button>
+            <span id="metadata-status" style="margin-left:0.5rem;"></span>
+            <p class="section-desc" style="margin-top:0.25rem;">Extract metadata for documents ingested before this feature was added.</p>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Entity Reconciliation</h3>
+        <p class="section-desc">Scan entities for duplicates. High-confidence matches merge automatically, others go to Knowledge Graph for review.</p>
+        <button type="button" hx-post="/admin/api/settings/reconcile" hx-target="#reconcile-status" hx-swap="innerHTML">Run Now</button>
+        <button type="button" hx-post="/admin/api/settings/reconcile-stop" hx-target="#reconcile-status" hx-swap="innerHTML" style="margin-left:0.5rem;">Stop</button>
+        <div id="reconcile-status" style="margin-top:0.5rem;"
+             hx-get="/admin/api/settings/reconcile-status" hx-trigger="load" hx-swap="innerHTML">
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Query Performance Metrics</h3>
+        <p class="section-desc">Retrieval accuracy and efficiency. MAP Precision = % of documents the LLM read that were relevant.</p>
+        <div id="metrics-dashboard" hx-get="/admin/api/settings/query-metrics" hx-trigger="load" hx-swap="innerHTML">
+        </div>
+        <div style="margin-top:0.5rem;">
+            <button type="button" hx-post="/admin/api/settings/purge-feedback" hx-target="#purge-fb-status" hx-swap="innerHTML" hx-confirm="Clear all feedback and metrics data?">Reset Feedback Data</button>
+            <span id="purge-fb-status" style="margin-left:0.5rem;"></span>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Backup &amp; Restore</h3>
+        <p class="section-desc">Create a backup of all data and configuration. Download to transport to another host.</p>
+        <div style="margin-bottom:1rem;">
+            <button type="button" hx-post="/admin/api/backup/create" hx-target="#backup-status" hx-swap="innerHTML">Create Backup</button>
+            <span id="backup-status" style="margin-left:0.5rem;"
+                  hx-get="/admin/api/backup/status" hx-trigger="every 1s" hx-swap="innerHTML">
+            </span>
+        </div>
+        <div id="backup-list" hx-get="/admin/api/backup/list" hx-trigger="load, every 5s" hx-swap="innerHTML" style="margin-bottom:1rem;">
+        </div>
+        <h4 style="margin-bottom:0.5rem;">Restore from Backup</h4>
+        <p class="section-desc">Upload a backup file to restore. Current data is saved before overwriting. Server restart required after restore.</p>
+        <form hx-post="/admin/api/backup/restore" hx-target="#restore-status" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+            <div class="form-group">
+                <input type="file" name="backup_file" accept=".gz,.tar.gz" required>
+            </div>
+            <button type="submit" hx-confirm="This will overwrite all current data. Continue?">Restore</button>
+            <span id="restore-status" style="margin-left:0.5rem;"></span>
+        </form>
+    </div>
+{% endblock %}

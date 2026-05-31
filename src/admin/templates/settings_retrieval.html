@@ -1,0 +1,104 @@
+{% extends "settings_base.html" %}
+{% block title %}Retrieval &amp; Processing - Settings{% endblock %}
+{% block settings_content %}
+<h1>Retrieval &amp; Processing</h1>
+<form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+<div class="settings-section">
+    <h2>Retrieval &amp; Processing</h2>
+    <p class="section-desc">Tuning for document retrieval, LLM context, and learning systems.</p>
+
+    <h3>LLM Limits</h3>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="llm_max_context">Max Context (chars)</label>
+            <input type="number" id="llm_max_context" name="llm_max_context" value="{{ settings.llm_max_context }}" min="10000" max="2000000" step="10000" style="max-width:140px;">
+            <span style="font-size:0.8rem; color:#6b7280;">200K ~ 50K tokens. Reduce for smaller models.</span>
+        </div>
+        <div class="form-group">
+            <label for="llm_max_output_tokens">Max Output Tokens</label>
+            <input type="number" id="llm_max_output_tokens" name="llm_max_output_tokens" value="{{ settings.llm_max_output_tokens }}" min="1024" max="131072" step="1024" style="max-width:140px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Max tokens per LLM response. 32K for exhaustive listings.</span>
+        </div>
+    </div>
+
+    <h3>Concurrency</h3>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="max_parallel_ingestion">Parallel Ingestion Jobs</label>
+            <input type="number" id="max_parallel_ingestion" name="max_parallel_ingestion" value="{{ settings.max_parallel_ingestion }}" min="1" max="20" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Concurrent file processing workers</span>
+        </div>
+        <div class="form-group">
+            <label for="llm_concurrency">LLM Concurrency</label>
+            <input type="number" id="llm_concurrency" name="llm_concurrency" value="{{ settings.llm_concurrency }}" min="1" max="32" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Concurrent LLM calls (map-reduce, extraction)</span>
+        </div>
+    </div>
+
+    <h3>Metadata Extraction</h3>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="metadata_extraction_enabled">Enable Metadata Extraction</label>
+            <select id="metadata_extraction_enabled" name="metadata_extraction_enabled">
+                <option value="true" {{ 'selected' if settings.metadata_extraction_enabled }}>Enabled</option>
+                <option value="false" {{ 'selected' if not settings.metadata_extraction_enabled }}>Disabled</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="metadata_max_doc_length">Max Document Length (chars)</label>
+            <input type="number" id="metadata_max_doc_length" name="metadata_max_doc_length" value="{{ settings.metadata_max_doc_length }}" min="1000" max="500000" style="max-width:120px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Chars sent to LLM for extraction</span>
+        </div>
+    </div>
+
+    <h3>Retrieval Tuning</h3>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="feedback_enabled">Relevance Feedback</label>
+            <select id="feedback_enabled" name="feedback_enabled">
+                <option value="true" {{ 'selected' if settings.feedback_enabled }}>Enabled</option>
+                <option value="false" {{ 'selected' if not settings.feedback_enabled }}>Disabled</option>
+            </select>
+            <span style="font-size:0.8rem; color:#6b7280;">Learn from query results to improve retrieval</span>
+        </div>
+        <div class="form-group">
+            <label for="feedback_similarity_threshold">Similarity Threshold</label>
+            <input type="number" id="feedback_similarity_threshold" name="feedback_similarity_threshold" value="{{ settings.feedback_similarity_threshold }}" step="0.05" min="0.5" max="1.0" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Min cosine similarity to match past queries</span>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="prf_enabled">Query Expansion (PRF)</label>
+            <select id="prf_enabled" name="prf_enabled">
+                <option value="true" {{ 'selected' if settings.prf_enabled }}>Enabled</option>
+                <option value="false" {{ 'selected' if not settings.prf_enabled }}>Disabled</option>
+            </select>
+            <span style="font-size:0.8rem; color:#6b7280;">Expand queries with terms from top results</span>
+        </div>
+        <div class="form-group">
+            <label for="strategy_memory_enabled">Strategy Memory</label>
+            <select id="strategy_memory_enabled" name="strategy_memory_enabled">
+                <option value="true" {{ 'selected' if settings.strategy_memory_enabled }}>Enabled</option>
+                <option value="false" {{ 'selected' if not settings.strategy_memory_enabled }}>Disabled</option>
+            </select>
+            <span style="font-size:0.8rem; color:#6b7280;">Learn which strategy works best per query pattern</span>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="entity_merge_auto_threshold">Entity Auto-merge Threshold</label>
+            <input type="number" id="entity_merge_auto_threshold" name="entity_merge_auto_threshold" value="{{ settings.entity_merge_auto_threshold }}" step="0.05" min="0" max="1" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Above this confidence, merge automatically</span>
+        </div>
+        <div class="form-group">
+            <label for="entity_merge_review_threshold">Entity Review Threshold</label>
+            <input type="number" id="entity_merge_review_threshold" name="entity_merge_review_threshold" value="{{ settings.entity_merge_review_threshold }}" step="0.05" min="0" max="1" style="max-width:100px;">
+            <span style="font-size:0.8rem; color:#6b7280;">Above this, propose for admin review</span>
+        </div>
+    </div>
+</div>
+  <button type="submit">Save</button>
+  <span id="save-status" style="margin-left:0.5rem;"></span>
+</form>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "settings_base.html" %}
+{% block title %}Security - Settings{% endblock %}
+{% block settings_content %}
+<h1>Security</h1>
+<form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+<div class="settings-section">
+    <h2>Security</h2>
+    <p class="section-desc">Admin login credentials and API access keys.</p>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="admin_username">Admin Username</label>
+            <input type="text" id="admin_username" name="admin_username" value="{{ settings.admin_username }}">
+        </div>
+        <div class="form-group">
+            <label for="admin_password">Admin Password</label>
+            <input type="password" id="admin_password" name="admin_password" placeholder="Leave blank to keep current">
+        </div>
+    </div>
+    <div class="form-group">
+        <label for="api_keys">API Keys</label>
+        <div class="input-with-button">
+            <input type="text" id="api_keys" name="api_keys" value="{{ settings.api_keys }}" style="font-family:monospace;">
+            <button type="button" class="secondary" onclick="generateApiKey()">Generate Key</button>
+        </div>
+        <span style="font-size:0.8rem; color:#6b7280;">Comma-separated. Each key can be used as X-API-Key header or Bearer token.</span>
+    </div>
+</div>
+
+<script>
+function generateApiKey() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let key = 'sk-';
+    for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
+    const input = document.getElementById('api_keys');
+    input.value = input.value ? input.value + ',' + key : key;
+}
+</script>
+  <button type="submit">Save</button>
+  <span id="save-status" style="margin-left:0.5rem;"></span>
+</form>
+{% endblock %}

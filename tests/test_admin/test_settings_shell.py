@@ -57,3 +57,28 @@ def test_apply_settings_update_blank_numeric_kept():
     settings.llm_max_context = 250000
     _apply_settings_update({"llm_max_context": ""})  # blank numeric -> keep current (no int("") crash)
     assert settings.llm_max_context == 250000
+
+
+def _client():
+    from fastapi.testclient import TestClient
+    from src.main import create_app
+    return TestClient(create_app())
+
+
+def test_settings_redirects_to_first_section():
+    from unittest.mock import patch
+    with patch("src.admin.routes._is_authenticated", return_value=True):
+        resp = _client().get("/admin/settings", follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"].endswith("/admin/settings/security")
+
+
+def test_each_config_section_renders_with_active_marker():
+    from unittest.mock import patch
+    c = _client()
+    for key in ["security", "models", "retrieval", "system", "maintenance"]:
+        with patch("src.admin.routes._is_authenticated", return_value=True):
+            resp = c.get(f"/admin/settings/{key}")
+        assert resp.status_code == 200, key
+        assert 'class="subnav-item active"' in resp.text, key
+        assert f'href="/admin/settings/{key}"' in resp.text, key

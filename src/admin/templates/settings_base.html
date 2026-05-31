@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% set active = active | default('') %}
+{% block content %}
+<div class="settings-shell" style="display:flex; gap:1.5rem; align-items:flex-start;">
+  <aside class="settings-subnav" style="min-width:190px; flex:0 0 auto;">
+    {% set groups = [
+      ("Configuration", [
+        ("security","Security","/admin/settings/security"),
+        ("models","Models","/admin/settings/models"),
+        ("retrieval","Retrieval & Processing","/admin/settings/retrieval"),
+        ("system","System","/admin/settings/system"),
+        ("maintenance","Maintenance","/admin/settings/maintenance")]),
+      ("Management", [
+        ("categories","Categories","/admin/categories"),
+        ("proposals","Proposals","/admin/proposals"),
+        ("connectors","Connectors","/admin/connectors"),
+        ("hints","Schema Hints","/admin/hints"),
+        ("audit","Audit Logs","/admin/audit")]),
+    ] %}
+    {% for group_name, items in groups %}
+    <div class="subnav-group" style="margin-bottom:1rem;">
+      <div class="subnav-group-title" style="font-size:0.7rem; text-transform:uppercase; color:#888; letter-spacing:0.05em; margin:0 0 0.25rem 0.25rem;">{{ group_name }}</div>
+      {% for key, label, href in items %}
+      <a class="subnav-item{% if key == active %} active{% endif %}" href="{{ href }}"
+         style="display:block; padding:0.35rem 0.6rem; border-radius:6px; text-decoration:none;{% if key == active %} font-weight:600; background:rgba(120,120,160,0.18);{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </aside>
+  <section class="settings-pane" style="flex:1; min-width:0;">
+    {% block settings_content %}{% endblock %}
+  </section>
+</div>
+{% endblock %}

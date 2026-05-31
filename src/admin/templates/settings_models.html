@@ -1,0 +1,74 @@
+{% extends "settings_base.html" %}
+{% block title %}Models - Settings{% endblock %}
+{% block settings_content %}
+<h1>Models</h1>
+<form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+<div class="settings-section">
+    <h2>Models</h2>
+    <p class="section-desc">LLM and embedding model configuration.</p>
+
+    <h3>LLM Inference</h3>
+    <div class="form-group">
+        <label for="vllm_base_url">API Base URL</label>
+        <div class="input-with-button">
+            <input type="text" id="vllm_base_url" name="vllm_base_url" value="{{ settings.vllm_base_url }}" placeholder="http://gpu-server:8000/v1">
+            <button type="button" class="secondary" hx-post="/admin/api/settings/list-llm-models" hx-include="#vllm_base_url,#vllm_api_key" hx-target="#llm-model-select" hx-swap="innerHTML">Refresh Models</button>
+        </div>
+    </div>
+    <div class="form-group">
+        <label for="vllm_api_key">API Key</label>
+        <input type="password" id="vllm_api_key" name="vllm_api_key" value="{{ settings.vllm_api_key }}" placeholder="sk-... (leave empty for local models)">
+        <span style="font-size:0.8rem; color:#6b7280;">Required for OpenAI, Anthropic, etc. Leave empty for local endpoints.</span>
+    </div>
+    <div class="form-group">
+        <label for="vllm_model_name">Model</label>
+        <div id="llm-model-select">
+            <select name="vllm_model_name" id="vllm_model_name">
+                <option value="{{ settings.vllm_model_name }}" selected>{{ settings.vllm_model_name }}</option>
+            </select>
+        </div>
+    </div>
+    <div class="form-group">
+        <button type="button" class="secondary" hx-post="/admin/api/settings/test-llm" hx-include="#vllm_base_url,#vllm_api_key" hx-target="#llm-status" hx-swap="innerHTML">Test Connection</button>
+        <span id="llm-status"></span>
+    </div>
+
+    <h3 style="margin-top:1.5rem;">Embedding Model</h3>
+    <div class="form-group">
+        <label for="embedding_mode">Mode</label>
+        <select id="embedding_mode" name="embedding_mode">
+            <option value="api" {% if settings.embedding_mode == "api" %}selected{% endif %}>API (external endpoint)</option>
+            <option value="local" {% if settings.embedding_mode == "local" %}selected{% endif %}>Local (sentence-transformers)</option>
+        </select>
+    </div>
+    <div id="embedding-api-fields" style="{% if settings.embedding_mode == 'local' %}display:none;{% endif %}">
+        <div class="form-group">
+            <label for="embedding_api_url">API Base URL</label>
+            <div class="input-with-button">
+                <input type="text" id="embedding_api_url" name="embedding_api_url" value="{{ settings.embedding_api_url }}" placeholder="http://gpu-server:8000/v1">
+                <button type="button" class="secondary" hx-post="/admin/api/settings/list-embedding-models" hx-include="#embedding_api_url" hx-target="#embed-model-select" hx-swap="innerHTML">Refresh Models</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="embedding_model_name">Model</label>
+            <div id="embed-model-select">
+                <select name="embedding_model_name" id="embedding_model_name">
+                    <option value="{{ settings.embedding_model_name }}" selected>{{ settings.embedding_model_name }}</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <button type="button" class="secondary" hx-post="/admin/api/settings/test-embedding" hx-include="#embedding_mode, #embedding_api_url, #embedding_model_name" hx-target="#embed-status" hx-swap="innerHTML">Test Connection</button>
+            <span id="embed-status"></span>
+        </div>
+    </div>
+    <script>
+        document.getElementById('embedding_mode').addEventListener('change', function() {
+            document.getElementById('embedding-api-fields').style.display = this.value === 'local' ? 'none' : '';
+        });
+    </script>
+</div>
+  <button type="submit">Save</button>
+  <span id="save-status" style="margin-left:0.5rem;"></span>
+</form>
+{% endblock %}
