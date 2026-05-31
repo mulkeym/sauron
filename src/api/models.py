@@ -42,3 +42,19 @@ class QueryResponse(BaseModel):
     citations: list[CitationResponse]
     cached: bool = False
     cached_query: str | None = None
+
+class AsyncQuerySubmitResponse(BaseModel):
+    token: str
+    status: str
+
+class AsyncQueryStatusResponse(BaseModel):
+    token: str
+    status: str
+    step: str
+    answer: str | None = None
+    citations: list[CitationResponse] = []
+    cached: bool = False
+    cached_query: str | None = None
+    error: str | None = None
+    created_at: float
+    completed_at: float | None = None
