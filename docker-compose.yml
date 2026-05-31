@@ -47,6 +47,15 @@ services:
       - MCP_PORT=8090
     volumes:
       - app_data:/app/data
+    # Override the image's healthcheck (which targets the api on :8080). The MCP
+    # server listens on :8090 with SSE transport and has no /api/health route, so
+    # probe liveness instead: any HTTP response (even 404) proves it's serving.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8090/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   # MCP-to-OpenAPI proxy (for OpenWebUI and REST clients)
@@ -72,6 +81,14 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
     volumes:
       - app_data:/app/data
+    # Override the image's healthcheck (which targets the api on :8080). mcpo
+    # serves the OpenAPI proxy on :8091; its /openapi.json returns 200.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -o /dev/null http://localhost:8091/openapi.json || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
 volumes:
