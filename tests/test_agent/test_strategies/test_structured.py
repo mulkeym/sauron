@@ -340,6 +340,17 @@ def test_run_structured_lookup_error_captures_sql(tmp_path, monkeypatch):
     assert 'doc_other_secret' in trace.sql
 
 
+def test_run_structured_lookup_skips_when_no_schemas():
+    """Empty schema list (e.g. the router declined — no relevant table) is a
+    clean skip, not an attempt to generate SQL against nothing."""
+    from src.agent.strategies.structured import run_structured_lookup
+    trace = run_structured_lookup("q", [], query_type="analytical")
+    assert trace.status == "skipped"
+    assert trace.fell_back is True
+    assert trace.skip_reason
+    assert trace.error == ""
+
+
 def test_run_structured_lookup_skips_when_model_declines(tmp_path, monkeypatch):
     """When text-to-SQL never produces a SELECT (the model judges that no
     available table can answer the question), that is a clean SKIP — not an

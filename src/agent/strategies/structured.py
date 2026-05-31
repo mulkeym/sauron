@@ -213,7 +213,11 @@ Rules:
 - Choose the FEWEST tables that can answer it — usually 1-3, never more than {max_selected}.
 - Use the table names exactly as written in the catalog.
 - If several tables look equally relevant, prefer the most specific matches.
-- Output JSON only, no explanation. Example: ["table_a", "table_b"]"""
+- If NONE of the tables actually contain data that answers the question, return an
+  empty array []. Do NOT force a loosely-related table — a table that merely shares
+  a column type (e.g. has some date or agency column) is NOT a match unless its
+  subject matches the question.
+- Output JSON only, no explanation. Example: ["table_a", "table_b"] or []"""
 
 
 def _compact_catalog(schemas) -> str:
@@ -227,16 +231,21 @@ def _compact_catalog(schemas) -> str:
     return "\n".join(lines)
 
 
-def _parse_table_names(raw: str) -> list:
-    """Extract a JSON array of table-name strings from an LLM response. Returns
-    [] on anything unparseable so the caller can fail open."""
+def _parse_table_names(raw: str):
+    """Extract a JSON array of table-name strings from an LLM response.
+
+    Returns ``None`` when no JSON array is present / it won't parse (a garbled
+    response — caller should fail open). Returns a list (possibly EMPTY) when an
+    array parsed: an empty list is an explicit decline ("no relevant table")."""
     m = re.search(r"\[.*\]", raw, re.DOTALL)
     if not m:
-        return []
+        return None
     try:
         data = json.loads(m.group(0))
     except Exception:
-        return []
+        return None
+    if not isinstance(data, list):
+        return None
     return [str(x).strip() for x in data if isinstance(x, str)]
 
 
@@ -301,12 +310,20 @@ def select_relevant_tables(question: str, schemas, *, generate_fn=None,
             max_tokens=512,
         )
         names = _parse_table_names(raw)
-        by_name = {s.table: s for s in candidates}
-        selected = [by_name[n] for n in names if n in by_name][:max_selected]
-        if selected:
-            logger.info("Table router selected %d/%d tables: %s",
-                        len(selected), len(schemas), [s.table for s in selected])
-            return selected
+        if names is not None:
+            by_name = {s.table: s for s in candidates}
+            selected = [by_name[n] for n in names if n in by_name][:max_selected]
+            if selected:
+                logger.info("Table router selected %d/%d tables: %s",
+                            len(selected), len(schemas), [s.table for s in selected])
+                return selected
+            if not names:
+                # Explicit empty array: the model judged no table relevant.
+                # Honour the decline so the structured path skips, rather than
+                # forcing an irrelevant table via fail-open.
+                logger.info("Table router declined for %r (no relevant table)", question)
+                return []
+            # Names given but none matched the catalog -> treat as garbled, fail open.
     except Exception as e:
         logger.warning("Table router failed (%s); falling back to embedding top-K", e)
 
@@ -446,6 +463,13 @@ def run_structured_lookup(question: str, schemas, query_type: str,
     from src.ingestion.tabular_store import (
         connect_tabular, schema_context_for_synthesis)
     trace = StructuredLookupTrace(query_type=query_type, gate=gate)
+    if not schemas:
+        # No table to query (e.g. the router declined — none relevant). Clean
+        # skip; no connection or LLM call needed.
+        trace.status = "skipped"
+        trace.skip_reason = "No table is relevant to this question."
+        trace.fell_back = True
+        return trace
     con = connect_tabular(read_only=True)
     try:
         fit = _generate_run_fit(con, question, schemas, hints=hints, generate_fn=generate_fn)

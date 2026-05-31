@@ -117,6 +117,42 @@ async def test_analytical_narrows_tables_before_sql(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analytical_skips_when_router_declines(monkeypatch):
+    """When the router declines (no table is relevant to the question), the
+    structured step skips and the analytical path falls back to map-reduce —
+    instead of forcing SQL against an irrelevant table."""
+    from src.config import settings
+    monkeypatch.setattr(settings, "sql_table_routing_enabled", True)
+    monkeypatch.setattr(settings, "sql_table_routing_max_selected", 8)
+    monkeypatch.setattr(settings, "sql_table_routing_catalog_budget_chars", 10_000_000)
+
+    schemas = [TableSchema("db", f"t{i}", [ColumnSchema("a", "VARCHAR", "")], f"d{i}", ["ALL"])
+               for i in range(40)]
+
+    class _Reg:
+        def list_for_user(self, g):
+            return schemas
+
+    monkeypatch.setattr(structured, "generate", lambda **kw: "[]")  # router declines
+
+    async def _no_hints(s, hs, ms):
+        return {}
+    monkeypatch.setattr(structured, "resolve_hints_for_schemas", _no_hints)
+
+    import src.agent.strategies.map_reduce as mr
+
+    async def fake_mr(state, vector_store):
+        return {"retrieved_chunks": [], "fellback_mr": True}
+    monkeypatch.setattr(mr, "retrieve_map_reduce", fake_mr)
+
+    result = await retrieve_analytical(
+        {"question": "list DHA contracts", "user_groups": ["ALL"], "retrieval_attempts": 0},
+        vector_store=MagicMock(), schema_registry=_Reg())
+    assert result.get("fellback_mr") is True
+    assert result["structured_trace"]["status"] == "skipped"
+
+
+@pytest.mark.asyncio
 async def test_analytical_falls_back_when_no_answerable_table(tmp_path, monkeypatch):
     """A question no table can answer (model declines to write SQL) must skip the
     structured step cleanly and fall back to map-reduce — not surface an error."""

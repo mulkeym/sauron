@@ -109,5 +109,22 @@ def test_fail_open_to_bounded_topk_on_garbled_output(monkeypatch):
     assert [s.table for s in out] == ["t0", "t1", "t2", "t3", "t4"]
 
 
+def test_router_can_decline_with_empty_array(monkeypatch):
+    """An EXPLICIT empty array means the model judged NO table relevant -> return
+    [] (the structured path will skip). This must NOT be treated as a garbled
+    response that fails open to a top-K (which would force irrelevant tables)."""
+    from src.config import settings
+    _wide_budget(monkeypatch)
+    monkeypatch.setattr(settings, "sql_table_routing_max_selected", 8)
+
+    schemas = [_schema(f"t{i}") for i in range(50)]
+    # Embeddings WOULD yield tables if we fell open — prove the decline is honored.
+    eq = lambda q: [1.0, 0.0]
+    et = lambda texts: [[1.0, 0.0] for _ in texts]
+    out = select_relevant_tables("unanswerable", schemas, generate_fn=lambda **kw: "[]",
+                                 embed_query_fn=eq, embed_texts_fn=et)
+    assert out == []
+
+
 def test_empty_schemas_returns_empty():
     assert select_relevant_tables("q", [], generate_fn=lambda **kw: "[]") == []
