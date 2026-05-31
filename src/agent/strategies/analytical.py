@@ -19,8 +19,13 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
             skip_reason="no registered tables").to_dict()
         return result
 
-    from src.agent.strategies.structured import resolve_hints_for_schemas
+    # Route the (possibly large) ACL-visible corpus down to the relevant tables
+    # before SQL generation, so the value-dumping schema prompt stays within the
+    # model context. Without this, a broad question over a large corpus sends
+    # every table's schema and overflows.
+    from src.agent.strategies.structured import resolve_hints_for_schemas, select_relevant_tables
     from src.api.routes_ingest import get_hint_store, get_metadata_store
+    schemas = await asyncio.to_thread(select_relevant_tables, question, schemas)
     try:
         hints = await resolve_hints_for_schemas(schemas, get_hint_store(), get_metadata_store())
     except Exception:

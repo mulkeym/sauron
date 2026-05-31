@@ -78,6 +78,45 @@ async def test_analytical_falls_back_when_sql_references_disallowed_table(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_analytical_narrows_tables_before_sql(monkeypatch):
+    """A large ACL-visible corpus must be routed down to the relevant table(s)
+    before run_structured_lookup — otherwise the text-to-SQL prompt overflows."""
+    from src.config import settings
+    monkeypatch.setattr(settings, "sql_table_routing_enabled", True)
+    monkeypatch.setattr(settings, "sql_table_routing_max_selected", 8)
+    monkeypatch.setattr(settings, "sql_table_routing_catalog_budget_chars", 10_000_000)
+
+    schemas = [TableSchema("db", f"t{i}", [ColumnSchema("a", "VARCHAR", "")], f"d{i}", ["ALL"])
+               for i in range(40)]
+
+    class _Reg:
+        def list_for_user(self, g):
+            return schemas
+
+    # router LLM picks t5; run_structured_lookup captures what it actually received
+    monkeypatch.setattr(structured, "generate", lambda **kw: '["t5"]')
+    captured = {}
+
+    def fake_lookup(q, s, query_type, gate=None, generate_fn=None, hints=None):
+        captured["tables"] = [x.table for x in s]
+        return structured.StructuredLookupTrace(
+            query_type=query_type, status="ran", sql="SELECT 1",
+            row_count=1, rows=[{"a": 1}], sample_rows=[{"a": 1}])
+
+    monkeypatch.setattr(structured, "run_structured_lookup", fake_lookup)
+
+    async def _no_hints(s, hs, ms):
+        return {}
+    monkeypatch.setattr(structured, "resolve_hints_for_schemas", _no_hints)
+
+    result = await retrieve_analytical(
+        {"question": "find t5", "user_groups": ["ALL"], "retrieval_attempts": 0},
+        vector_store=MagicMock(), schema_registry=_Reg())
+    assert captured["tables"] == ["t5"]
+    assert result["structured_trace"]["status"] == "ran"
+
+
+@pytest.mark.asyncio
 async def test_analytical_emits_structured_trace(tmp_path, monkeypatch):
     from src.agent.strategies import structured
     schema, _ = _pay_schema_and_db(tmp_path, monkeypatch)

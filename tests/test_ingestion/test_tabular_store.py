@@ -261,6 +261,29 @@ def test_schema_prompt_lists_categorical_values():
     assert "values:" not in salary_line  # numeric column: no value list
 
 
+def test_schema_prompt_caps_total_size_by_dropping_value_dumps():
+    """Safety net: when the rendered prompt would exceed max_total_chars, the
+    value dumps (the bulk) are dropped so the prompt can never overflow the
+    model context — but the tables themselves stay listed."""
+    con, table = _con_with_pay()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    full = schema_prompt_with_values([schema], con)
+    assert "values:" in full                       # baseline lists values
+    capped = schema_prompt_with_values([schema], con, max_total_chars=len(full) - 1)
+    assert len(capped) <= len(full) - 1
+    assert schema.table in capped                  # table kept, not dropped
+    assert "values:" not in capped                 # value dumps dropped to fit
+
+
+def test_schema_prompt_no_cap_is_unchanged():
+    con, table = _con_with_pay()
+    cls = SheetClassification("Pay", "clean", 0, ["text", "number", "number"], "clean table")
+    schema = schema_from_sheet("doc1", "Pay", cls, _pay_grid(), acl_groups=["ALL"])
+    assert (schema_prompt_with_values([schema], con, max_total_chars=None)
+            == schema_prompt_with_values([schema], con))
+
+
 def test_referenced_tables_captures_comma_joins():
     assert _referenced_tables("SELECT * FROM a, b, c WHERE a.id = b.id") == {"a", "b", "c"}
     assert _referenced_tables('SELECT * FROM "t1", "t2"') == {"t1", "t2"}

@@ -214,7 +214,8 @@ def distinct_values(con, table: str, column: str, max_distinct: int = 100) -> li
     return [r[0] for r in rows]
 
 
-def schema_prompt_with_values(schemas, con, max_distinct: int = 100, hints=None) -> str:
+def schema_prompt_with_values(schemas, con, max_distinct: int = 100, hints=None,
+                              max_total_chars: int | None = None) -> str:
     """Render registered schemas for the text-to-SQL prompt, appending the
     distinct values of low-cardinality VARCHAR columns so the LLM filters on
     real category codes (the gap that made 'Rest of U.S.' match 0 rows).
@@ -223,33 +224,61 @@ def schema_prompt_with_values(schemas, con, max_distinct: int = 100, hints=None)
     glossaries annotate the values list (``CODE (meaning)``), column notes append
     to the column description, and table notes render as a ``Notes:`` line. With
     ``hints=None`` (or no entry for a table) output is byte-identical to before.
+
+    ``max_total_chars`` (optional) is a safety net so the prompt can never
+    overflow the model context: if the full render (with value dumps) exceeds it,
+    the value dumps — the bulk — are dropped; if it is still too large, tables are
+    included (without values) only until the budget is reached. ``None`` (default)
+    means no cap and the output is byte-identical to before.
     """
-    parts = []
-    for s in schemas:
-        th = (hints or {}).get(s.table)
-        glossaries = th.column_glossaries if th else {}
-        col_notes = th.column_notes if th else {}
-        col_lines = []
-        for c in s.columns:
-            desc = c.description
-            if c.name in col_notes:
-                desc = f"{desc} — {col_notes[c.name]}" if desc else col_notes[c.name]
-            line = f"  - {c.name} ({c.dtype}): {desc}"
-            if c.dtype == "VARCHAR":
-                vals = distinct_values(con, s.table, c.name, max_distinct)
-                if vals:
-                    gloss = glossaries.get(c.name, {})
-                    rendered = []
-                    for v in vals:
-                        meaning = glossary_lookup(gloss, v) if gloss else None
-                        rendered.append(f"{v} ({meaning})" if meaning else str(v))
-                    line += " | values: " + ", ".join(rendered)
-            col_lines.append(line)
-        header = f"Table: {s.table}\nDescription: {s.description}"
-        if th and th.table_notes:
-            header += "\nNotes: " + "; ".join(th.table_notes)
-        parts.append(header + "\nColumns:\n" + "\n".join(col_lines))
-    return "\n\n".join(parts)
+    def _render(include_values: bool) -> list[str]:
+        parts = []
+        for s in schemas:
+            th = (hints or {}).get(s.table)
+            glossaries = th.column_glossaries if th else {}
+            col_notes = th.column_notes if th else {}
+            col_lines = []
+            for c in s.columns:
+                desc = c.description
+                if c.name in col_notes:
+                    desc = f"{desc} — {col_notes[c.name]}" if desc else col_notes[c.name]
+                line = f"  - {c.name} ({c.dtype}): {desc}"
+                if include_values and c.dtype == "VARCHAR":
+                    vals = distinct_values(con, s.table, c.name, max_distinct)
+                    if vals:
+                        gloss = glossaries.get(c.name, {})
+                        rendered = []
+                        for v in vals:
+                            meaning = glossary_lookup(gloss, v) if gloss else None
+                            rendered.append(f"{v} ({meaning})" if meaning else str(v))
+                        line += " | values: " + ", ".join(rendered)
+                col_lines.append(line)
+            header = f"Table: {s.table}\nDescription: {s.description}"
+            if th and th.table_notes:
+                header += "\nNotes: " + "; ".join(th.table_notes)
+            parts.append(header + "\nColumns:\n" + "\n".join(col_lines))
+        return parts
+
+    parts = _render(include_values=True)
+    prompt = "\n\n".join(parts)
+    if max_total_chars is None or len(prompt) <= max_total_chars:
+        return prompt
+
+    # Over budget: drop the value dumps (the bulk) and re-render.
+    parts = _render(include_values=False)
+    prompt = "\n\n".join(parts)
+    if len(prompt) <= max_total_chars:
+        return prompt
+
+    # Still over budget (very many tables): include whole table blocks until full.
+    kept, size = [], 0
+    for block in parts:
+        add = len(block) + (2 if kept else 0)  # account for the "\n\n" join
+        if kept and size + add > max_total_chars:
+            break
+        kept.append(block)
+        size += add
+    return "\n\n".join(kept)[:max_total_chars]
 
 
 def schema_context_for_synthesis(schemas, hints=None) -> str:

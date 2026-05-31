@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     sql_relevance_judge_enabled: bool = True  # on a flagged result, ask the LLM why it's unhelpful and feed that into the retry
     sql_thinking_on_wide_table: bool = True  # enable model reasoning for SQL generation when the wide-table gate fires (off elsewhere for speed)
     sql_thinking_max_tokens: int = 4096  # max_tokens for a thinking SQL-generation call (reasoning + SQL needs more than the default 2048)
+    # Multi-turn table router: narrow candidate tables before rendering the
+    # (value-dumping) text-to-SQL schema prompt, so it stays within the model
+    # context as the corpus grows. Without this a broad question over a large
+    # corpus sends every table's schema+values and overflows the context.
+    sql_table_routing_enabled: bool = True  # run the LLM table-routing turn before text-to-SQL
+    sql_table_routing_max_selected: int = 8  # max tables fed into one text-to-SQL prompt after routing
+    sql_table_routing_catalog_budget_chars: int = 120000  # max size of the compact routing catalog; above this, embedding-rank candidates down to fit (~30K tokens)
+    sql_schema_prompt_budget_chars: int = 600000  # hard cap on the text-to-SQL schema prompt (~150K tokens, safely under a 256K-token context); over this, value dumps are dropped, then tables truncated. Safety net behind the router.
 
     # Relevance feedback
     feedback_enabled: bool = True

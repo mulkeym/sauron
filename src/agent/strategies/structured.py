@@ -205,6 +205,116 @@ class StructuredLookupTrace:
         }
 
 
+_TABLE_ROUTER_PROMPT = """You select which database tables are needed to answer a question.
+You are given a catalog of tables (name, description, columns).
+
+Rules:
+- Return ONLY a JSON array of the table names needed to answer the question.
+- Choose the FEWEST tables that can answer it — usually 1-3, never more than {max_selected}.
+- Use the table names exactly as written in the catalog.
+- If several tables look equally relevant, prefer the most specific matches.
+- Output JSON only, no explanation. Example: ["table_a", "table_b"]"""
+
+
+def _compact_catalog(schemas) -> str:
+    """One line per table: name, description, column names. NO distinct-value
+    dumps — this keeps the routing prompt small so it scales to large corpora."""
+    lines = []
+    for s in schemas:
+        cols = ", ".join(c.name for c in s.columns)
+        desc = (s.description or "").strip()
+        lines.append(f"- {s.table}: {desc} | columns: {cols}")
+    return "\n".join(lines)
+
+
+def _parse_table_names(raw: str) -> list:
+    """Extract a JSON array of table-name strings from an LLM response. Returns
+    [] on anything unparseable so the caller can fail open."""
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return []
+    return [str(x).strip() for x in data if isinstance(x, str)]
+
+
+def _embedding_top_k(question: str, schemas, k: int,
+                     embed_query_fn=None, embed_texts_fn=None) -> list:
+    """Top-k tables by embedding similarity — pure ranking, no threshold. Used
+    both for the Stage-1 pre-rank and as the fail-open fallback so we never send
+    the whole corpus to the SQL prompt. Fail-open: on any embedding error,
+    return the first k schemas unchanged."""
+    if k <= 0:
+        return []
+    try:
+        scored = tables_relevant_scored(
+            question, schemas, threshold=float("-inf"),
+            embed_query_fn=embed_query_fn, embed_texts_fn=embed_texts_fn)
+        ranked = sorted(scored, key=lambda t: t[1], reverse=True)
+        return [s for s, _score, _passed in ranked[:k]]
+    except Exception:
+        return list(schemas)[:k]
+
+
+def select_relevant_tables(question: str, schemas, *, generate_fn=None,
+                           embed_query_fn=None, embed_texts_fn=None) -> list:
+    """Multi-turn table router: narrow a (possibly huge) set of candidate tables
+    to the few needed to answer ``question``, so the downstream text-to-SQL
+    schema prompt stays bounded regardless of corpus size.
+
+    Stage 1 (cheap, no LLM): if the compact catalog would exceed the budget,
+    embedding-rank the candidates down to what fits.
+    Stage 2 (one LLM turn): present the compact catalog (names + descriptions +
+    column names, no value dumps) and ask which tables are needed.
+
+    Fail-open everywhere: a small corpus, a disabled flag, or an unusable router
+    response all resolve to a BOUNDED set (passthrough when already small, else a
+    bounded embedding top-K) — never the entire corpus."""
+    from src.config import settings
+    if not schemas:
+        return []
+    max_selected = settings.sql_table_routing_max_selected
+    # Already small enough, or routing disabled -> nothing to narrow.
+    if not settings.sql_table_routing_enabled or len(schemas) <= max_selected:
+        return list(schemas)
+
+    # Stage 1: keep the routing catalog within budget.
+    candidates = list(schemas)
+    catalog = _compact_catalog(candidates)
+    budget = settings.sql_table_routing_catalog_budget_chars
+    if len(catalog) > budget:
+        avg = max(1, len(catalog) // len(candidates))
+        fit = max(max_selected, budget // avg)
+        candidates = _embedding_top_k(question, candidates, fit,
+                                      embed_query_fn, embed_texts_fn)
+        catalog = _compact_catalog(candidates)
+
+    # Stage 2: LLM routing turn.
+    gen = generate_fn or generate
+    try:
+        raw = gen(
+            system_prompt=_TABLE_ROUTER_PROMPT.format(max_selected=max_selected),
+            user_prompt=f"Question: {question}\n\nTables:\n{catalog}",
+            temperature=0.0,
+            max_tokens=512,
+        )
+        names = _parse_table_names(raw)
+        by_name = {s.table: s for s in candidates}
+        selected = [by_name[n] for n in names if n in by_name][:max_selected]
+        if selected:
+            logger.info("Table router selected %d/%d tables: %s",
+                        len(selected), len(schemas), [s.table for s in selected])
+            return selected
+    except Exception as e:
+        logger.warning("Table router failed (%s); falling back to embedding top-K", e)
+
+    # Fail-open: bounded top-K, never the whole corpus.
+    return _embedding_top_k(question, candidates, max_selected,
+                            embed_query_fn, embed_texts_fn)
+
+
 def generate_sql(schema_prompt: str, question: str, generate_fn=None,
                  *, extra_user_context: str = "", temperature: float = 0.0,
                  thinking: bool = False) -> str:
@@ -256,7 +366,8 @@ def _generate_run_fit(con, question: str, schemas, *, hints=None, generate_fn=No
     from src.ingestion.tabular_store import schema_prompt_with_values
     gen = generate_fn or generate
     allowed = {s.table for s in schemas}
-    base_schema_prompt = schema_prompt_with_values(schemas, con, hints=hints)
+    base_schema_prompt = schema_prompt_with_values(
+        schemas, con, hints=hints, max_total_chars=settings.sql_schema_prompt_budget_chars)
     steering = _wide_table_steering(con, schemas)
     thinking = bool(steering) and settings.sql_thinking_on_wide_table
 
@@ -434,6 +545,11 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
                 skip_reason=f"no table >= {RELEVANCE_THRESHOLD} relevance")
             return {"structured_trace": trace.to_dict()}
         return {}
+
+    # Route a large set of gate-passers down to the relevant tables before SQL,
+    # so the value-dumping schema prompt stays within the model context. For this
+    # corpus the 0.30 gate passes nearly every table, so this is the real bound.
+    relevant = await asyncio.to_thread(select_relevant_tables, question, relevant)
 
     # Resolve domain hints (value glossaries, column/table notes) and pass them to
     # the SQL generator — parity with retrieve_analytical. Without this the SWEEP
