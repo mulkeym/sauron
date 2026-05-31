@@ -23,7 +23,7 @@ async def test_streamed_fires_callback_per_node_on_cache_miss():
                 step_callback=seen.append,
             )
     assert out.answer == "A"
-    assert seen == ["classify", "retrieve", "synthesize"]
+    assert seen == ["cache_check", "classify", "retrieve", "synthesize"]
 
 
 @pytest.mark.asyncio
