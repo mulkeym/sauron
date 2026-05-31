@@ -1920,7 +1920,9 @@ def _apply_settings_update(form) -> dict:
             s = str(raw).strip()
             if s == "" and name in _SETTINGS_KEEP_IF_BLANK:
                 continue
-            val = caster(s) if s != "" else getattr(settings, name)
+            if s == "" and caster is not str:
+                continue                       # blank numeric -> keep current (avoid caster("") error)
+            val = caster(s)                    # str("") == "" allowed (e.g. clearing vllm_api_key)
         setattr(settings, name, val)
 
     return {name: getattr(settings, name) for name in _SETTINGS_FIELDS}

@@ -33,3 +33,27 @@ def test_apply_settings_update_casts_numbers():
     _apply_settings_update({"llm_max_context": "300000", "feedback_similarity_threshold": "0.7"})
     assert settings.llm_max_context == 300000 and isinstance(settings.llm_max_context, int)
     assert settings.feedback_similarity_threshold == 0.7
+
+
+def test_apply_settings_update_can_clear_vllm_api_key():
+    from src.admin.routes import _apply_settings_update
+    from src.config import settings
+    settings.vllm_api_key = "sk-old"
+    _apply_settings_update({"vllm_api_key": ""})   # blank submit -> cleared (local model)
+    assert settings.vllm_api_key == ""
+
+
+def test_apply_settings_update_absent_bool_unchanged():
+    from src.admin.routes import _apply_settings_update
+    from src.config import settings
+    settings.feedback_enabled = True
+    _apply_settings_update({})   # no checkbox AND no hidden field -> field absent -> keep
+    assert settings.feedback_enabled is True
+
+
+def test_apply_settings_update_blank_numeric_kept():
+    from src.admin.routes import _apply_settings_update
+    from src.config import settings
+    settings.llm_max_context = 250000
+    _apply_settings_update({"llm_max_context": ""})  # blank numeric -> keep current (no int("") crash)
+    assert settings.llm_max_context == 250000
