@@ -547,6 +547,41 @@ async def list_hints_route():
     return {"hints": [vars(h) | {"created_at": str(h.created_at)} for h in hints]}
 
 
+def _build_hints_view(hints, datasets):
+    """Group SchemaHints by scope into a template-ready view-model. Pure/sync.
+    Returns [{"scope_label": str, "hints": [hint-dict, ...]}, ...] with category
+    scopes before dataset scopes. hint-dict carries hint_type/target_column/
+    provenance/confidence, plus either entries+count (value_glossary) or text (notes)."""
+    ds_name = {str(d.id): d.name for d in datasets}
+
+    def scope_label(h):
+        if h.scope_type == "dataset":
+            name = ds_name.get(str(h.scope_value))
+            return f"dataset = {name} (id {h.scope_value})" if name else f"dataset = {h.scope_value}"
+        return f"category = {h.scope_value}"
+
+    type_order = {"table_note": 0, "column_note": 1, "value_glossary": 2}
+    groups: dict[str, list] = {}
+    for h in hints:
+        groups.setdefault(scope_label(h), []).append(h)
+
+    out = []
+    for label in sorted(groups, key=lambda l: (0 if l.startswith("category") else 1, l.lower())):
+        hint_dicts = []
+        for h in sorted(groups[label], key=lambda h: (type_order.get(h.hint_type, 9), h.target_column or "")):
+            d = {"hint_type": h.hint_type, "target_column": h.target_column,
+                 "provenance": h.provenance, "confidence": h.confidence}
+            if h.hint_type == "value_glossary":
+                payload = h.payload if isinstance(h.payload, dict) else {}
+                d["entries"] = [{"code": k, "meaning": payload[k]} for k in sorted(payload)]
+                d["count"] = len(d["entries"])
+            else:
+                d["text"] = h.payload.get("text", "") if isinstance(h.payload, dict) else ""
+            hint_dicts.append(d)
+        out.append({"scope_label": label, "hints": hint_dicts})
+    return out
+
+
 @router.delete("/api/hints/{hint_id}")
 async def delete_hint_route(hint_id: int):
     await delete_hint_impl(hint_id)
