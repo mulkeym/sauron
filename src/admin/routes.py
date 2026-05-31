@@ -1879,95 +1879,58 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", {"settings": settings})
 
 
+# Form field -> caster. Membership mirrors the persisted settings dict.
+_SETTINGS_FIELDS = {
+    "admin_username": str, "admin_password": str, "api_keys": str,
+    "vllm_base_url": str, "vllm_model_name": str, "vllm_api_key": str,
+    "embedding_mode": str, "embedding_api_url": str, "embedding_model_name": str,
+    "mcp_port": int, "mcp_alt_port": int,
+    "entity_merge_auto_threshold": float, "entity_merge_review_threshold": float,
+    "max_parallel_ingestion": int, "llm_concurrency": int,
+    "llm_max_context": int, "llm_max_output_tokens": int, "metadata_max_doc_length": int,
+    "metadata_extraction_enabled": bool, "feedback_enabled": bool,
+    "prf_enabled": bool, "strategy_memory_enabled": bool,
+    "feedback_similarity_threshold": float,
+}
+# String fields that must NOT be cleared when submitted blank (creds/urls). vllm_api_key may be blanked.
+_SETTINGS_KEEP_IF_BLANK = {
+    "admin_username", "admin_password", "api_keys",
+    "vllm_base_url", "vllm_model_name",
+    "embedding_mode", "embedding_api_url", "embedding_model_name",
+}
+
+
+def _apply_settings_update(form) -> dict:
+    """Partial update of the live `settings` object from a submitted form: only
+    fields PRESENT in the form are touched (so a per-section save never clobbers
+    another section). Returns the full persist dict. ``form`` is a Starlette
+    FormData (has .getlist) or a plain dict (tests). Booleans use the last value
+    (sections post a hidden 'false' + checkbox 'true', so an unchecked box still
+    posts 'false')."""
+    def last(name):
+        return form.getlist(name)[-1] if hasattr(form, "getlist") else form[name]
+
+    for name, caster in _SETTINGS_FIELDS.items():
+        if name not in form:
+            continue
+        raw = last(name)
+        if caster is bool:
+            val = str(raw).strip().lower() in ("true", "1", "on", "yes")
+        else:
+            s = str(raw).strip()
+            if s == "" and name in _SETTINGS_KEEP_IF_BLANK:
+                continue
+            val = caster(s) if s != "" else getattr(settings, name)
+        setattr(settings, name, val)
+
+    return {name: getattr(settings, name) for name in _SETTINGS_FIELDS}
+
+
 @router.post("/api/settings")
-async def save_settings(
-    admin_username: str = Form(""),
-    admin_password: str = Form(""),
-    api_keys: str = Form(""),
-    vllm_base_url: str = Form(""),
-    vllm_model_name: str = Form(""),
-    vllm_api_key: str = Form(""),
-    embedding_mode: str = Form(""),
-    embedding_api_url: str = Form(""),
-    embedding_model_name: str = Form(""),
-    mcp_port: int = Form(8090),
-    mcp_alt_port: int = Form(8091),
-    entity_merge_auto_threshold: float = Form(0.9),
-    entity_merge_review_threshold: float = Form(0.7),
-    max_parallel_ingestion: int = Form(3),
-    llm_concurrency: int = Form(4),
-    llm_max_context: int = Form(200000),
-    llm_max_output_tokens: int = Form(32768),
-    metadata_extraction_enabled: bool = Form(True),
-    metadata_max_doc_length: int = Form(200000),
-    feedback_enabled: bool = Form(True),
-    feedback_similarity_threshold: float = Form(0.85),
-    prf_enabled: bool = Form(True),
-    strategy_memory_enabled: bool = Form(True),
-):
-    # Security
-    if admin_username:
-        settings.admin_username = admin_username
-    if admin_password:
-        settings.admin_password = admin_password
-    if api_keys.strip():
-        settings.api_keys = api_keys.strip()
-
-    # Update in-memory settings
-    if vllm_base_url:
-        settings.vllm_base_url = vllm_base_url
-    if vllm_model_name:
-        settings.vllm_model_name = vllm_model_name
-    settings.vllm_api_key = vllm_api_key  # can be empty (local models)
-    if embedding_mode:
-        settings.embedding_mode = embedding_mode
-    if embedding_api_url:
-        settings.embedding_api_url = embedding_api_url
-    if embedding_model_name:
-        settings.embedding_model_name = embedding_model_name
-    settings.mcp_port = mcp_port
-    settings.mcp_alt_port = mcp_alt_port
-    settings.entity_merge_auto_threshold = entity_merge_auto_threshold
-    settings.entity_merge_review_threshold = entity_merge_review_threshold
-    settings.max_parallel_ingestion = max_parallel_ingestion
-    settings.llm_concurrency = llm_concurrency
-    settings.llm_max_context = llm_max_context
-    settings.llm_max_output_tokens = llm_max_output_tokens
-    settings.metadata_extraction_enabled = metadata_extraction_enabled
-    settings.metadata_max_doc_length = metadata_max_doc_length
-    settings.feedback_enabled = feedback_enabled
-    settings.feedback_similarity_threshold = feedback_similarity_threshold
-    settings.prf_enabled = prf_enabled
-    settings.strategy_memory_enabled = strategy_memory_enabled
-
-    # Persist to data/settings.json on the mounted volume so it survives container restarts
-    persist = {
-        "admin_username": settings.admin_username,
-        "admin_password": settings.admin_password,
-        "api_keys": settings.api_keys,
-        "vllm_base_url": settings.vllm_base_url,
-        "vllm_model_name": settings.vllm_model_name,
-        "vllm_api_key": settings.vllm_api_key,
-        "embedding_mode": settings.embedding_mode,
-        "embedding_api_url": settings.embedding_api_url,
-        "embedding_model_name": settings.embedding_model_name,
-        "mcp_port": settings.mcp_port,
-        "mcp_alt_port": settings.mcp_alt_port,
-        "entity_merge_auto_threshold": settings.entity_merge_auto_threshold,
-        "entity_merge_review_threshold": settings.entity_merge_review_threshold,
-        "max_parallel_ingestion": settings.max_parallel_ingestion,
-        "llm_concurrency": settings.llm_concurrency,
-        "llm_max_context": settings.llm_max_context,
-        "llm_max_output_tokens": settings.llm_max_output_tokens,
-        "metadata_extraction_enabled": settings.metadata_extraction_enabled,
-        "metadata_max_doc_length": settings.metadata_max_doc_length,
-        "feedback_enabled": settings.feedback_enabled,
-        "feedback_similarity_threshold": settings.feedback_similarity_threshold,
-        "prf_enabled": settings.prf_enabled,
-        "strategy_memory_enabled": settings.strategy_memory_enabled,
-    }
+async def save_settings(request: Request):
+    """Persist a partial settings update (only the submitted section's fields)."""
+    persist = _apply_settings_update(await request.form())
     Path("data/settings.json").write_text(json.dumps(persist, indent=2) + "\n")
-
     return HTMLResponse('<div class="status-ok">Settings saved successfully.</div>')
 
 
