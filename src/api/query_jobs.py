@@ -12,6 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from src.generation.rag_chain import agent_query_streamed
+
 logger = logging.getLogger(__name__)
 
 # Agent-graph node names -> human-readable step labels shown to API callers.
@@ -110,6 +112,57 @@ class QueryJobQueue:
             job.status = QueryStatus.FAILED
             job.error = error
             job.completed_at = time.time()
+
+    max_parallel: int = 3  # class default; overridden from settings in start_worker
+
+    async def start_worker(self, vector_store, schema_registry, metadata_store) -> None:
+        """Start the bounded worker pool (idempotent)."""
+        if self._worker_running:
+            return
+        self._stores = (vector_store, schema_registry, metadata_store)
+        self._queue = asyncio.Queue()
+        self._worker_running = True
+        # Re-queue jobs enqueued before the worker started.
+        for token, job in self._jobs.items():
+            if job.status == QueryStatus.QUEUED:
+                self._queue.put_nowait(token)
+        # Respect an instance-level max_parallel if a caller (or test) set one;
+        # otherwise take the configured value from settings.
+        if self.max_parallel == QueryJobQueue.max_parallel:
+            from src.config import settings
+            self.max_parallel = settings.max_parallel_async_query
+        for _ in range(self.max_parallel):
+            asyncio.create_task(self._worker_loop())
+
+    async def _worker_loop(self) -> None:
+        import traceback
+        while True:
+            token = await self._queue.get()
+            job = self._jobs.get(token)
+            if job is None:
+                self._queue.task_done()
+                continue
+            try:
+                vector_store, schema_registry, metadata_store = self._stores
+                job.status = QueryStatus.PROCESSING
+                result = await agent_query_streamed(
+                    question=job.question, user_groups=job.groups,
+                    vector_store=vector_store, schema_registry=schema_registry,
+                    metadata_store=metadata_store,
+                    step_callback=lambda node, _t=token: self.update_step(_t, node),
+                )
+                citation_dicts = [
+                    {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
+                     "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
+                     "relevance": c.relevance}
+                    for c in result.citations
+                ]
+                self.complete(token, answer=result.answer, citations=citation_dicts,
+                              cached=result.cached, cached_query=result.cached_query)
+            except Exception as e:
+                logger.error(f"Async query {token} failed: {e}\n{traceback.format_exc()}")
+                self.fail(token, str(e))
+            self._queue.task_done()
 
 
 # Singleton

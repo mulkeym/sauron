@@ -61,3 +61,71 @@ def test_ttl_does_not_evict_running_jobs():
     token = q.enqueue(question="x", username="m", groups=[])
     q.update_step(token, "classify")  # PROCESSING, not terminal
     assert q.get_job(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_worker_processes_job_to_complete():
+    q = QueryJobQueue()
+    from src.generation.rag_chain import RAGResponse
+    resp = RAGResponse(answer="42", citations=[], cached=False, cached_query=None)
+
+    async def fake_streamed(*args, **kwargs):
+        kwargs["step_callback"]("classify")
+        return resp
+
+    with patch("src.api.query_jobs.agent_query_streamed", side_effect=fake_streamed):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        token = q.enqueue(question="q", username="m", groups=[])
+        for _ in range(50):
+            if q.get_job(token).status == QueryStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.02)
+    job = q.get_job(token)
+    assert job.status == QueryStatus.COMPLETE
+    assert job.answer == "42"
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_failed_on_exception():
+    q = QueryJobQueue()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    with patch("src.api.query_jobs.agent_query_streamed", side_effect=boom):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        token = q.enqueue(question="q", username="m", groups=[])
+        for _ in range(50):
+            if q.get_job(token).status == QueryStatus.FAILED:
+                break
+            await asyncio.sleep(0.02)
+    job = q.get_job(token)
+    assert job.status == QueryStatus.FAILED
+    assert "kaboom" in job.error
+
+
+@pytest.mark.asyncio
+async def test_worker_pool_respects_max_parallel():
+    q = QueryJobQueue()
+    q.max_parallel = 2
+    running = 0
+    peak = 0
+
+    async def slow(*args, **kwargs):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        from src.generation.rag_chain import RAGResponse
+        return RAGResponse(answer="x", citations=[])
+
+    with patch("src.api.query_jobs.agent_query_streamed", side_effect=slow):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        tokens = [q.enqueue(question=f"q{i}", username="m", groups=[]) for i in range(4)]
+        for _ in range(100):
+            if all(q.get_job(t).status == QueryStatus.COMPLETE for t in tokens):
+                break
+            await asyncio.sleep(0.02)
+    assert peak <= 2
+    assert all(q.get_job(t).status == QueryStatus.COMPLETE for t in tokens)
