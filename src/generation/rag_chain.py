@@ -61,7 +61,10 @@ def rag_query(question, user_groups, vector_store, top_k=10):
     return RAGResponse(answer=answer, citations=citations)
 
 
-async def agent_query(question: str, user_groups: list[str], vector_store, schema_registry, metadata_store=None) -> RAGResponse:
+async def agent_query_streamed(
+    question: str, user_groups: list[str], vector_store, schema_registry,
+    metadata_store=None, step_callback=None,
+) -> RAGResponse:
     # Shared cache decision (embed -> lookup -> LLM applicability judge) — same
     # path the admin playground uses, so the two cannot diverge.
     decision = await judged_cache_lookup(question, user_groups)
@@ -79,10 +82,14 @@ async def agent_query(question: str, user_groups: list[str], vector_store, schem
         return RAGResponse(answer=cached["answer"], citations=citations,
                            cached=True, cached_query=cached.get("cached_query"))
 
-    # run_agent is imported lazily to avoid a circular import: src.agent.graph
-    # imports RAGResponse from this module. Tests patch src.agent.graph.run_agent.
-    from src.agent.graph import run_agent
-    result = await run_agent(question=question, user_groups=user_groups, vector_store=vector_store, schema_registry=schema_registry, metadata_store=metadata_store)
+    # run_agent_streamed is imported lazily to avoid a circular import: src.agent.graph
+    # imports RAGResponse from this module. Tests patch src.agent.graph.run_agent_streamed.
+    from src.agent.graph import run_agent_streamed
+    result = await run_agent_streamed(
+        question=question, user_groups=user_groups, vector_store=vector_store,
+        schema_registry=schema_registry, metadata_store=metadata_store,
+        step_callback=step_callback,
+    )
 
     if decision.query_vector is not None:
         try:
@@ -102,3 +109,11 @@ async def agent_query(question: str, user_groups: list[str], vector_store, schem
             pass
 
     return result
+
+
+async def agent_query(question: str, user_groups: list[str], vector_store, schema_registry, metadata_store=None) -> RAGResponse:
+    return await agent_query_streamed(
+        question=question, user_groups=user_groups, vector_store=vector_store,
+        schema_registry=schema_registry, metadata_store=metadata_store,
+        step_callback=None,
+    )
