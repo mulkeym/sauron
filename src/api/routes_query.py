@@ -1,9 +1,13 @@
-from fastapi import APIRouter, Depends
-from src.api.models import CitationResponse, QueryRequest, QueryResponse
+from fastapi import APIRouter, Depends, HTTPException
+from src.api.models import (
+    CitationResponse, QueryRequest, QueryResponse,
+    AsyncQuerySubmitResponse, AsyncQueryStatusResponse,
+)
 from src.api.routes_ingest import get_vector_store, get_schema_registry, get_metadata_store
 from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.generation.rag_chain import agent_query
+from src.api.query_jobs import query_queue
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 
@@ -19,4 +23,32 @@ async def query(request: QueryRequest, user: UserContext = Depends(require_auth)
         citations=[CitationResponse(doc_id=c.doc_id, filename=c.filename, doc_type=c.doc_type, chunk_index=c.chunk_index, page=c.page, snippet=c.snippet, relevance=c.relevance) for c in result.citations],
         cached=result.cached,
         cached_query=result.cached_query,
+    )
+
+
+@router.post("/query/async", response_model=AsyncQuerySubmitResponse)
+async def query_async(request: QueryRequest, user: UserContext = Depends(require_auth)):
+    """Submit a question for async processing. Returns a token to poll for status/result."""
+    await query_queue.start_worker(get_vector_store(), get_schema_registry(), get_metadata_store())
+    token = query_queue.enqueue(question=request.question, username=user.username, groups=user.groups)
+    return AsyncQuerySubmitResponse(token=token, status="queued")
+
+
+@router.get("/query/async/{token}", response_model=AsyncQueryStatusResponse)
+async def query_async_status(token: str, user: UserContext = Depends(require_auth)):
+    """Poll an async query by token. Owner-scoped: another user's token returns 404."""
+    job = query_queue._jobs.get(token)
+    if job is None or job.username != user.username:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return AsyncQueryStatusResponse(
+        token=job.token,
+        status=str(job.status),
+        step=job.step,
+        answer=job.answer,
+        citations=[CitationResponse(**c) for c in job.citations],
+        cached=job.cached,
+        cached_query=job.cached_query,
+        error=job.error,
+        created_at=job.created_at,
+        completed_at=job.completed_at,
     )
