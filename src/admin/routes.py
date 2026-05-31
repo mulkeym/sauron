@@ -6,7 +6,7 @@ import secrets
 import tempfile
 from pathlib import Path
 from typing import List
-from fastapi import APIRouter, Request, Form, UploadFile, File
+from fastapi import APIRouter, Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from src.api.routes_ingest import get_metadata_store, get_vector_store, get_schema_registry
@@ -1876,7 +1876,6 @@ async def settings_page(request: Request):
     redirect = _require_login(request)
     if redirect:
         return redirect
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/admin/settings/security", status_code=307)
 
 
@@ -1886,7 +1885,6 @@ async def settings_section_page(request: Request, section: str):
     if redirect:
         return redirect
     if section not in ("security", "models", "retrieval", "system", "maintenance"):
-        from fastapi import HTTPException
         raise HTTPException(status_code=404)
     return templates.TemplateResponse(request, f"settings_{section}.html",
                                       {"settings": settings, "active": section})
