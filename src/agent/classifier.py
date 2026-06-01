@@ -110,18 +110,25 @@ def _classify_node_factory(schema_registry):
     confidence-gated soft override from Strategy Memory."""
     async def classify_node(state: AgentState) -> dict:
         import asyncio
+        # Live sub-step reporter for async-status visibility; no-op when absent
+        # (sync path / tests). Fires synchronously mid-node so progress shows in
+        # real time instead of only after the node completes.
+        progress = state.get("progress") or (lambda *a, **k: None)
         available = ""
         if schema_registry is not None:
+            progress("classify.hints")
             schemas = schema_registry.list_for_user(state.get("user_groups", ["ALL"]))
             hints = await _resolve_hints_for_classifier(schemas)
             available = format_available_tables(schemas, hints)
         # classify_query makes a blocking LLM call — run it off the event loop
         # (the old sync node was run by LangGraph in a threadpool).
+        progress("classify.llm")
         result = await asyncio.to_thread(classify_query, state, available)
         llm_pick = result["query_type"]
 
         memory_decision = {"llm_pick": str(llm_pick), "overrode": False, "reason": "disabled"}
         if settings.strategy_memory_enabled:
+            progress("classify.strategy")
             try:
                 best = await get_best_strategy(state["question"])
                 memory_decision["reason"] = "no record"
@@ -162,5 +169,11 @@ def _classify_node_factory(schema_registry):
                 memory_decision["reason"] = "error"
 
         result["strategy_memory"] = memory_decision if settings.strategy_memory_enabled else None
+        progress("classify.done", {"kind": "classification", "data": {
+            "query_type": str(result["query_type"]),
+            "reason": result.get("reason", ""),
+            "sub_tasks": result.get("sub_tasks", []),
+            "strategy_memory": result["strategy_memory"],
+        }})
         return result
     return classify_node
