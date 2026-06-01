@@ -396,3 +396,61 @@ async def test_memory_does_not_override_metadata(monkeypatch):
     assert out["query_type"] == QueryType.METADATA
     assert out["strategy_memory"]["overrode"] is False
     assert out["strategy_memory"]["reason"] == "protected"
+
+
+# --- reason + progress sub-steps (async-status visibility) ---
+
+def test_classify_query_returns_reason(monkeypatch):
+    monkeypatch.setattr(classifier, "generate",
+                        lambda **kw: '{"query_type": "lookup", "sub_tasks": ["x"], "reason": "a single fact lookup"}')
+    out = classify_query({"question": "what is the capital"})
+    assert out["reason"] == "a single fact lookup"
+
+
+def test_classify_query_reason_defaults_empty(monkeypatch):
+    monkeypatch.setattr(classifier, "generate",
+                        lambda **kw: '{"query_type": "lookup", "sub_tasks": ["x"]}')
+    out = classify_query({"question": "x"})
+    assert out["reason"] == ""
+
+
+@pytest.mark.asyncio
+async def test_classify_node_emits_progress_substeps(monkeypatch):
+    import src.agent.classifier as clf
+    monkeypatch.setattr(clf, "classify_query",
+                        lambda state, available_tables="": {"query_type": QueryType.LOOKUP,
+                                                            "sub_tasks": ["x"], "reason": "simple"})
+    async def fake_best(q):
+        return None
+    monkeypatch.setattr(clf, "get_best_strategy", fake_best, raising=False)
+    monkeypatch.setattr(clf.settings, "strategy_memory_enabled", True)
+
+    node = clf._classify_node_factory(schema_registry=None)  # None -> no classify.hints stage
+    calls = []
+    out = await node({"question": "q", "user_groups": ["ALL"],
+                      "progress": lambda name, detail=None: calls.append((name, detail))})
+
+    names = [c[0] for c in calls]
+    assert names == ["classify.llm", "classify.strategy", "classify.done"]
+    detail = calls[-1][1]
+    assert detail["kind"] == "classification"
+    data = detail["data"]
+    assert data["query_type"] == "lookup"
+    assert data["reason"] == "simple"
+    assert data["sub_tasks"] == ["x"]
+    assert "strategy_memory" in data
+    assert out["query_type"] == QueryType.LOOKUP
+
+
+@pytest.mark.asyncio
+async def test_classify_node_progress_optional(monkeypatch):
+    import src.agent.classifier as clf
+    monkeypatch.setattr(clf, "classify_query",
+                        lambda state, available_tables="": {"query_type": QueryType.LOOKUP,
+                                                            "sub_tasks": ["x"], "reason": ""})
+    async def fake_best(q):
+        return None
+    monkeypatch.setattr(clf, "get_best_strategy", fake_best, raising=False)
+    node = clf._classify_node_factory(schema_registry=None)
+    out = await node({"question": "q", "user_groups": ["ALL"]})  # no 'progress' -> must not error
+    assert out["query_type"] == QueryType.LOOKUP

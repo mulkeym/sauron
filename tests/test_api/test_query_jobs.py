@@ -159,3 +159,22 @@ async def test_worker_times_out_long_job():
     job = q.get_job(token)
     assert job.status == QueryStatus.FAILED
     assert job.error == "Query timed out"
+
+
+def test_update_step_appends_timeline_with_elapsed():
+    q = QueryJobQueue()
+    token = q.enqueue(question="x", username="m", groups=[])
+    q.update_step(token, "classify.llm")
+    job = q.get_job(token)
+    assert job.step == "classifying question"           # sub-step label resolves
+    assert len(job.steps) == 1
+    assert job.steps[0]["step"] == "classifying question"
+    assert isinstance(job.steps[0]["at"], (int, float))
+
+
+def test_update_step_stores_classification_detail():
+    q = QueryJobQueue()
+    token = q.enqueue(question="x", username="m", groups=[])
+    data = {"query_type": "lookup", "reason": "r", "sub_tasks": ["x"], "strategy_memory": None}
+    q.update_step(token, "classify.done", {"kind": "classification", "data": data})
+    assert q.get_job(token).classification == data

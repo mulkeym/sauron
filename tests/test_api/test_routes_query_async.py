@@ -61,6 +61,24 @@ def test_poll_returns_completed_answer(client, auth_headers):
     assert data["citations"][0]["filename"] == "p.pdf"
 
 
+def test_poll_returns_steps_and_classification(client, auth_headers):
+    query_queue._jobs["tok-3"] = QueryJob(
+        token="tok-3", question="q", username="mike", groups=["finance"],
+        status=QueryStatus.PROCESSING, step="classifying question",
+        steps=[{"step": "reading available data tables", "at": 0.3},
+               {"step": "classifying question", "at": 0.5}],
+        classification={"query_type": "analytical", "reason": "asks for pay by grade",
+                        "sub_tasks": ["gs-13 pay"], "strategy_memory": None},
+    )
+    resp = client.get("/api/v1/query/async/tok-3", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["steps"] == [{"step": "reading available data tables", "at": 0.3},
+                             {"step": "classifying question", "at": 0.5}]
+    assert data["classification"]["query_type"] == "analytical"
+    assert data["classification"]["reason"] == "asks for pay by grade"
+
+
 def test_poll_unknown_token_404(client, auth_headers):
     resp = client.get("/api/v1/query/async/missing", headers=auth_headers)
     assert resp.status_code == 404

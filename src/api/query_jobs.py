@@ -109,11 +109,18 @@ class QueryJobQueue:
         self._evict_expired()
         return self._jobs.get(token)
 
-    def update_step(self, token: str, node_name: str) -> None:
+    def update_step(self, token: str, node_name: str, detail: dict | None = None) -> None:
+        """Update a job's current step label and append it to the step timeline.
+        ``detail`` carries structured node output; a classification detail
+        ({"kind": "classification", "data": {...}}) is stored on the job."""
         job = self._jobs.get(token)
         if job:
             job.status = QueryStatus.PROCESSING
-            job.step = STEP_LABELS.get(node_name, node_name)
+            label = STEP_LABELS.get(node_name, node_name)
+            job.step = label
+            job.steps.append({"step": label, "at": round(time.time() - job.created_at, 2)})
+            if detail and detail.get("kind") == "classification":
+                job.classification = detail.get("data")
 
     def complete(self, token: str, answer: str, citations: list[dict], cached: bool, cached_query: str | None) -> None:
         job = self._jobs.get(token)

@@ -24,7 +24,7 @@ IMPORTANT:
 - Use METADATA only for questions ABOUT the files (catalog: counts, dates, datasets, filenames, which-files-mention). A question answered by the CONTENT of a file (e.g. "what does the pay doc SAY about officers?", "what is the pay for an O-4?") is NOT metadata — use lookup/analytical.
 
 Respond with ONLY valid JSON:
-{"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"]}"""
+{"query_type": "<type>", "sub_tasks": ["<task1>", "<task2>"], "reason": "<one short phrase explaining the chosen type>"}"""
 
 
 _MAX_NOTE_CHARS = 200
@@ -79,10 +79,12 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
         temperature=0.0,
         max_tokens=1024,
     )
+    reason = ""
     try:
         parsed = parse_json_response(response)
         query_type = QueryType(parsed["query_type"])
         sub_tasks = parsed.get("sub_tasks", [question])
+        reason = str(parsed.get("reason", "") or "")
         logger.info("Classified %r -> %s (tables_available=%s)",
                     question, query_type.value, bool(available_tables))
     except (Exception,):
@@ -90,7 +92,7 @@ def classify_query(state: AgentState, available_tables: str = "") -> dict:
         sub_tasks = [question]
         logger.warning("Classification parse failed for %r; defaulting to LOOKUP. Raw: %r",
                        question, response)
-    return {"query_type": query_type, "sub_tasks": sub_tasks}
+    return {"query_type": query_type, "sub_tasks": sub_tasks, "reason": reason}
 
 
 async def _resolve_hints_for_classifier(schemas) -> dict:

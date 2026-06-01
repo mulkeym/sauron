@@ -51,6 +51,8 @@ class AsyncQueryStatusResponse(BaseModel):
     token: str
     status: str
     step: str
+    steps: list[dict] = []                 # timeline: [{"step": label, "at": elapsed_s}, ...]
+    classification: dict | None = None     # classify detail: query_type, reason, sub_tasks, strategy_memory
     answer: str | None = None
     citations: list[CitationResponse] = []
     cached: bool = False
