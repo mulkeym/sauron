@@ -84,7 +84,9 @@ def poll_until_done(
 ) -> dict:
     """Poll the status endpoint, printing each new step, until complete/failed."""
     start = time.monotonic()
+    printed = 0          # how many timeline entries we've already shown
     last_step = None
+    classification_shown = False
 
     while True:
         resp = requests.get(
@@ -95,10 +97,24 @@ def poll_until_done(
         resp.raise_for_status()
         job = resp.json()
 
-        step = job.get("step", "")
-        if step != last_step:
-            print(f"  [{time.monotonic() - start:5.1f}s] {step}")
-            last_step = step
+        # Prefer the server-side step timeline (each entry carries its own elapsed
+        # time, and it captures sub-steps that flicker by between polls). Fall back
+        # to the single 'step' label if an older server doesn't send a timeline.
+        steps = job.get("steps") or []
+        if steps:
+            for entry in steps[printed:]:
+                print(f"  [{entry.get('at', 0):5.1f}s] {entry.get('step', '')}")
+            printed = len(steps)
+        else:
+            step = job.get("step", "")
+            if step != last_step:
+                print(f"  [{time.monotonic() - start:5.1f}s] {step}")
+                last_step = step
+
+        # Print the classify decision once, as soon as it's available.
+        if not classification_shown and job.get("classification"):
+            _print_classification(job["classification"])
+            classification_shown = True
 
         status = job.get("status")
         if status in ("complete", "failed"):
@@ -108,6 +124,25 @@ def poll_until_done(
             sys.exit(f"Timed out after {overall_deadline:.0f}s (last status: {status}).")
 
         time.sleep(interval)
+
+
+def _print_classification(c: dict) -> None:
+    """Render the classify step's decision: query type + reason, sub-tasks, and
+    the strategy-memory routing decision (the work that happens during the
+    otherwise-opaque 'classifying question' step)."""
+    qt = c.get("query_type", "?")
+    reason = c.get("reason") or ""
+    print(f"     ↳ classified as {qt}" + (f' — "{reason}"' if reason else ""))
+    sub_tasks = [t for t in (c.get("sub_tasks") or [])]
+    if sub_tasks:
+        print(f"       sub-tasks: {sub_tasks}")
+    sm = c.get("strategy_memory") or {}
+    if sm and sm.get("reason") not in (None, "disabled"):
+        if sm.get("overrode"):
+            print(f"       strategy memory: OVERRODE {sm.get('llm_pick')} → {sm.get('memory_best')} "
+                  f"(n={sm.get('count')}, margin={float(sm.get('margin', 0)) * 100:.0f}%)")
+        else:
+            print(f"       strategy memory: kept {sm.get('llm_pick')} ({sm.get('reason')})")
 
 
 def print_result(job: dict) -> None:
