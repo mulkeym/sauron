@@ -21,6 +21,10 @@ STEP_LABELS = {
     "queued": "queued",
     "cache_check": "checking cache",
     "classify": "classifying question",
+    "classify.hints": "reading available data tables",
+    "classify.llm": "classifying question",
+    "classify.strategy": "checking strategy memory",
+    "classify.done": "classification complete",
     "retrieve": "retrieving documents",
     "enrich": "searching knowledge graph",
     "merge": "merging results",
@@ -49,6 +53,8 @@ class QueryJob:
     cached: bool = False
     cached_query: str | None = None
     error: str | None = None
+    steps: list = field(default_factory=list)      # timeline: [{"step": label, "at": elapsed_s}, ...]
+    classification: dict | None = None             # classify node detail: query_type, reason, sub_tasks, strategy_memory
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
 
@@ -167,7 +173,7 @@ class QueryJobQueue:
                         question=job.question, user_groups=job.groups,
                         vector_store=vector_store, schema_registry=schema_registry,
                         metadata_store=metadata_store,
-                        step_callback=lambda node, _t=token: self.update_step(_t, node),
+                        step_callback=lambda node, detail=None, _t=token: self.update_step(_t, node, detail),
                     ),
                     timeout=self._job_timeout,
                 )

@@ -328,6 +328,12 @@ async def run_agent_streamed(
         retrieval_attempts=0, needs_reretrieval=False, reformulated_query="",
         answer="", citations=[], warnings=[],
     )
+    # Inject a live progress reporter so nodes (e.g. classify) can emit sub-steps
+    # synchronously as work happens — not just the per-node label LangGraph emits
+    # after a node finishes. Forwards to the same step_callback, with optional
+    # structured detail. Omitted entirely when no step_callback (sync path/tests).
+    if step_callback is not None:
+        initial_state["progress"] = lambda name, detail=None: step_callback(name, detail)
     final_state = dict(initial_state)
     async for event in graph.astream(initial_state, stream_mode="updates"):
         for node_name, node_output in event.items():
