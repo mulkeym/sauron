@@ -339,7 +339,10 @@ async def run_agent_streamed(
         for node_name, node_output in event.items():
             if isinstance(node_output, dict):
                 final_state.update(node_output)
-            if step_callback is not None:
+            # "classify" self-reports finer sub-steps via the injected progress
+            # reporter; emitting its post-node label too would duplicate
+            # "classifying question" in the timeline. Other nodes keep the label.
+            if step_callback is not None and node_name != "classify":
                 step_callback(node_name)
     return RAGResponse(
         answer=final_state.get("answer", "I could not find any relevant information."),
