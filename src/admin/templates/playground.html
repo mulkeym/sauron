@@ -63,7 +63,7 @@ function initProgressPanel() {
         const attrs = conditional ? ' data-conditional="1"' : '';
         html += `<div id="step-row-${step.id}" class="trace-step"${attrs} style="opacity:0.4;${hidden}">
             <span id="step-icon-${step.id}">&#11036;</span>
-            <span> Step ${step.num} of 4: ${step.label}</span>
+            <span id="step-label-${step.id}"> Step ${step.num} of 4: ${step.label}</span>
             <span id="step-arrow-${step.id}" style="display:none;"> &#9660;</span>
             <span class="trace-time" id="step-time-${step.id}"></span>
         </div>
@@ -89,12 +89,18 @@ function markStepCompleted(stepId, time, detail) {
 }
 
 /* ---------- Targeted update: mark a step as active (running) ---------- */
-function markStepActive(stepId, elapsed) {
+function markStepActive(stepId, elapsed, subLabel) {
     const row = document.getElementById(`step-row-${stepId}`);
     if (!row || row.dataset.done) return;
     row.style = 'background:#1e40af; color:white;';
     document.getElementById(`step-icon-${stepId}`).innerHTML = '&#9203;';
     document.getElementById(`step-time-${stepId}`).textContent = elapsed + 's';
+    const labelEl = document.getElementById(`step-label-${stepId}`);
+    if (labelEl) {
+        const s = STEPS.find(s => s.id === stepId);
+        const base = ` Step ${s.num} of 4: ${s.label}`;
+        labelEl.textContent = subLabel ? `${base} — ${subLabel}` : base;
+    }
 }
 
 /* ---------- Targeted update: only update the active step's elapsed timer ---------- */
@@ -260,7 +266,7 @@ async function runQuery() {
                     if (activeSet.has(step.id)) {
                         if (!stepStartTimes[step.id]) stepStartTimes[step.id] = Date.now();
                         const stepElapsed = ((Date.now() - stepStartTimes[step.id]) / 1000).toFixed(1);
-                        markStepActive(step.id, stepElapsed);
+                        markStepActive(step.id, stepElapsed, step.id === 'classify' ? (status.active_substep || '') : '');
                     } else {
                         markStepPending(step.id);
                     }
