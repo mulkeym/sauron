@@ -44,3 +44,4 @@ class AgentState(TypedDict, total=False):
     structured_trace: dict  # playground: structured/SQL lookup decision + result
     feedback_boosts: dict[str, float]  # {doc_id: boost} from relevance feedback, passed to final rerank
     strategy_memory: dict  # routing decision from Strategy Memory (F1 observability)
+    progress: object  # optional Callable[[str, dict|None], None]: live sub-step reporter for async-status visibility; declared so LangGraph keeps it as a state channel (no-op when absent)
