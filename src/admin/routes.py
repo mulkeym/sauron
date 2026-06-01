@@ -743,6 +743,54 @@ async def playground_page(request: Request):
 
 _playground_jobs: dict = {}
 
+from src.api.query_jobs import STEP_LABELS as _STEP_LABELS
+
+
+def _classify_substep_label(name: str) -> str:
+    """Friendly label for a live classify sub-step; '' for anything else
+    (including classify.done, which clears the active sub-step)."""
+    if name in ("classify.hints", "classify.llm", "classify.strategy"):
+        return _STEP_LABELS.get(name, "")
+    return ""
+
+
+def _record_substep(query_id: str, name: str) -> None:
+    """Live progress-reporter target for the playground: record the current
+    classify sub-step on the job dict so the status poll can show it. Unknown
+    query ids are ignored (job may have been evicted)."""
+    job = _playground_jobs.get(query_id)
+    if job is None:
+        return
+    if name == "classify.done":
+        job["active_substep"] = ""
+    else:
+        label = _classify_substep_label(name)
+        if label:
+            job["active_substep"] = label
+
+
+def _format_classify_detail(output: dict) -> str:
+    """Drill-down HTML for the completed Classify Query step: query type +
+    reason, sub-tasks, and the strategy-memory decision."""
+    import html as _h
+    qt = output.get("query_type", "")
+    detail = f"<strong>Type:</strong> {_h.escape(str(qt))}"
+    reason = output.get("reason") or ""
+    if reason:
+        detail += f"<br><strong>Reason:</strong> {_h.escape(str(reason))}"
+    subs = output.get("sub_tasks") or []
+    if subs:
+        detail += "<br><strong>Sub-tasks:</strong> " + _h.escape(", ".join(str(s) for s in subs[:5]))
+    sm = output.get("strategy_memory") or {}
+    if sm.get("overrode"):
+        detail += (f"<br><strong>Strategy memory:</strong> override {_h.escape(str(sm.get('llm_pick')))} "
+                   f"&rarr; {_h.escape(str(sm.get('memory_best')))} (n={sm.get('count')}, "
+                   f"margin={sm.get('margin')})")
+    elif sm and sm.get("reason") not in (None, "disabled"):
+        detail += (f"<br><strong>Strategy memory:</strong> kept {_h.escape(str(sm.get('llm_pick')))} "
+                   f"({_h.escape(str(sm.get('reason')))})")
+    return detail
+
 
 @router.post("/api/playground/start")
 async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full"), app_id: int = Form(0), skip_cache: str = Form("false")):
@@ -762,7 +810,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         docs = await store.list_documents(user_groups)
         allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
-    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": "", "completed_steps": []}
+    _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": "", "completed_steps": [], "active_substep": ""}
 
     def _format_live_step(node_name, node_output, current_state):
         """Generate live step detail HTML for the polling UI."""
@@ -770,15 +818,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         output = dict(node_output) if isinstance(node_output, dict) else {}
 
         if node_name == "classify":
-            qt = output.get("query_type", "")
-            subs = output.get("sub_tasks", [])
-            detail = f"<strong>Strategy:</strong> {qt}"
-            if subs:
-                detail += "<br><strong>Sub-tasks:</strong> " + ", ".join(subs[:5])
-            sm = output.get("strategy_memory") or {}
-            if sm.get("overrode"):
-                detail += f"<br><strong>Strategy memory override:</strong> {sm.get('llm_pick')} &rarr; {sm.get('memory_best')} (n={sm.get('count')}, margin={sm.get('margin')})"
-            return detail
+            return _format_classify_detail(output)
         elif node_name == "retrieve":
             rc = output.get("retrieved_chunks", [])
             SYNTHETIC = {"map-reduce", "knowledge-graph", "metadata-context"}
@@ -979,6 +1019,9 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                 dataset_id=app_id or 0,
                 **({"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids else {}),
             )
+            # Live classify sub-step reporter -> records onto the job dict, which
+            # the status poll returns whole, so the UI can show what classify is doing.
+            initial_state["progress"] = lambda name, detail=None: _record_substep(query_id, name)
 
             # Node execution order — retrieve and enrich run in parallel after classify.
             # merge is a no-op (instant), so we skip it in the UI and jump to synthesize.
@@ -1030,6 +1073,7 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
                         _node_starts["enrich"] = now
                         _playground_jobs[query_id]["step"] = "retrieve"
                         _playground_jobs[query_id]["step_detail"] = ""
+                        _playground_jobs[query_id]["active_substep"] = ""  # classify done
                     elif node_name in ("retrieve", "enrich"):
                         # If both parallel branches done, next is synthesize
                         if "retrieve" in _completed_nodes and "enrich" in _completed_nodes:
