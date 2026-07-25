@@ -8,6 +8,8 @@
 - [ ] `pytest` (or at least auth + settings tests) passes  
 - [ ] README and `docs/API_APPLICATIONS.md` match current Security UI  
 - [ ] `.env.example` has placeholders only  
+- [ ] `pip install -r requirements.lock.txt` then `pip-audit -r requirements.lock.txt` → **no known vulnerabilities**  
+- [ ] `constraints-security.txt` floors still match current High+ advisories  
 
 ## Local cleanup (optional)
 

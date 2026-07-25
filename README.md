@@ -378,6 +378,22 @@ Services:
 4. Enter URL: `http://mcpo:8091`
 5. Click Connect -- tools are auto-discovered
 
+## Security: dependency installs
+
+For secure environments, install with security floors and a frozen lock:
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -U 'pip>=26.1.2' 'setuptools>=83.0.0' wheel
+# Prefer lock for reproducible builds:
+pip install -r requirements.lock.txt
+# Or resolve latest within security floors:
+# pip install -r requirements.txt -c constraints-security.txt
+pip-audit -r requirements.lock.txt   # expect: no known vulnerabilities
+```
+
+See `constraints-security.txt` for High/Critical CVE minimum versions.
+
 ## Configuration
 
 See `.env.example` for all available settings. Key configuration:
