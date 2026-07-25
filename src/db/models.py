@@ -83,6 +83,26 @@ class AclGroup(Base):
     )
 
 
+class Persona(Base):
+    """Lab / playground test user with ACL group memberships.
+
+    Used by the admin Playground and Knowledge Graph "act as" dropdowns.
+    Not production auth — local simulation of AD group membership.
+    """
+    __tablename__ = "personas"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # stable id (e.g., "mike")
+    display_name: Mapped[str] = mapped_column(String, default="")  # e.g., "Mike (Finance, Executives)"
+    role: Mapped[str] = mapped_column(String, default="")  # e.g., "Finance Manager"
+    groups: Mapped[list] = mapped_column(JSON, default=list)  # ACL group names
+    active: Mapped[bool] = mapped_column(default=True)
+    sort_order: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class Category(Base):
     __tablename__ = "categories"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -253,3 +273,40 @@ class SchemaHintRecord(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class ApiApplication(Base):
+    """Trusted client application that calls the Sauron API (service identity).
+
+    Distinct from Dataset (formerly "applications" workspaces). User ACL still
+    comes from JWT groups; this is machine/app credentials only.
+    """
+    __tablename__ = "api_applications"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # slug e.g. sdwan-demo-chat
+    display_name: Mapped[str] = mapped_column(String, default="")
+    description: Mapped[str] = mapped_column(String, default="")
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ApiKeyRecord(Base):
+    """Hashed API key for an application. Full secret is never stored."""
+    __tablename__ = "api_key_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    application_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    key_prefix: Mapped[str] = mapped_column(String, default="")  # first chars for UI, e.g. sk_ab12…
+    key_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String, default="")  # e.g. "prod", "rotate-2026-07"
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

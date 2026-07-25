@@ -700,33 +700,27 @@ async def _process_kg_deletes():
     _kg_delete_running = True
     _logger = logging.getLogger(__name__)
     try:
-        # Check if all documents were deleted — if so, just purge the whole graph
+        # Check if all documents were deleted — if so, hard-purge under insert lock
         store = get_metadata_store()
         remaining_docs = await store.list_documents()
         if not remaining_docs:
-            _logger.info(f"KG cleanup: no documents remain, purging entire knowledge graph ({len(_kg_delete_queue)} queued deletes skipped)")
+            _logger.info(
+                f"KG cleanup: no documents remain, hard-purging knowledge graph "
+                f"({len(_kg_delete_queue)} queued deletes skipped)"
+            )
             _kg_delete_queue.clear()
-            import shutil
-            lightrag_dir = Path("data/lightrag")
-            if lightrag_dir.exists():
-                shutil.rmtree(str(lightrag_dir))
-                lightrag_dir.mkdir(exist_ok=True)
-            from src.knowledge import graph_rag
-            graph_rag._rag_instance = None
-            graph_rag._initialized = False
+            from src.knowledge.graph_rag import hard_purge_lightrag
+            await hard_purge_lightrag(reason="all metadata documents deleted")
             return
 
-        from src.knowledge.graph_rag import get_lightrag
-        rag = await get_lightrag()
-        while _kg_delete_queue:
-            doc_id = _kg_delete_queue.pop(0)
-            try:
-                _logger.info(f"KG cleanup: deleting {doc_id} ({len(_kg_delete_queue)} remaining)")
-                await asyncio.wait_for(rag.adelete_by_doc_id(doc_id), timeout=120)
-            except asyncio.TimeoutError:
-                _logger.warning(f"KG delete timed out for {doc_id}, skipping")
-            except Exception as e:
-                _logger.warning(f"KG delete failed for {doc_id}: {e}")
+        # Prefer reconcile (drops orphans + handles id mismatches) over
+        # one-by-one adelete of the deleted id only — crash leftovers may use
+        # different LightRAG ids than the metadata row we just removed.
+        from src.knowledge.graph_rag import reconcile_lightrag_with_metadata
+        live = {d.doc_id for d in remaining_docs if getattr(d, "doc_id", None)}
+        _kg_delete_queue.clear()
+        result = await reconcile_lightrag_with_metadata(live)
+        _logger.info(f"KG cleanup after document delete: {result}")
     finally:
         _kg_delete_running = False
 
@@ -738,7 +732,13 @@ async def playground_page(request: Request):
         return redirect
     store = get_metadata_store()
     apps = await store.list_datasets()
-    return templates.TemplateResponse(request, "playground.html", {"datasets": apps})
+    personas = await store.list_personas(active_only=True)
+    uncovered = await store.uncovered_document_groups()
+    return templates.TemplateResponse(request, "playground.html", {
+        "datasets": apps,
+        "personas": personas,
+        "uncovered_groups": uncovered,
+    })
 
 
 _playground_jobs: dict = {}
@@ -793,7 +793,7 @@ def _format_classify_detail(output: dict) -> str:
 
 
 @router.post("/api/playground/start")
-async def playground_start(question: str = Form(""), play_user: str = Form("finance"), mode: str = Form("full"), app_id: int = Form(0), skip_cache: str = Form("false")):
+async def playground_start(question: str = Form(""), play_user: str = Form("mike"), mode: str = Form("full"), app_id: int = Form(0), skip_cache: str = Form("false")):
     import uuid, asyncio
     from fastapi.responses import JSONResponse
 
@@ -801,12 +801,12 @@ async def playground_start(question: str = Form(""), play_user: str = Form("fina
         return JSONResponse({"error": "No question"})
 
     query_id = str(uuid.uuid4())[:8]
-    user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
+    store = get_metadata_store()
+    user_groups = await store.resolve_play_user_groups(play_user)
 
     # Look up doc_ids for the selected dataset, filtered by user's ACL groups
     allowed_doc_ids = None
     if app_id:
-        store = get_metadata_store()
         docs = await store.list_documents(user_groups)
         allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
@@ -1461,11 +1461,12 @@ async def playground_stream(query_id: str):
 
 
 @router.post("/api/playground/query")
-async def playground_query(question: str = Form(""), play_user: str = Form("finance")):
+async def playground_query(question: str = Form(""), play_user: str = Form("mike")):
     if not question.strip():
         return HTMLResponse('<div class="status-err">Please enter a question.</div>')
 
-    user_groups = [g.strip() for g in play_user.split(",") if g.strip()]
+    store = get_metadata_store()
+    user_groups = await store.resolve_play_user_groups(play_user)
 
     try:
         from src.agent.graph import run_agent_with_trace
@@ -1671,13 +1672,15 @@ async def knowledge_graph_page(request: Request):
     redirect = _require_login(request)
     if redirect:
         return redirect
-    # Load full graph for initial render (admin view)
-    import asyncio
+    # Load full graph for initial render (admin view) — prefer live in-memory graph
     store = get_metadata_store()
-    entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
+    from src.knowledge.graph_rag import load_graph_for_ui
+    entities, relationships = await load_graph_for_ui()
     apps = await store.list_datasets()
+    personas = await store.list_personas(active_only=True)
     return templates.TemplateResponse(request, "knowledge_graph.html", {
         "entities": entities, "relationships": relationships, "datasets": apps,
+        "personas": personas,
     })
 
 
@@ -1685,11 +1688,15 @@ async def knowledge_graph_page(request: Request):
 async def knowledge_graph_filtered(groups: str = "", app_id: int = 0):
     """Return filtered graph data by persona ACL and/or dataset."""
     from fastapi.responses import JSONResponse
-    import asyncio
 
-    user_groups = [g.strip() for g in groups.split(",") if g.strip()] if groups else ["ALL"]
+    store = get_metadata_store()
+    if not groups:
+        user_groups = ["ALL"]
+    else:
+        user_groups = await store.resolve_play_user_groups(groups)
 
-    entities, relationships = await asyncio.to_thread(_load_lightrag_graph)
+    from src.knowledge.graph_rag import load_graph_for_ui
+    entities, relationships = await load_graph_for_ui()
 
     no_persona_filter = "ALL" in user_groups or not groups
     no_app_filter = app_id == 0
@@ -1916,6 +1923,499 @@ async def knowledge_graph_details(entity_id: int = Form(0)):
     return HTMLResponse(html)
 
 
+# ---- Access control (ACL groups + playground personas) ----
+
+def _escape_html(s: str) -> str:
+    import html as _html
+    return _html.escape(str(s or ""), quote=True)
+
+
+def _acl_group_row_html(group, usage: dict | None = None) -> str:
+    usage = usage or {}
+    count = usage.get(group.name, 0)
+    active_badge = "Yes" if group.active else "No"
+    name = _escape_html(group.name)
+    display = _escape_html(group.display_name or group.name)
+    desc = _escape_html(group.description or "")
+    toggle_label = "Deactivate" if group.active else "Activate"
+    toggle_val = "false" if group.active else "true"
+    row_class = "" if group.active else ' class="inactive-row"'
+    return f"""<tr id="acl-row-{name}"{row_class}>
+        <td><code>{name}</code></td>
+        <td>{display}</td>
+        <td>{desc}</td>
+        <td>{count}</td>
+        <td>{active_badge}</td>
+        <td>
+            <button class="small" hx-get="/admin/api/acl-groups/{name}/edit" hx-target="#acl-row-{name}" hx-swap="outerHTML">Edit</button>
+            <button class="small secondary" hx-post="/admin/api/acl-groups/{name}/active" hx-vals='{{"active": "{toggle_val}"}}' hx-target="#acl-row-{name}" hx-swap="outerHTML">{toggle_label}</button>
+        </td>
+    </tr>"""
+
+
+def _persona_row_html(persona, all_group_names: list[str] | None = None) -> str:
+    del all_group_names  # reserved for edit form
+    name = _escape_html(persona.name)
+    display = _escape_html(persona.display_name or persona.name)
+    role = _escape_html(persona.role or "")
+    groups = _escape_html(", ".join(persona.groups or []))
+    active_badge = "Yes" if persona.active else "No"
+    toggle_label = "Deactivate" if persona.active else "Activate"
+    toggle_val = "false" if persona.active else "true"
+    row_class = "" if persona.active else ' class="inactive-row"'
+    return f"""<tr id="persona-row-{name}"{row_class}>
+        <td>{display}</td>
+        <td><code>{name}</code></td>
+        <td>{role}</td>
+        <td>{groups}</td>
+        <td>{active_badge}</td>
+        <td>
+            <button class="small" hx-get="/admin/api/personas/{name}/edit" hx-target="#persona-row-{name}" hx-swap="outerHTML">Edit</button>
+            <button class="small secondary" hx-post="/admin/api/personas/{name}/active" hx-vals='{{"active": "{toggle_val}"}}' hx-target="#persona-row-{name}" hx-swap="outerHTML">{toggle_label}</button>
+            <button class="small danger" hx-delete="/admin/api/personas/{name}" hx-confirm="Delete persona '{name}'?" hx-target="#persona-row-{name}" hx-swap="outerHTML">Delete</button>
+        </td>
+    </tr>"""
+
+
+def _group_checkboxes_html(selected: list[str], all_names: list[str], field_name: str = "groups") -> str:
+    selected_set = set(selected or [])
+    if not all_names:
+        return '<span class="section-desc">No ACL groups registered yet.</span>'
+    boxes = []
+    for g in all_names:
+        checked = " checked" if g in selected_set else ""
+        boxes.append(
+            f'<label class="checkbox-chip"><input type="checkbox" name="{field_name}" value="{_escape_html(g)}"{checked}> {_escape_html(g)}</label>'
+        )
+    return f'<div class="checkbox-grid">{"".join(boxes)}</div>'
+
+
+@router.post("/api/acl-groups/add")
+async def acl_group_add(
+    name: str = Form(""),
+    display_name: str = Form(""),
+    description: str = Form(""),
+):
+    store = get_metadata_store()
+    name = name.strip()
+    if not name:
+        return HTMLResponse('<span class="status-err">Group name is required.</span>')
+    existing = await store.get_acl_group(name)
+    if existing:
+        return HTMLResponse(f'<span class="status-err">Group "{_escape_html(name)}" already exists.</span>')
+    group = await store.add_acl_group(
+        name=name,
+        display_name=display_name.strip() or name,
+        description=description.strip(),
+    )
+    usage = await store.document_acl_group_usage()
+    row = _acl_group_row_html(group, usage)
+    return HTMLResponse(
+        f'<span class="status-ok">Group "{_escape_html(name)}" created.</span>'
+        f'<script>document.getElementById("acl-groups-body")?.insertAdjacentHTML("beforeend", {_json_attr(row)});</script>'
+    )
+
+
+def _json_attr(s: str) -> str:
+    return json.dumps(s)
+
+
+@router.get("/api/acl-groups/{name}/edit")
+async def acl_group_edit_form(name: str):
+    store = get_metadata_store()
+    group = await store.get_acl_group(name)
+    if not group:
+        return HTMLResponse("<tr><td colspan='6'>Group not found</td></tr>")
+    n = _escape_html(group.name)
+    return HTMLResponse(f"""<tr id="acl-row-{n}">
+        <form hx-post="/admin/api/acl-groups/{n}/update" hx-target="#acl-row-{n}" hx-swap="outerHTML">
+        <td><code>{n}</code></td>
+        <td><input type="text" name="display_name" value="{_escape_html(group.display_name)}" style="width:100%;"></td>
+        <td><input type="text" name="description" value="{_escape_html(group.description)}" style="width:100%;"></td>
+        <td>—</td>
+        <td>{'Yes' if group.active else 'No'}</td>
+        <td>
+            <button type="submit" class="small">Save</button>
+            <button type="button" class="small secondary" hx-get="/admin/api/acl-groups/{n}/row" hx-target="#acl-row-{n}" hx-swap="outerHTML">Cancel</button>
+        </td>
+        </form>
+    </tr>""")
+
+
+@router.get("/api/acl-groups/{name}/row")
+async def acl_group_row(name: str):
+    store = get_metadata_store()
+    group = await store.get_acl_group(name)
+    if not group:
+        return HTMLResponse("")
+    usage = await store.document_acl_group_usage()
+    return HTMLResponse(_acl_group_row_html(group, usage))
+
+
+@router.post("/api/acl-groups/{name}/update")
+async def acl_group_update(
+    name: str,
+    display_name: str = Form(""),
+    description: str = Form(""),
+):
+    store = get_metadata_store()
+    group = await store.update_acl_group(
+        name,
+        display_name=display_name.strip(),
+        description=description.strip(),
+    )
+    if not group:
+        return HTMLResponse("<tr><td colspan='6'>Group not found</td></tr>")
+    usage = await store.document_acl_group_usage()
+    return HTMLResponse(_acl_group_row_html(group, usage))
+
+
+@router.post("/api/acl-groups/{name}/active")
+async def acl_group_set_active(name: str, active: str = Form("true")):
+    store = get_metadata_store()
+    is_active = str(active).strip().lower() in ("true", "1", "on", "yes")
+    group = await store.set_acl_group_active(name, is_active)
+    if not group:
+        return HTMLResponse("<tr><td colspan='6'>Group not found</td></tr>")
+    usage = await store.document_acl_group_usage()
+    return HTMLResponse(_acl_group_row_html(group, usage))
+
+
+@router.post("/api/acl-groups/discover")
+async def acl_group_discover():
+    """Register orphan group names found on documents."""
+    store = get_metadata_store()
+    orphans = await store.discover_orphan_acl_groups()
+    if not orphans:
+        return HTMLResponse('<span class="status-ok">No unregistered groups found on documents.</span>')
+    added = []
+    for name in orphans:
+        g = await store.add_acl_group(
+            name=name,
+            display_name=name.replace("_", " ").title(),
+            description="Discovered from document ACLs",
+        )
+        if g:
+            added.append(name)
+    usage = await store.document_acl_group_usage()
+    groups = await store.list_acl_groups(active_only=False)
+    rows = "".join(_acl_group_row_html(g, usage) for g in groups)
+    msg = (
+        f'<span class="status-ok">Registered {len(added)} group(s): '
+        f'{", ".join(_escape_html(a) for a in added)}.</span>'
+    )
+    return HTMLResponse(
+        msg + f'<tbody id="acl-groups-body" hx-swap-oob="true">{rows}</tbody>'
+    )
+
+
+# ---- API applications & keys (service credentials) ----
+
+def _api_key_row_html(key) -> str:
+    kid = key.id
+    prefix = _escape_html(key.key_prefix or "")
+    label = _escape_html(key.label or "")
+    created = key.created_at.strftime("%Y-%m-%d") if key.created_at else ""
+    last = key.last_used_at.strftime("%Y-%m-%d %H:%M") if key.last_used_at else "—"
+    revoked = key.revoked_at is not None or not key.active
+    status = "Revoked" if revoked else "Active"
+    row_class = ' class="inactive-row"' if revoked else ""
+    actions = ""
+    if not revoked:
+        actions = (
+            f'<button class="small danger" hx-post="/admin/api/api-keys/{kid}/revoke" '
+            f'hx-confirm="Revoke this key? Clients using it will fail immediately." '
+            f'hx-target="#api-key-row-{kid}" hx-swap="outerHTML">Revoke</button>'
+        )
+    return f"""<tr id="api-key-row-{kid}"{row_class}>
+        <td><code>{prefix}</code></td>
+        <td>{label}</td>
+        <td>{status}</td>
+        <td>{created}</td>
+        <td>{last}</td>
+        <td>{actions}</td>
+    </tr>"""
+
+
+def _api_app_block_html(app, keys: list) -> str:
+    aid = app.id
+    name = _escape_html(app.name)
+    display = _escape_html(app.display_name or app.name)
+    desc = _escape_html(app.description or "")
+    active = "Yes" if app.active else "No"
+    row_class = "" if app.active else ' class="inactive-row"'
+    toggle_label = "Deactivate" if app.active else "Activate"
+    toggle_val = "false" if app.active else "true"
+    key_rows = "".join(_api_key_row_html(k) for k in keys) or (
+        '<tr><td colspan="6" class="section-desc">No keys yet.</td></tr>'
+    )
+    return f"""<div class="api-app-card" id="api-app-{aid}"{row_class}>
+      <div class="api-app-head">
+        <div>
+          <strong>{display}</strong>
+          <code style="margin-left:0.5rem;">{name}</code>
+          <span class="section-desc" style="margin-left:0.5rem;">Active: {active}</span>
+          <p class="section-desc" style="margin:0.25rem 0 0;">{desc}</p>
+        </div>
+        <div>
+          <button class="small secondary" hx-post="/admin/api/api-apps/{aid}/active"
+            hx-vals='{{"active": "{toggle_val}"}}' hx-target="#api-apps-panel" hx-swap="innerHTML">{toggle_label}</button>
+          <button class="small danger" hx-delete="/admin/api/api-apps/{aid}"
+            hx-confirm="Delete application '{name}' and all its keys?"
+            hx-target="#api-apps-panel" hx-swap="innerHTML">Delete</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Prefix</th><th>Label</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr>
+        </thead>
+        <tbody id="api-keys-body-{aid}">{key_rows}</tbody>
+      </table>
+      <form hx-post="/admin/api/api-apps/{aid}/keys" hx-target="#api-key-create-status-{aid}" hx-swap="innerHTML"
+            style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;">
+        <div class="form-group" style="margin:0;">
+          <label>Key label</label>
+          <input type="text" name="label" placeholder="e.g. prod, staging">
+        </div>
+        <button type="submit">Generate key</button>
+        <span id="api-key-create-status-{aid}"></span>
+      </form>
+    </div>"""
+
+
+async def _api_apps_panel_html() -> str:
+    store = get_metadata_store()
+    apps = await store.list_api_applications(active_only=False)
+    if not apps:
+        return '<p class="section-desc">No applications yet. Create one below.</p>'
+    blocks = []
+    for app in apps:
+        keys = await store.list_api_keys_for_app(app.id, include_revoked=True)
+        blocks.append(_api_app_block_html(app, keys))
+    return "\n".join(blocks)
+
+
+@router.post("/api/api-apps/add")
+async def api_app_add(
+    name: str = Form(""),
+    display_name: str = Form(""),
+    description: str = Form(""),
+):
+    store = get_metadata_store()
+    name = name.strip()
+    if not name:
+        return HTMLResponse('<span class="status-err">Application name is required.</span>')
+    app = await store.add_api_application(
+        name=name, display_name=display_name.strip(), description=description.strip()
+    )
+    if not app:
+        return HTMLResponse(
+            f'<span class="status-err">Application "{_escape_html(name)}" already exists '
+            f'(or invalid name).</span>'
+        )
+    from src.auth.api_key import reload_api_key_cache
+    await reload_api_key_cache(store)
+    panel = await _api_apps_panel_html()
+    return HTMLResponse(
+        f'<span class="status-ok">Application "{_escape_html(app.name)}" created.</span>'
+        f'<div id="api-apps-panel" hx-swap-oob="true">{panel}</div>'
+    )
+
+
+@router.post("/api/api-apps/{app_id}/active")
+async def api_app_set_active(app_id: int, active: str = Form("true")):
+    store = get_metadata_store()
+    val = str(active).lower() in ("true", "1", "yes", "on")
+    await store.update_api_application(app_id, active=val)
+    from src.auth.api_key import reload_api_key_cache
+    await reload_api_key_cache(store)
+    return HTMLResponse(await _api_apps_panel_html())
+
+
+@router.delete("/api/api-apps/{app_id}")
+async def api_app_delete(app_id: int):
+    store = get_metadata_store()
+    await store.delete_api_application(app_id)
+    from src.auth.api_key import reload_api_key_cache
+    await reload_api_key_cache(store)
+    return HTMLResponse(await _api_apps_panel_html())
+
+
+@router.post("/api/api-apps/{app_id}/keys")
+async def api_app_create_key(app_id: int, label: str = Form("")):
+    store = get_metadata_store()
+    app = await store.get_api_application(app_id)
+    if not app:
+        return HTMLResponse('<span class="status-err">Application not found.</span>')
+    from src.auth.api_key import generate_api_key, hash_api_key, key_prefix, reload_api_key_cache
+    secret = generate_api_key()
+    rec = await store.add_api_key_record(
+        application_id=app_id,
+        key_hash=hash_api_key(secret),
+        key_prefix=key_prefix(secret),
+        label=label.strip(),
+    )
+    await reload_api_key_cache(store)
+    keys = await store.list_api_keys_for_app(app_id, include_revoked=True)
+    rows = "".join(_api_key_row_html(k) for k in keys)
+    # Full secret shown once; refresh key table via OOB
+    return HTMLResponse(
+        f'<div class="status-ok" style="display:block;margin:0.5rem 0;">'
+        f'New key created — copy it now; it will not be shown again.<br>'
+        f'<code style="user-select:all;word-break:break-all;">{_escape_html(secret)}</code></div>'
+        f'<tbody id="api-keys-body-{app_id}" hx-swap-oob="innerHTML">{rows}</tbody>'
+    )
+
+
+@router.post("/api/api-keys/{key_id}/revoke")
+async def api_key_revoke(key_id: int):
+    store = get_metadata_store()
+    rec = await store.revoke_api_key(key_id)
+    from src.auth.api_key import reload_api_key_cache
+    await reload_api_key_cache(store)
+    if not rec:
+        return HTMLResponse('<span class="status-err">Key not found.</span>')
+    return HTMLResponse(_api_key_row_html(rec))
+
+
+@router.post("/api/personas/add")
+async def persona_add(
+    name: str = Form(""),
+    display_name: str = Form(""),
+    role: str = Form(""),
+    groups: list[str] = Form(default=[]),
+    extra_groups: str = Form(""),
+):
+    store = get_metadata_store()
+    name = name.strip()
+    if not name:
+        return HTMLResponse('<span class="status-err">Persona username is required.</span>')
+    if await store.get_persona(name.strip().lower().replace(" ", "_")):
+        return HTMLResponse(f'<span class="status-err">Persona "{_escape_html(name)}" already exists.</span>')
+    # Form may send groups as list or single string depending on count
+    if isinstance(groups, str):
+        groups = [groups] if groups else []
+    extras = [g.strip() for g in extra_groups.split(",") if g.strip()]
+    merged = list(dict.fromkeys(list(groups) + extras))
+    persona = await store.add_persona(
+        name=name,
+        display_name=display_name.strip() or name,
+        role=role.strip(),
+        groups=merged,
+        sort_order=100,
+    )
+    if not persona:
+        return HTMLResponse(f'<span class="status-err">Could not create persona "{_escape_html(name)}".</span>')
+    row = _persona_row_html(persona)
+    return HTMLResponse(
+        f'<span class="status-ok">Persona "{_escape_html(persona.name)}" created.</span>'
+        f'<script>document.getElementById("personas-body")?.insertAdjacentHTML("beforeend", {_json_attr(row)});</script>'
+    )
+
+
+@router.get("/api/personas/{name}/edit")
+async def persona_edit_form(name: str):
+    store = get_metadata_store()
+    persona = await store.get_persona(name)
+    if not persona:
+        return HTMLResponse("<tr><td colspan='6'>Persona not found</td></tr>")
+    all_names = await store.get_acl_group_names()
+    # Include any groups the persona has that aren't registered
+    for g in persona.groups or []:
+        if g not in all_names:
+            all_names.append(g)
+    n = _escape_html(persona.name)
+    checks = _group_checkboxes_html(persona.groups or [], all_names)
+    return HTMLResponse(f"""<tr id="persona-row-{n}">
+        <form hx-post="/admin/api/personas/{n}/update" hx-target="#persona-row-{n}" hx-swap="outerHTML">
+        <td><input type="text" name="display_name" value="{_escape_html(persona.display_name)}" style="width:100%;"></td>
+        <td><code>{n}</code></td>
+        <td><input type="text" name="role" value="{_escape_html(persona.role)}" style="width:100%;"></td>
+        <td>{checks}
+            <input type="text" name="extra_groups" placeholder="extra groups (comma-separated)" style="width:100%;margin-top:0.35rem;">
+        </td>
+        <td>{'Yes' if persona.active else 'No'}</td>
+        <td>
+            <button type="submit" class="small">Save</button>
+            <button type="button" class="small secondary" hx-get="/admin/api/personas/{n}/row" hx-target="#persona-row-{n}" hx-swap="outerHTML">Cancel</button>
+        </td>
+        </form>
+    </tr>""")
+
+
+@router.get("/api/personas/{name}/row")
+async def persona_row(name: str):
+    store = get_metadata_store()
+    persona = await store.get_persona(name)
+    if not persona:
+        return HTMLResponse("")
+    return HTMLResponse(_persona_row_html(persona))
+
+
+@router.post("/api/personas/{name}/update")
+async def persona_update(
+    name: str,
+    display_name: str = Form(""),
+    role: str = Form(""),
+    groups: list[str] = Form(default=[]),
+    extra_groups: str = Form(""),
+):
+    store = get_metadata_store()
+    if isinstance(groups, str):
+        groups = [groups] if groups else []
+    extras = [g.strip() for g in extra_groups.split(",") if g.strip()]
+    merged = list(dict.fromkeys(list(groups) + extras))
+    persona = await store.update_persona(
+        name,
+        display_name=display_name.strip() or name,
+        role=role.strip(),
+        groups=merged,
+    )
+    if not persona:
+        return HTMLResponse("<tr><td colspan='6'>Persona not found</td></tr>")
+    return HTMLResponse(_persona_row_html(persona))
+
+
+@router.post("/api/personas/{name}/active")
+async def persona_set_active(name: str, active: str = Form("true")):
+    store = get_metadata_store()
+    is_active = str(active).strip().lower() in ("true", "1", "on", "yes")
+    persona = await store.set_persona_active(name, is_active)
+    if not persona:
+        return HTMLResponse("<tr><td colspan='6'>Persona not found</td></tr>")
+    return HTMLResponse(_persona_row_html(persona))
+
+
+@router.delete("/api/personas/{name}")
+async def persona_delete(name: str):
+    store = get_metadata_store()
+    await store.delete_persona(name)
+    return HTMLResponse("")
+
+
+@router.post("/api/personas/cover-uncovered")
+async def persona_cover_uncovered(persona: str = Form("alice")):
+    """Add all document ACL groups not held by any persona onto the given persona."""
+    store = get_metadata_store()
+    uncovered = await store.uncovered_document_groups()
+    if not uncovered:
+        return HTMLResponse('<span class="status-ok">All document groups are covered by at least one persona.</span>')
+    target = await store.get_persona(persona)
+    if not target:
+        return HTMLResponse(f'<span class="status-err">Persona "{_escape_html(persona)}" not found.</span>')
+    merged = list(dict.fromkeys(list(target.groups or []) + uncovered))
+    await store.update_persona(target.name, groups=merged)
+    # Also register any orphan groups so checkboxes stay complete
+    for g in uncovered:
+        if not await store.get_acl_group(g):
+            await store.add_acl_group(name=g, display_name=g.replace("_", " ").title(),
+                                     description="Added while covering persona gaps")
+    return HTMLResponse(
+        f'<span class="status-ok">Added {len(uncovered)} group(s) to {_escape_html(target.name)}: '
+        f'{", ".join(_escape_html(g) for g in uncovered)}. Reload to refresh tables.</span>'
+    )
+
+
 @router.get("/settings")
 async def settings_page(request: Request):
     redirect = _require_login(request)
@@ -1931,8 +2431,30 @@ async def settings_section_page(request: Request, section: str):
         return redirect
     if section not in ("security", "models", "retrieval", "system", "maintenance"):
         raise HTTPException(status_code=404)
-    return templates.TemplateResponse(request, f"settings_{section}.html",
-                                      {"settings": settings, "active": section})
+    ctx = {"settings": settings, "active": section}
+    if section == "security":
+        store = get_metadata_store()
+        groups = await store.list_acl_groups(active_only=False)
+        personas = await store.list_personas(active_only=False)
+        usage = await store.document_acl_group_usage()
+        orphans = await store.discover_orphan_acl_groups()
+        uncovered = await store.uncovered_document_groups()
+        api_apps = await store.list_api_applications(active_only=False)
+        api_keys_by_app: dict[int, list] = {}
+        for app in api_apps:
+            api_keys_by_app[app.id] = await store.list_api_keys_for_app(app.id, include_revoked=True)
+        ctx.update({
+            "acl_groups": groups,
+            "personas": personas,
+            "acl_usage": usage,
+            "orphan_groups": orphans,
+            "uncovered_groups": uncovered,
+            "all_group_names": [g.name for g in groups if g.active],
+            "api_apps": api_apps,
+            "api_keys_by_app": api_keys_by_app,
+        })
+    return templates.TemplateResponse(request, f"settings_{section}.html", ctx)
+
 
 
 # Form field -> caster. Membership mirrors the persisted settings dict.
@@ -2249,15 +2771,8 @@ async def purge_knowledge_graph():
             'an in-flight job would re-write deleted graph data. '
             'Wait for ingestion to finish, then retry.</span>'
         )
-    import shutil
-    lightrag_dir = Path("data/lightrag")
-    if lightrag_dir.exists():
-        shutil.rmtree(str(lightrag_dir))
-        lightrag_dir.mkdir(exist_ok=True)
-    # Reset the LightRAG singleton so it reinitializes on next use
-    from src.knowledge import graph_rag
-    graph_rag._rag_instance = None
-    graph_rag._initialized = False
+    from src.knowledge.graph_rag import hard_purge_lightrag
+    await hard_purge_lightrag(reason="admin settings purge")
     return HTMLResponse('<span class="status-ok">Knowledge graph purged. It will rebuild as documents are re-ingested.</span>')
 
 

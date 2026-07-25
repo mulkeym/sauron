@@ -298,8 +298,14 @@ class IngestQueue:
         # Mirrors the sync pipeline so both ingestion paths behave identically.
         is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
         is_pdf = _is_structured_pdf(parsed.doc_type)
+        is_docx = parsed.doc_type == "docx"
         text_sheets = None
-        pdf_prose = None
+        enriched_prose = None  # PDF/DOCX figure-enriched text for chunk + KG
+        from src.config import settings as _settings
+
+        def _fig_progress(msg: str):
+            self.update_step(job.job_id, IngestStep.STORING, msg)
+
         if is_spreadsheet:
             self.update_step(job.job_id, IngestStep.STORING, "Structured spreadsheet ingest (DuckDB + narratives)")
             grids, classifications, ingested = await ingest_structured_sheets(
@@ -308,20 +314,84 @@ class IngestQueue:
                 dataset_id=job.dataset_id,
             )
             text_sheets = sheets_needing_text(grids, classifications, ingested)
+            # Embedded chart/screenshot images in .xlsx → figure strategies + optional grids
+            if _settings.figure_extraction_enabled and Path(file_path).suffix.lower() in (".xlsx", ".xlsm"):
+                try:
+                    from src.ingestion.figure_extract import enrich_text_with_figures_async
+                    self.update_step(job.job_id, IngestStep.STORING, "Extracting figures from spreadsheet…")
+                    fig_text, fig_grids = await enrich_text_with_figures_async(
+                        Path(file_path), "", progress_cb=_fig_progress,
+                    )
+                    if fig_grids:
+                        await ingest_grids(
+                            fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                            job.acl_groups, category, vector_store, metadata_store,
+                            dataset_id=job.dataset_id,
+                        )
+                    if fig_text.strip():
+                        # Attach figure prose as extra narrative tier via enriched path
+                        enriched_prose = ((parsed.text or "") + "\n\n" + fig_text).strip()
+                except Exception as fig_err:
+                    logger.warning(f"Spreadsheet figure extract failed: {fig_err}")
         elif is_pdf:
             self.update_step(job.job_id, IngestStep.STORING, "Structured PDF ingest (tables -> DuckDB + narratives)")
             try:
                 extracted = await asyncio.to_thread(extract_pdf, Path(file_path))
+                if _settings.figure_extraction_enabled:
+                    from src.ingestion.figure_extract import enrich_pdf_with_figures_async
+                    self.update_step(job.job_id, IngestStep.STORING, "Extracting figures (OCR + vision)…")
+                    extracted = await enrich_pdf_with_figures_async(
+                        Path(file_path), extracted, progress_cb=_fig_progress,
+                    )
                 await ingest_grids(
                     extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
                     job.acl_groups, category, vector_store, metadata_store,
                     dataset_id=job.dataset_id,
                 )
-                pdf_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
+                enriched_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
             except Exception as e:
                 logger.warning(f"PDF structured extract failed for {parsed.filename}, "
                                f"falling back to flat text: {e}")
                 is_pdf = False
+        elif is_docx and _settings.figure_extraction_enabled:
+            try:
+                from src.ingestion.figure_extract import enrich_text_with_figures_async
+                self.update_step(job.job_id, IngestStep.STORING, "Extracting figures from Word document…")
+                enriched_prose, fig_grids = await enrich_text_with_figures_async(
+                    Path(file_path), parsed.text or "", progress_cb=_fig_progress,
+                )
+                if fig_grids:
+                    await ingest_grids(
+                        fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                        job.acl_groups, category, vector_store, metadata_store,
+                        dataset_id=job.dataset_id,
+                    )
+            except Exception as e:
+                logger.warning(f"Word figure extract failed for {parsed.filename}: {e}")
+                enriched_prose = parsed.text
+
+        # Re-summarize when figures substantially grew the text
+        if enriched_prose and len(enriched_prose) > len(parsed.text or "") + 200:
+            try:
+                from src.ingestion.metadata_extractor import extract_metadata as _extract_meta
+                self.update_step(job.job_id, IngestStep.EXTRACTING_METADATA,
+                                 "Re-extracting metadata from figure-enriched text…")
+                metadata = await asyncio.to_thread(
+                    _extract_meta, enriched_prose, parsed.filename,
+                )
+                doc_summary = metadata.get("summary", "") or doc_summary
+                job.metadata_tags = metadata
+                if doc_summary:
+                    doc_context = (
+                        f"Document: {parsed.filename} (type: {parsed.doc_type}, "
+                        f"category: {category})\nSummary: {doc_summary}"
+                    )
+            except Exception as meta_err:
+                logger.warning(f"Enriched metadata extract failed: {meta_err}")
+
+        # Text for multi-tier chunking and knowledge graph
+        kg_source_text = enriched_prose if enriched_prose else parsed.text
+        chunk_source_text = kg_source_text
 
         for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
             self.update_step(job.job_id, IngestStep.CHUNKING, f"Chunking at {tier_name} ({tier_size} chars)")
@@ -329,8 +399,19 @@ class IngestQueue:
                 # Structure-aware, row-atomic chunks for messy + failed-clean sheets
                 # only. Clean sheets already in the structured store contribute none.
                 tier_chunks = build_tier_chunks(text_sheets, chunk_size=tier_size)
-            elif is_pdf:
-                tier_chunks = chunk_text(pdf_prose or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
+                # Index embedded-image figure prose alongside row narratives
+                if enriched_prose and "## Embedded figures" in enriched_prose:
+                    from src.ingestion.chunker import Chunk
+                    fig_only = enriched_prose.split("## Embedded figures", 1)[-1].strip()
+                    if fig_only:
+                        extra = chunk_text(fig_only, chunk_size=tier_size, chunk_overlap=tier_overlap)
+                        base_i = len(tier_chunks)
+                        for j, c in enumerate(extra):
+                            tier_chunks.append(
+                                Chunk(text=c.text, index=base_i + j, start_char=c.start_char)
+                            )
+            elif is_pdf or is_docx or enriched_prose:
+                tier_chunks = chunk_text(chunk_source_text or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
             else:
                 tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
 
@@ -390,31 +471,62 @@ class IngestQueue:
 
         # (Spreadsheet structured ingest + de-dup happened in the chunking loop above.)
 
-        # Step 6: Build knowledge graph via LightRAG. Skipped for spreadsheets —
-        # they are fully covered by the structured/tabular store, and KG
-        # extraction over flattened numeric tables is costly and near-empty.
-        if is_spreadsheet:
+        # Step 6: Build knowledge graph via LightRAG.
+        # Spreadsheet cell grids skip KG (DuckDB covers them). When Excel has
+        # embedded figure prose, run KG on that figure text only.
+        spreadsheet_figure_kg = ""
+        if is_spreadsheet and enriched_prose and "## Embedded figures" in enriched_prose:
+            spreadsheet_figure_kg = enriched_prose.split("## Embedded figures", 1)[-1].strip()
+
+        if is_spreadsheet and not spreadsheet_figure_kg:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                 "Skipped (structured data — knowledge graph not applicable)")
-        elif job.build_graph:
+        elif job.build_graph and (not is_spreadsheet or spreadsheet_figure_kg):
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
-            from src.knowledge.graph_rag import insert_document as lightrag_insert, get_graph_counts
+            from src.knowledge.graph_rag import (
+                insert_document as lightrag_insert,
+                get_graph_counts,
+                estimate_kg_timeout_seconds,
+            )
+            from src.config import settings as _kg_settings
 
-            MAX_RETRIES = 3
-            TIMEOUT_SECS = 600  # 10 minutes per attempt
+            kg_text = spreadsheet_figure_kg if spreadsheet_figure_kg else (kg_source_text or parsed.text or "")
+            MAX_RETRIES = max(1, int(_kg_settings.kg_extract_max_retries))
+            TIMEOUT_SECS = estimate_kg_timeout_seconds(kg_text)
             import logging as _log
             _kg_logger = _log.getLogger(__name__)
+            _kg_logger.info(
+                f"KG extract budget for {parsed.filename}: {TIMEOUT_SECS}s, "
+                f"retries={MAX_RETRIES}, text_chars={len(kg_text)}"
+            )
+            self.update_step(
+                job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                f"Building knowledge graph (budget {TIMEOUT_SECS // 60}m, "
+                f"{len(kg_text):,} chars)…",
+            )
 
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     nodes_before, edges_before = await get_graph_counts()
 
                     if attempt > 1:
-                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                            f"Knowledge graph retry {attempt}/{MAX_RETRIES}...")
+                        # Later attempts get a longer leash — cancel+retry is costly
+                        TIMEOUT_SECS = min(
+                            int(TIMEOUT_SECS * 1.5),
+                            int(_kg_settings.kg_extract_timeout_max_seconds),
+                        )
+                        self.update_step(
+                            job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                            f"Knowledge graph retry {attempt}/{MAX_RETRIES} "
+                            f"(budget {TIMEOUT_SECS // 60}m)…",
+                        )
 
                     await asyncio.wait_for(
-                        lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename),
+                        lightrag_insert(
+                            kg_text,
+                            doc_id=doc_id,
+                            filename=parsed.filename,
+                        ),
                         timeout=TIMEOUT_SECS,
                     )
 
@@ -426,17 +538,37 @@ class IngestQueue:
                         f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
                     break  # success
                 except asyncio.TimeoutError:
-                    _kg_logger.warning(f"KG extraction timed out for {parsed.filename} (attempt {attempt}/{MAX_RETRIES})")
+                    _kg_logger.warning(
+                        f"KG extraction timed out for {parsed.filename} "
+                        f"(attempt {attempt}/{MAX_RETRIES}, budget {TIMEOUT_SECS}s)"
+                    )
+                    # Cancelled ainsert can leave LightRAG pipeline busy=True,
+                    # which makes later inserts return early with 0 entities.
+                    try:
+                        from src.knowledge.graph_rag import release_pipeline_busy
+                        await release_pipeline_busy()
+                    except Exception as rel_err:
+                        _kg_logger.warning(f"Pipeline release after timeout failed: {rel_err}")
                     if attempt == MAX_RETRIES:
-                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                            f"Knowledge graph timed out after {MAX_RETRIES} attempts")
+                        # Partial graph may still exist from in-progress extract
+                        nodes_after, edges_after = await get_graph_counts()
+                        job.entity_count = max(0, nodes_after - nodes_before)
+                        job.relationship_count = max(0, edges_after - edges_before)
+                        self.update_step(
+                            job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                            f"Knowledge graph timed out after {MAX_RETRIES} attempt(s) "
+                            f"(partial: {job.entity_count} entities / {job.relationship_count} rels)",
+                        )
                 except Exception as e:
                     _kg_logger.warning(f"KG extraction failed for {parsed.filename} (attempt {attempt}/{MAX_RETRIES}): {e}")
+                    try:
+                        from src.knowledge.graph_rag import release_pipeline_busy
+                        await release_pipeline_busy()
+                    except Exception:
+                        pass
                     if attempt == MAX_RETRIES:
                         self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                             f"Knowledge graph failed: {str(e)[:100]}")
-
-            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Knowledge graph complete")
         else:
             self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Skipped (knowledge graph disabled)")
 

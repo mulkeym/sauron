@@ -74,10 +74,18 @@ def test_settings_redirects_to_first_section():
 
 
 def test_each_config_section_renders_with_active_marker():
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
     c = _client()
+    store = AsyncMock()
+    store.list_acl_groups.return_value = []
+    store.list_personas.return_value = []
+    store.document_acl_group_usage.return_value = {}
+    store.discover_orphan_acl_groups.return_value = []
+    store.uncovered_document_groups.return_value = []
+    store.get_acl_group_names.return_value = []
     for key in ["security", "models", "retrieval", "system", "maintenance"]:
-        with patch("src.admin.routes._is_authenticated", return_value=True):
+        with patch("src.admin.routes._is_authenticated", return_value=True), \
+             patch("src.admin.routes.get_metadata_store", return_value=store):
             resp = c.get(f"/admin/settings/{key}")
         assert resp.status_code == 200, key
         assert 'class="subnav-item active"' in resp.text, key

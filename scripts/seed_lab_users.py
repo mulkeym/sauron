@@ -16,34 +16,47 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.auth.jwt import create_token
 
-# Lab test users with different department access
-LAB_USERS = [
-    {
-        "username": "mike",
-        "role": "Finance Manager",
-        "groups": ["finance", "executives"],
-    },
-    {
-        "username": "bob",
-        "role": "IT Support Engineer",
-        "groups": ["it_support", "devops"],
-    },
-    {
-        "username": "sarah",
-        "role": "Software Engineer",
-        "groups": ["engineering"],
-    },
-    {
-        "username": "alice",
-        "role": "Compliance Officer",
-        "groups": ["finance", "it_support", "engineering", "executives", "compliance"],
-    },
-    {
-        "username": "dave",
-        "role": "Intern (limited access)",
-        "groups": ["engineering"],
-    },
-]
+# Lab test users with different department access.
+# Prefer editing personas in Admin → Settings → Security; these defaults
+# match src.db.metadata.DEFAULT_PERSONAS for offline token generation.
+try:
+    from src.db.metadata import DEFAULT_PERSONAS
+    LAB_USERS = [
+        {
+            "username": p["name"],
+            "role": p.get("role") or p["name"],
+            "groups": list(p.get("groups") or []),
+        }
+        for p in DEFAULT_PERSONAS
+    ]
+except Exception:
+    LAB_USERS = [
+        {
+            "username": "mike",
+            "role": "Finance Manager",
+            "groups": ["finance", "executives"],
+        },
+        {
+            "username": "bob",
+            "role": "IT Support Engineer",
+            "groups": ["it_support", "devops"],
+        },
+        {
+            "username": "sarah",
+            "role": "Software Engineer",
+            "groups": ["engineering"],
+        },
+        {
+            "username": "alice",
+            "role": "Compliance Officer",
+            "groups": ["finance", "it_support", "engineering", "executives", "compliance"],
+        },
+        {
+            "username": "dave",
+            "role": "Intern (limited access)",
+            "groups": ["engineering"],
+        },
+    ]
 
 
 def main():

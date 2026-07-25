@@ -2,9 +2,11 @@
 {% block title %}Security - Settings{% endblock %}
 {% block settings_content %}
 <h1>Security</h1>
+
 <form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
-<div class="settings-section">
-    <p class="section-desc">Admin login credentials and API access keys.</p>
+<div class="settings-section" id="admin-access">
+    <h2>Admin Access</h2>
+    <p class="section-desc">Credentials for the admin console login only. Service API keys are managed under Applications &amp; API Keys below.</p>
     <div class="form-row">
         <div class="form-group">
             <label for="admin_username">Admin Username</label>
@@ -15,26 +17,275 @@
             <input type="password" id="admin_password" name="admin_password" placeholder="Leave blank to keep current">
         </div>
     </div>
-    <div class="form-group">
-        <label for="api_keys">API Keys</label>
-        <div class="input-with-button">
-            <input type="text" id="api_keys" name="api_keys" value="{{ settings.api_keys }}" style="font-family:monospace;">
-            <button type="button" class="secondary" onclick="generateApiKey()">Generate Key</button>
+    <button type="submit">Save</button>
+    <span id="save-status" style="margin-left:0.5rem;"></span>
+</div>
+</form>
+
+{# ---- Applications & API Keys ---- #}
+<div class="settings-section" id="api-applications">
+    <h2>Applications &amp; API Keys</h2>
+    <p class="section-desc">
+        Service credentials for backends that call Sauron (demo chat, OpenWebUI, MCP gateways, etc.).
+        Create one application per client, then generate keys (hashed at rest; full secret shown only once).
+        User document ACL still comes from the JWT (username + groups), not from the API key.
+        Keys previously in env/settings may appear under a <code>legacy</code> application after import.
+    </p>
+
+    <form hx-post="/admin/api/api-apps/add" hx-target="#api-app-add-status" hx-swap="innerHTML" style="margin-bottom:1rem;">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="api-app-name">Name (slug)</label>
+                <input type="text" id="api-app-name" name="name" placeholder="e.g. sdwan-demo-chat" required>
+            </div>
+            <div class="form-group">
+                <label for="api-app-display">Display name</label>
+                <input type="text" id="api-app-display" name="display_name" placeholder="SD-WAN Demo Chat">
+            </div>
+            <div class="form-group">
+                <label for="api-app-desc">Description</label>
+                <input type="text" id="api-app-desc" name="description" placeholder="Stakeholder demo front-end backend">
+            </div>
         </div>
-        <span style="font-size:0.8rem; color:#6b7280;">Comma-separated. Each key can be used as X-API-Key header or Bearer token.</span>
+        <button type="submit">Add application</button>
+        <span id="api-app-add-status" style="margin-left:0.5rem;"></span>
+    </form>
+
+    <div id="api-apps-panel">
+        {% if api_apps %}
+            {% for app in api_apps %}
+            <div class="api-app-card{% if not app.active %} inactive-row{% endif %}" id="api-app-{{ app.id }}">
+              <div class="api-app-head">
+                <div>
+                  <strong>{{ app.display_name or app.name }}</strong>
+                  <code style="margin-left:0.5rem;">{{ app.name }}</code>
+                  <span class="section-desc" style="margin-left:0.5rem;">Active: {{ "Yes" if app.active else "No" }}</span>
+                  <p class="section-desc" style="margin:0.25rem 0 0;">{{ app.description or "" }}</p>
+                </div>
+                <div>
+                  {% if app.active %}
+                  <button class="small secondary" hx-post="/admin/api/api-apps/{{ app.id }}/active"
+                    hx-vals='{"active": "false"}' hx-target="#api-apps-panel" hx-swap="innerHTML">Deactivate</button>
+                  {% else %}
+                  <button class="small secondary" hx-post="/admin/api/api-apps/{{ app.id }}/active"
+                    hx-vals='{"active": "true"}' hx-target="#api-apps-panel" hx-swap="innerHTML">Activate</button>
+                  {% endif %}
+                  <button class="small danger" hx-delete="/admin/api/api-apps/{{ app.id }}"
+                    hx-confirm="Delete application '{{ app.name }}' and all its keys?"
+                    hx-target="#api-apps-panel" hx-swap="innerHTML">Delete</button>
+                </div>
+              </div>
+              <table>
+                <thead>
+                  <tr><th>Prefix</th><th>Label</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr>
+                </thead>
+                <tbody id="api-keys-body-{{ app.id }}">
+                  {% for key in api_keys_by_app.get(app.id, []) %}
+                  <tr id="api-key-row-{{ key.id }}"{% if key.revoked_at or not key.active %} class="inactive-row"{% endif %}>
+                    <td><code>{{ key.key_prefix }}</code></td>
+                    <td>{{ key.label or "" }}</td>
+                    <td>{% if key.revoked_at or not key.active %}Revoked{% else %}Active{% endif %}</td>
+                    <td>{% if key.created_at %}{{ key.created_at.strftime("%Y-%m-%d") }}{% endif %}</td>
+                    <td>{% if key.last_used_at %}{{ key.last_used_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}</td>
+                    <td>
+                      {% if not key.revoked_at and key.active %}
+                      <button class="small danger" hx-post="/admin/api/api-keys/{{ key.id }}/revoke"
+                        hx-confirm="Revoke this key? Clients using it will fail immediately."
+                        hx-target="#api-key-row-{{ key.id }}" hx-swap="outerHTML">Revoke</button>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% else %}
+                  <tr><td colspan="6" class="section-desc">No keys yet.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              <form hx-post="/admin/api/api-apps/{{ app.id }}/keys" hx-target="#api-key-create-status-{{ app.id }}" hx-swap="innerHTML"
+                    style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;">
+                <div class="form-group" style="margin:0;">
+                  <label>Key label</label>
+                  <input type="text" name="label" placeholder="e.g. prod, staging">
+                </div>
+                <button type="submit">Generate key</button>
+                <span id="api-key-create-status-{{ app.id }}"></span>
+              </form>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p class="section-desc">No applications yet. Create one above (or restart once to import legacy keys into <code>legacy</code>).</p>
+        {% endif %}
     </div>
 </div>
 
-<script>
-function generateApiKey() {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let key = 'sk-';
-    for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
-    const input = document.getElementById('api_keys');
-    input.value = input.value ? input.value + ',' + key : key;
-}
-</script>
-  <button type="submit">Save</button>
-  <span id="save-status" style="margin-left:0.5rem;"></span>
-</form>
+{# ---- ACL Groups ---- #}
+<div class="settings-section" id="acl-groups">
+    <h2>ACL Groups</h2>
+    <p class="section-desc">
+        Named access-control groups applied to documents, categories, and datasets.
+        Playground personas pick from these groups. Inactive groups stay in the registry but are hidden from new assignments.
+    </p>
+
+    {% if orphan_groups %}
+    <div class="status-warn" style="margin-bottom:1rem;">
+        Unregistered groups found on documents:
+        <strong>{{ orphan_groups | join(", ") }}</strong>
+        <button class="small" style="margin-left:0.5rem;"
+                hx-post="/admin/api/acl-groups/discover"
+                        hx-target="#acl-discover-status"
+                        hx-swap="innerHTML">Register all</button>
+        <span id="acl-discover-status" style="margin-left:0.5rem;"></span>
+    </div>
+    {% else %}
+    <div style="margin-bottom:1rem;">
+        <button class="small secondary"
+                hx-post="/admin/api/acl-groups/discover"
+                        hx-target="#acl-discover-status"
+                        hx-swap="innerHTML">Discover from documents</button>
+        <span id="acl-discover-status" style="margin-left:0.5rem;"></span>
+    </div>
+    {% endif %}
+
+    <form hx-post="/admin/api/acl-groups/add" hx-target="#acl-add-status" hx-swap="innerHTML" style="margin-bottom:1rem;">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="acl-name">Name</label>
+                <input type="text" id="acl-name" name="name" placeholder="e.g., clinical" required>
+            </div>
+            <div class="form-group">
+                <label for="acl-display">Display name</label>
+                <input type="text" id="acl-display" name="display_name" placeholder="Clinical">
+            </div>
+            <div class="form-group">
+                <label for="acl-desc">Description</label>
+                <input type="text" id="acl-desc" name="description" placeholder="Clinical staff">
+            </div>
+        </div>
+        <button type="submit">Add Group</button>
+        <span id="acl-add-status" style="margin-left:0.5rem;"></span>
+    </form>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Display name</th>
+                <th>Description</th>
+                <th>Docs</th>
+                <th>Active</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="acl-groups-body">
+            {% for g in acl_groups %}
+            <tr id="acl-row-{{ g.name }}"{% if not g.active %} class="inactive-row"{% endif %}>
+                <td><code>{{ g.name }}</code></td>
+                <td>{{ g.display_name or g.name }}</td>
+                <td>{{ g.description or "" }}</td>
+                <td>{{ acl_usage.get(g.name, 0) }}</td>
+                <td>{{ "Yes" if g.active else "No" }}</td>
+                <td>
+                    <button class="small" hx-get="/admin/api/acl-groups/{{ g.name }}/edit" hx-target="#acl-row-{{ g.name }}" hx-swap="outerHTML">Edit</button>
+                    {% if g.active %}
+                    <button class="small secondary" hx-post="/admin/api/acl-groups/{{ g.name }}/active" hx-vals='{"active": "false"}' hx-target="#acl-row-{{ g.name }}" hx-swap="outerHTML">Deactivate</button>
+                    {% else %}
+                    <button class="small secondary" hx-post="/admin/api/acl-groups/{{ g.name }}/active" hx-vals='{"active": "true"}' hx-target="#acl-row-{{ g.name }}" hx-swap="outerHTML">Activate</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="section-desc">No ACL groups yet. Add one above or seed defaults by restarting the app.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{# ---- Personas ---- #}
+<div class="settings-section" id="personas">
+    <h2>Playground Personas</h2>
+    <p class="section-desc">
+        Test users for the Playground and Knowledge Graph “act as” dropdowns.
+        Each persona has a set of ACL groups used to filter document access.
+        These are for local testing only — not production authentication.
+    </p>
+
+    {% if uncovered_groups %}
+    <div class="status-warn" style="margin-bottom:1rem;">
+        Document groups not held by any active persona:
+        <strong>{{ uncovered_groups | join(", ") }}</strong>
+        <form hx-post="/admin/api/personas/cover-uncovered" hx-target="#persona-cover-status" hx-swap="innerHTML" style="display:inline;margin-left:0.5rem;">
+            <input type="hidden" name="persona" value="alice">
+            <button type="submit" class="small">Add all to Alice</button>
+        </form>
+        <span id="persona-cover-status" style="margin-left:0.5rem;"></span>
+    </div>
+    {% endif %}
+
+    <form hx-post="/admin/api/personas/add" hx-target="#persona-add-status" hx-swap="innerHTML" style="margin-bottom:1rem;">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="persona-name">Username</label>
+                <input type="text" id="persona-name" name="name" placeholder="e.g., mike" required>
+            </div>
+            <div class="form-group">
+                <label for="persona-display">Display name</label>
+                <input type="text" id="persona-display" name="display_name" placeholder="Mike (Finance, Executives)">
+            </div>
+            <div class="form-group">
+                <label for="persona-role">Role</label>
+                <input type="text" id="persona-role" name="role" placeholder="Finance Manager">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Groups</label>
+            <div class="checkbox-grid">
+                {% for gname in all_group_names %}
+                <label class="checkbox-chip"><input type="checkbox" name="groups" value="{{ gname }}"> {{ gname }}</label>
+                {% else %}
+                <span class="section-desc">Register ACL groups first, then assign them here.</span>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="persona-extra">Extra groups (optional, comma-separated)</label>
+            <input type="text" id="persona-extra" name="extra_groups" placeholder="group_not_yet_registered">
+        </div>
+        <button type="submit">Add Persona</button>
+        <span id="persona-add-status" style="margin-left:0.5rem;"></span>
+    </form>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Display name</th>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Groups</th>
+                <th>Active</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="personas-body">
+            {% for p in personas %}
+            <tr id="persona-row-{{ p.name }}"{% if not p.active %} class="inactive-row"{% endif %}>
+                <td>{{ p.display_name or p.name }}</td>
+                <td><code>{{ p.name }}</code></td>
+                <td>{{ p.role or "" }}</td>
+                <td>{{ (p.groups or []) | join(", ") }}</td>
+                <td>{{ "Yes" if p.active else "No" }}</td>
+                <td>
+                    <button class="small" hx-get="/admin/api/personas/{{ p.name }}/edit" hx-target="#persona-row-{{ p.name }}" hx-swap="outerHTML">Edit</button>
+                    {% if p.active %}
+                    <button class="small secondary" hx-post="/admin/api/personas/{{ p.name }}/active" hx-vals='{"active": "false"}' hx-target="#persona-row-{{ p.name }}" hx-swap="outerHTML">Deactivate</button>
+                    {% else %}
+                    <button class="small secondary" hx-post="/admin/api/personas/{{ p.name }}/active" hx-vals='{"active": "true"}' hx-target="#persona-row-{{ p.name }}" hx-swap="outerHTML">Activate</button>
+                    {% endif %}
+                    <button class="small danger" hx-delete="/admin/api/personas/{{ p.name }}" hx-confirm="Delete persona '{{ p.name }}'?" hx-target="#persona-row-{{ p.name }}" hx-swap="outerHTML">Delete</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="section-desc">No personas yet. Add one above or seed defaults by restarting the app.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
 {% endblock %}

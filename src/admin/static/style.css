@@ -111,12 +111,62 @@ button.danger { background: var(--danger); }
 button.danger:hover { opacity: 0.9; }
 button.secondary { background: var(--text-secondary); }
 button.secondary:hover { opacity: 0.9; }
+button.small { padding: 0.25rem 0.55rem; font-size: 0.8rem; }
 
 /* === Status === */
 .htmx-indicator { display: none; color: var(--text-secondary); font-style: italic; margin-left: 0.5rem; }
 .htmx-request .htmx-indicator { display: inline; }
 .status-ok { color: var(--success); font-weight: 600; }
 .status-err { color: var(--danger); font-weight: 600; }
+.status-warn {
+    background: var(--bg-card-alt);
+    border-left: 3px solid #f59e0b;
+    padding: 0.75rem 1rem;
+    border-radius: 0 4px 4px 0;
+    color: var(--text);
+    font-size: 0.9rem;
+}
+
+/* === Access control UI (Security settings) === */
+.checkbox-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+    margin-top: 0.35rem;
+}
+.checkbox-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+    color: var(--text);
+    cursor: pointer;
+    padding: 0.2rem 0.45rem;
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    background: var(--bg-card-alt);
+}
+.checkbox-chip input { margin: 0; cursor: pointer; }
+tr.inactive-row { opacity: 0.55; }
+
+.api-app-card {
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    background: var(--bg-card-alt);
+}
+.api-app-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+.api-app-card.inactive-row,
+div.inactive-row.api-app-card {
+    opacity: 0.7;
+}
 
 /* === Results & Citations === */
 .result-answer { font-size: 1rem; line-height: 1.6; margin-bottom: 1rem; color: var(--text); }

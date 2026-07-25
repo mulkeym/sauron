@@ -239,6 +239,92 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048, *, th
     return content
 
 
+def generate_vision(
+    system_prompt: str,
+    user_prompt: str,
+    image_bytes: bytes,
+    *,
+    mime_type: str = "image/png",
+    temperature: float = 0.0,
+    max_tokens: int = 2048,
+    timeout: int | None = None,
+) -> str:
+    """Multimodal chat-completions call (image + text).
+
+    Uses the OpenAI-compatible content-parts format so it works with OpenAI
+    vision models and most vLLM multimodal servers. Failures raise LLMError
+    subclasses; callers should fail-open for ingest paths.
+    """
+    import base64
+
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime_type};base64,{b64}"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_prompt},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
+    model = settings.vllm_model_name
+    logger.info(
+        f"Vision LLM call: model={model}, image_bytes={len(image_bytes)}, max_tokens={max_tokens}"
+    )
+    payload = _build_payload(messages, model, temperature, max_tokens, thinking=False)
+
+    headers = {}
+    if settings.vllm_api_key:
+        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+
+    req_timeout = timeout if timeout is not None else settings.vllm_request_timeout
+    try:
+        resp = requests.post(
+            f"{settings.vllm_base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=req_timeout,
+            verify=settings.ssl_verify,
+        )
+        resp.raise_for_status()
+        response = resp.json()
+    except requests.Timeout:
+        raise LLMTimeoutError(f"Vision LLM request timed out after {req_timeout}s")
+    except requests.ConnectionError as e:
+        raise LLMConnectionError(f"Vision LLM connection failed: {e}")
+    except requests.HTTPError as e:
+        body = ""
+        try:
+            body = e.response.text[:500] if e.response is not None else ""
+        except Exception:
+            pass
+        raise LLMError(f"Vision LLM HTTP error: {e} {body}") from e
+
+    try:
+        original_content = response["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError) as e:
+        raise LLMError(f"Vision LLM returned unexpected payload: {response!r}") from e
+
+    if isinstance(original_content, list):
+        # Some servers return content as a list of parts
+        parts = []
+        for part in original_content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(part.get("text") or "")
+            elif isinstance(part, str):
+                parts.append(part)
+        original_content = "".join(parts)
+
+    content = re.sub(r"<think>.*?</think>", "", str(original_content), flags=re.DOTALL).strip()
+    if not content:
+        content = str(original_content).strip()
+    if not content:
+        raise RuntimeError("Vision LLM returned completely empty response")
+    return content
+
+
 def parse_json_response(text: str) -> dict:
     """Parse JSON from LLM output, stripping markdown fences and thinking blocks."""
     if not text:

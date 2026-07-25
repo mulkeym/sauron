@@ -5,14 +5,29 @@
 <h1>Query Playground</h1>
 
 <div class="settings-section">
+    {% if uncovered_groups %}
+    <div class="status-warn" style="margin-bottom:1rem;">
+        Some document groups are not held by any active persona:
+        <strong>{{ uncovered_groups | join(", ") }}</strong>
+        — edit personas in <a href="/admin/settings/security#personas">Settings → Security</a>
+        or pick <em>Custom groups…</em> below.
+    </div>
+    {% endif %}
     <div class="form-group">
         <label for="play_user">Act as user</label>
-        <select id="play_user" name="play_user">
-            <option value="finance,executives">Mike (Finance, Executives)</option>
-            <option value="it_support,devops">Bob (IT Support, DevOps)</option>
-            <option value="engineering">Sarah (Engineering)</option>
-            <option value="finance,it_support,engineering,executives,compliance">Alice (All Groups)</option>
+        <select id="play_user" name="play_user" onchange="toggleCustomGroups()">
+            {% for p in personas %}
+            <option value="{{ p.name }}">{{ p.display_name or p.name }}{% if p.groups %} — {{ p.groups | join(", ") }}{% endif %}</option>
+            {% else %}
+            <option value="ALL">Admin (All groups)</option>
+            {% endfor %}
+            <option value="__custom__">Custom groups…</option>
         </select>
+        <input type="text" id="play_custom_groups" name="play_custom_groups"
+               placeholder="e.g., clinical, medical" style="display:none; margin-top:0.5rem; width:100%; max-width:700px;">
+        <span class="section-desc" style="display:block;margin-top:0.35rem;">
+            Manage personas under <a href="/admin/settings/security#personas">Settings → Security</a>.
+        </span>
     </div>
     <div class="form-group">
         <label for="play_app">Dataset</label>
@@ -119,11 +134,30 @@ function markStepPending(stepId) {
     document.getElementById(`step-time-${stepId}`).textContent = '';
 }
 
+function toggleCustomGroups() {
+    const sel = document.getElementById('play_user');
+    const custom = document.getElementById('play_custom_groups');
+    if (!sel || !custom) return;
+    custom.style.display = sel.value === '__custom__' ? 'block' : 'none';
+}
+function selectedPlayUser() {
+    const sel = document.getElementById('play_user');
+    if (!sel) return 'mike';
+    if (sel.value === '__custom__') {
+        return (document.getElementById('play_custom_groups')?.value || '').trim();
+    }
+    return sel.value;
+}
+
 async function runQuery() {
     const question = document.getElementById('play_question').value;
     if (!question.trim()) return;
 
-    const user = document.getElementById('play_user').value;
+    const user = selectedPlayUser();
+    if (!user) {
+        alert('Enter custom groups or pick a persona.');
+        return;
+    }
     const btn = document.getElementById('ask-btn');
     const progress = document.getElementById('play-progress');
     const results = document.getElementById('play-results');

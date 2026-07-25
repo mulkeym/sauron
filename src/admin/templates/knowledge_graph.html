@@ -13,10 +13,9 @@
         <label for="kg-persona">View as</label>
         <select id="kg-persona" onchange="loadFilteredGraph()">
             <option value="">Admin (All documents)</option>
-            <option value="finance,executives">Mike (Finance, Executives)</option>
-            <option value="it_support,devops">Bob (IT Support, DevOps)</option>
-            <option value="engineering">Sarah (Engineering)</option>
-            <option value="contracts,executives">Carol (Contracts, Executives)</option>
+            {% for p in personas %}
+            <option value="{{ p.name }}">{{ p.display_name or p.name }}</option>
+            {% endfor %}
         </select>
     </div>
     <div class="form-group">

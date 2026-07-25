@@ -19,6 +19,7 @@ SAURON is a self-hosted agentic RAG (Retrieval-Augmented Generation) system with
 - **Admin Dashboard** -- Document management, ingestion queue, playground, knowledge graph explorer, web connector management
 - **Streaming Answers** -- SSE-based token streaming in the playground
 - **OpenAI-Compatible API** -- Drop-in `/v1/chat/completions` endpoint with citations
+- **Application API Keys** -- DB-backed multi-app service credentials (hashed, revocable) for backends that call SAURON
 - **Docker Ready** -- Multi-stage build with health checks and shared data volumes
 
 ## Architecture
@@ -217,6 +218,72 @@ Every document has an `acl_groups` field (e.g., `["finance", "executives"]`). Wh
 
 ACL groups can be set during upload or inherited from the document's category.
 
+### Embedded figures (images in PDFs, Word, Excel)
+
+When `FIGURE_EXTRACTION_ENABLED=true` (default), ingest also extracts embedded images from:
+
+| Format | Image sources |
+|--------|----------------|
+| **PDF** | Embedded images + full-page render for text-sparse pages |
+| **Word (.docx)** | `word/media/*` (and relationship order when available) |
+| **Excel (.xlsx/.xlsm)** | Sheet drawings + `xl/media/*` |
+| **PowerPoint (.pptx)** | `ppt/media/*` collector ready (parser/chunk path still basic) |
+
+For each region the pipeline:
+
+1. Runs **OCR** (Tesseract) and classifies: table / network / process / text / other  
+2. Applies a strategy (vision + Phase-A OCR identifier merge when useful):
+   - **table** — markdown grid → DuckDB path  
+   - **network** / **process** — structured diagram description  
+   - **text_scan** — OCR only (linear prose)  
+3. Merges figure prose into the text stream **before** multi-tier chunking  
+4. Feeds the **same enriched text** to LightRAG (PDF/DOCX; Excel figures only when present)
+
+Word body text still comes from paragraphs; figures are appended under `## Embedded figures`. Excel cell tables stay on the DuckDB path; chart/screenshot images get figure strategies and optional KG on that figure text only.
+
+Requires the `tesseract` binary and a multimodal-capable model on `VLLM_BASE_URL`. Failures are fail-open.
+
+### Managing groups, test users, and application API keys
+
+Admin **Settings → Security** includes:
+
+- **ACL Groups** — register, edit, and deactivate group names; discover unregistered groups from existing documents
+- **Playground Personas** — create/edit lab test users (Mike, Bob, …) and their group memberships (not production auth)
+- **Applications & API Keys** — named service clients (demo apps, OpenWebUI, MCP gateways). Keys are stored **hashed**; the full secret is shown **once** on create. Revoke or deactivate per app without redeploying.
+
+The Playground and Knowledge Graph “act as / view as” dropdowns load from personas. If imported documents use groups no persona holds, the UI warns and offers to add those groups to Alice (or you can use **Custom groups…** in the Playground).
+
+#### API authentication (apps calling SAURON)
+
+Protected REST routes require **both**:
+
+| Header | Purpose |
+|--------|---------|
+| `X-API-Key` | Service credential — application key from Security (or legacy `API_KEYS` env during migration) |
+| `Authorization: Bearer <JWT>` | User identity + **ACL groups** for document filtering |
+
+Mint a lab JWT:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"username":"mike","password":"demo","groups":["finance","executives"]}'
+```
+
+Then query (sync or async):
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/query/async \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <your-app-key>" \
+  -H "Authorization: Bearer <jwt>" \
+  -d '{"question":"What is the expense policy?"}'
+```
+
+**CORS:** SAURON allows browser origins on `localhost` / `127.0.0.1` for local demos. Production front-ends should call SAURON only from a **backend** (BFF), not the browser—use a dedicated application API key per client.
+
+See [docs/API_APPLICATIONS.md](docs/API_APPLICATIONS.md) for multi-app key management.
+
 ## Backup & Restore
 
 A single `.tar.gz` backup file contains everything needed to transport SAURON to another host:
@@ -262,7 +329,7 @@ Three transport modes:
 | Proposals | Approve/reject auto-categorization and entity merge proposals |
 | Playground | Query testing with step trace, streaming answers, dataset and persona filters |
 | Knowledge Graph | GPU-accelerated (cosmos.gl) or 3D entity visualization with dataset, persona, and type filtering; click-to-highlight connections |
-| Settings | LLM/embedding endpoints, reconciliation, LanceDB config, backup & restore |
+| Settings | LLM/embedding endpoints, Security (ACL, personas, application API keys), backup & restore |
 | Audit Log | JSONL audit trail of all operations |
 
 ## Quick Start
@@ -333,8 +400,11 @@ LANCEDB_PATH=data/lancedb
 
 # Auth
 JWT_SECRET_KEY=change-me-in-production
+# Bootstrap / legacy keys (also imported into Applications on startup)
 API_KEYS=your-api-key-here
 ```
+
+Prefer creating **per-application keys** in Admin → Security after first boot. Keep `JWT_SECRET_KEY` strong in production.
 
 ## Thinking Model Support
 

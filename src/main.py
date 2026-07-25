@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from src.api.routes_auth import router as auth_router
 from src.api.routes_ingest import router as ingest_router, get_metadata_store
@@ -42,13 +43,21 @@ ADMIN_STATIC = Path(__file__).parent / "admin" / "static"
 async def lifespan(app: FastAPI):
     store = get_metadata_store()
     await store.init()
-    # Initialize LightRAG knowledge graph
+    # Crash recovery: LightRAG resumes PENDING/PROCESSING/FAILED docs on the
+    # next ainsert. Drop any rows that no longer exist in SAURON metadata so a
+    # killed mid-KG import cannot resurrect deleted PDFs beside new uploads.
     try:
-        from src.knowledge.graph_rag import get_lightrag
-        await get_lightrag()
+        from src.knowledge.graph_rag import reconcile_lightrag_with_metadata, get_lightrag
+        docs = await store.list_documents()
+        live = {d.doc_id for d in docs if getattr(d, "doc_id", None)}
+        result = await reconcile_lightrag_with_metadata(live)
+        import logging
+        logging.getLogger(__name__).info(f"LightRAG startup reconcile: {result}")
+        if live:
+            await get_lightrag()
     except Exception as e:
         import logging
-        logging.getLogger(__name__).warning(f"LightRAG init deferred: {e}")
+        logging.getLogger(__name__).warning(f"LightRAG init/reconcile deferred: {e}")
     # Load persisted table schemas into the in-memory registry
     try:
         import logging
@@ -70,6 +79,25 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="SAURON", description="Structured Agentic Unified Retrieval Over Networks", version="0.1.0", lifespan=lifespan)
+
+    # Allow browser demos (e.g. Vite on :5173) to call the API cross-origin.
+    # Without this, preflight OPTIONS fails with 405 and the browser reports "Failed to fetch".
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
 
     @app.get("/api/health")
     async def health():

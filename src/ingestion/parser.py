@@ -154,15 +154,94 @@ def _parse_pdf(path: Path) -> ParsedDocument:
         return ParsedDocument(filename=path.name, doc_type="pdf", text=text)
 
 
+def _docx_para_text(para) -> str | None:
+    """Format one paragraph; None if empty."""
+    text = (para.text or "").strip()
+    if not text:
+        return None
+    style = getattr(getattr(para, "style", None), "name", "") or ""
+    if style.startswith("Heading"):
+        return f"\n## {text}\n"
+    return text
+
+
+def _docx_table_text(table) -> str | None:
+    """Flatten a Word table to readable prose (story-book layouts use tables heavily)."""
+    rows_out: list[str] = []
+    for row in table.rows:
+        cells: list[str] = []
+        seen: set[str] = set()
+        for cell in row.cells:
+            # python-docx repeats merged cells — de-dupe consecutive identical text
+            ct = "\n".join(
+                p.text.strip() for p in cell.paragraphs if p.text and p.text.strip()
+            ).strip()
+            if not ct or ct in seen:
+                continue
+            seen.add(ct)
+            cells.append(ct)
+        if cells:
+            rows_out.append(" | ".join(cells) if len(cells) > 1 else cells[0])
+    if not rows_out:
+        return None
+    return "\n".join(rows_out)
+
+
+def _iter_docx_blocks(doc):
+    """Yield paragraphs and tables in document-body order.
+
+    ``Document.paragraphs`` skips table cell text entirely — children's books
+    and many designed layouts put the story in tables, so ordered body walk
+    is required for correct capture.
+    """
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    body = doc.element.body
+    for child in body.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, doc)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, doc)
+
+
 def _parse_docx(path: Path) -> ParsedDocument:
     doc = DocxDocument(str(path))
-    parts = []
-    for para in doc.paragraphs:
-        if para.style.name.startswith("Heading"):
-            parts.append(f"\n## {para.text}\n")
-        elif para.text.strip():
-            parts.append(para.text)
-    text = "\n".join(parts)
+    parts: list[str] = []
+    seen_norm: set[str] = set()
+
+    def _add(block: str | None) -> None:
+        if not block:
+            return
+        # Collapse whitespace for de-dupe (cover page often repeats title)
+        key = " ".join(block.split())
+        if key in seen_norm:
+            return
+        seen_norm.add(key)
+        parts.append(block.strip())
+
+    for block in _iter_docx_blocks(doc):
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+
+        if isinstance(block, Paragraph):
+            _add(_docx_para_text(block))
+        elif isinstance(block, Table):
+            _add(_docx_table_text(block))
+
+    # Headers / footers (page numbers etc. — usually small, but keep searchable)
+    for section in doc.sections:
+        for hf in (section.header, section.footer):
+            if hf is None:
+                continue
+            for para in hf.paragraphs:
+                _add(_docx_para_text(para))
+            for table in hf.tables:
+                _add(_docx_table_text(table))
+
+    text = "\n\n".join(parts)
     return ParsedDocument(filename=path.name, doc_type="docx", text=text)
 
 

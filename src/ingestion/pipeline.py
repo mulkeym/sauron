@@ -100,8 +100,11 @@ async def ingest_document(
 
     is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
     is_pdf = _is_structured_pdf(parsed.doc_type)
+    is_docx = parsed.doc_type == "docx"
     text_sheets = None
-    pdf_prose = None
+    enriched_prose = None
+    from src.config import settings as _settings
+
     if is_spreadsheet:
         # Structured: clean sheets -> DuckDB + schema + row narratives; messy
         # sheets -> deterministic region narratives. Returns which clean sheets
@@ -112,29 +115,93 @@ async def ingest_document(
             dataset_id=dataset_id,
         )
         text_sheets = sheets_needing_text(grids, classifications, ingested)
+        if _settings.figure_extraction_enabled and Path(file_path).suffix.lower() in (".xlsx", ".xlsm"):
+            try:
+                from src.ingestion.figure_extract import enrich_text_with_figures
+                fig_text, fig_grids = enrich_text_with_figures(Path(file_path), "")
+                if fig_grids:
+                    await ingest_grids(
+                        fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                        acl_groups, category, vector_store, metadata_store,
+                        dataset_id=dataset_id,
+                    )
+                if fig_text.strip():
+                    enriched_prose = ((parsed.text or "") + "\n\n" + fig_text).strip()
+            except Exception as fig_err:
+                logger.warning(f"Spreadsheet figure extract failed: {fig_err}")
     elif is_pdf:
         try:
             extracted = extract_pdf(Path(file_path))
+            if _settings.figure_extraction_enabled:
+                from src.ingestion.figure_extract import enrich_pdf_with_figures
+                extracted = enrich_pdf_with_figures(Path(file_path), extracted)
             await ingest_grids(
                 extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
                 acl_groups, category, vector_store, metadata_store,
                 dataset_id=dataset_id,
             )
-            pdf_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
+            enriched_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
             logger.info(f"PDF structured extract [{parsed.filename}]: "
-                        f"{len(extracted.table_grids)} table(s), method={extracted.method}")
+                        f"{len(extracted.table_grids)} table(s), method={extracted.method}, "
+                        f"prose_blocks={len(extracted.prose_blocks)}")
         except Exception as e:
             logger.warning(f"PDF structured extract failed for {parsed.filename}, "
                            f"falling back to flat text: {e}")
             is_pdf = False   # fall back to parsed.text chunking below
+    elif is_docx and _settings.figure_extraction_enabled:
+        try:
+            from src.ingestion.figure_extract import enrich_text_with_figures
+            enriched_prose, fig_grids = enrich_text_with_figures(
+                Path(file_path), parsed.text or "",
+            )
+            if fig_grids:
+                await ingest_grids(
+                    fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                    acl_groups, category, vector_store, metadata_store,
+                    dataset_id=dataset_id,
+                )
+        except Exception as e:
+            logger.warning(f"Word figure extract failed for {parsed.filename}: {e}")
+            enriched_prose = parsed.text
+
+    if enriched_prose and len(enriched_prose) > len(parsed.text or "") + 200:
+        try:
+            doc_summary = llm_generate(
+                system_prompt=(
+                    "Summarize ALL items in this document in 2-4 sentences. "
+                    "Include names, amounts, hostnames, IPs, and dates when present."
+                ),
+                user_prompt=enriched_prose[:6000],
+                temperature=0.0, max_tokens=1024,
+            )
+            if doc_summary:
+                doc_context = (
+                    f"Document: {parsed.filename} (type: {parsed.doc_type}, "
+                    f"category: {category})\nSummary: {doc_summary}"
+                )
+        except Exception as se:
+            logger.warning(f"Enriched summary generation failed: {se}")
+
+    kg_source_text = enriched_prose if enriched_prose else parsed.text
+    chunk_source = kg_source_text
 
     for tier_name, tier_size, tier_overlap in CHUNK_TIERS:
         if is_spreadsheet:
             # Structure-aware, row-atomic chunks for messy + failed-clean sheets
             # only. Clean sheets already in the structured store contribute none.
             tier_chunks = build_tier_chunks(text_sheets, chunk_size=tier_size)
-        elif is_pdf:
-            tier_chunks = chunk_text(pdf_prose or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
+            if enriched_prose and "## Embedded figures" in enriched_prose:
+                from src.ingestion.chunker import Chunk
+                fig_only = enriched_prose.split("## Embedded figures", 1)[-1].strip()
+                if fig_only:
+                    extra = chunk_text(fig_only, chunk_size=tier_size, chunk_overlap=tier_overlap)
+                    base_i = len(tier_chunks)
+                    for j, c in enumerate(extra):
+                        tier_chunks.append(
+                            Chunk(text=c.text, index=base_i + j, start_char=c.start_char)
+                        )
+        elif is_pdf or is_docx or enriched_prose:
+            tier_chunks = chunk_text(chunk_source or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
         else:
             tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
         texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
@@ -174,12 +241,18 @@ async def ingest_document(
             await metadata_store.add_category(
                 name=category, description="", acl_groups=acl_groups, routing_keywords=[],
             )
-    # Build knowledge graph via LightRAG — skipped for spreadsheets, which are
-    # fully covered by the structured/tabular store; KG extraction over flattened
-    # numeric tables is costly and yields almost no entities.
-    if not is_spreadsheet:
+    # Knowledge graph: full text for PDF/DOCX; figure-only for Excel with images;
+    # skip pure spreadsheet cell dumps.
+    spreadsheet_figure_kg = ""
+    if is_spreadsheet and enriched_prose and "## Embedded figures" in enriched_prose:
+        spreadsheet_figure_kg = enriched_prose.split("## Embedded figures", 1)[-1].strip()
+    if not is_spreadsheet or spreadsheet_figure_kg:
         from src.knowledge.graph_rag import insert_document as lightrag_insert
-        await lightrag_insert(parsed.text, doc_id=doc_id, filename=parsed.filename)
+        await lightrag_insert(
+            spreadsheet_figure_kg or kg_source_text or parsed.text,
+            doc_id=doc_id,
+            filename=parsed.filename,
+        )
     return IngestResult(
         doc_id=doc_id,
         filename=parsed.filename,

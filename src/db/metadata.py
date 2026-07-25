@@ -3,9 +3,43 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from sqlalchemy import update
-from src.db.models import Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention, EntityMergeProposal, Relationship, AclGroup, Dataset, WebConnector, RegisteredSchema, SchemaHintRecord
+from src.db.models import (
+    Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention,
+    EntityMergeProposal, Relationship, AclGroup, Persona, Dataset, WebConnector,
+    RegisteredSchema, SchemaHintRecord, ApiApplication, ApiKeyRecord,
+)
 from src.db.schema_registry import TableSchema, ColumnSchema
 from src.db.hint_store import SchemaHint
+
+# Defaults seeded when the tables are empty (lab / local testing)
+DEFAULT_ACL_GROUPS = [
+    {"name": "it_support", "display_name": "IT Support", "description": "IT help desk and support staff"},
+    {"name": "devops", "display_name": "DevOps", "description": "DevOps and infrastructure team"},
+    {"name": "cybersecurity", "display_name": "Cybersecurity", "description": "Information security team"},
+    {"name": "engineering", "display_name": "Engineering", "description": "Software and systems engineering"},
+    {"name": "finance", "display_name": "Finance", "description": "Finance and budget team"},
+    {"name": "executives", "display_name": "Executives", "description": "Leadership and executives"},
+    {"name": "compliance", "display_name": "Compliance", "description": "Compliance and regulatory"},
+    {"name": "contracts", "display_name": "Contracts", "description": "Contracts and procurement"},
+    {"name": "clinical", "display_name": "Clinical", "description": "Clinical and medical staff"},
+    {"name": "medical", "display_name": "Medical", "description": "Medical systems and support"},
+    {"name": "biomedical", "display_name": "Biomedical", "description": "Biomedical device engineering"},
+]
+
+DEFAULT_PERSONAS = [
+    {"name": "mike", "display_name": "Mike (Finance, Executives)", "role": "Finance Manager",
+     "groups": ["finance", "executives"], "sort_order": 10},
+    {"name": "bob", "display_name": "Bob (IT Support, DevOps)", "role": "IT Support Engineer",
+     "groups": ["it_support", "devops"], "sort_order": 20},
+    {"name": "sarah", "display_name": "Sarah (Engineering)", "role": "Software Engineer",
+     "groups": ["engineering"], "sort_order": 30},
+    {"name": "carol", "display_name": "Carol (Contracts, Executives)", "role": "Contracts Manager",
+     "groups": ["contracts", "executives"], "sort_order": 40},
+    {"name": "alice", "display_name": "Alice (All Groups)", "role": "Compliance Officer",
+     "groups": [g["name"] for g in DEFAULT_ACL_GROUPS], "sort_order": 50},
+    {"name": "dave", "display_name": "Dave (Engineering Intern)", "role": "Intern (limited access)",
+     "groups": ["engineering"], "sort_order": 60},
+]
 
 
 class MetadataStore:
@@ -21,6 +55,14 @@ class MetadataStore:
             await conn.run_sync(Base.metadata.create_all)
         # Migrate: add columns that may not exist in older databases
         await self._migrate()
+        await self.seed_access_control_defaults()
+        # Application API keys (DB-backed); import legacy settings keys if needed
+        try:
+            from src.auth.api_key import seed_legacy_api_keys
+            await seed_legacy_api_keys(self)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("API key seed/cache deferred: %s", e)
 
     async def _migrate(self):
         """Add new columns to existing tables if they don't exist."""
@@ -224,26 +266,345 @@ class MetadataStore:
     # --- ACL Groups ---
 
     async def add_acl_group(self, name, display_name="", description="", ad_group_dn=""):
+        name = (name or "").strip()
+        if not name:
+            return None
         async with self.session_factory() as session:
             existing = await session.execute(select(AclGroup).where(AclGroup.name == name))
-            if existing.scalar_one_or_none():
-                return  # already exists
-            group = AclGroup(name=name, display_name=display_name or name, description=description, ad_group_dn=ad_group_dn)
+            found = existing.scalar_one_or_none()
+            if found:
+                return found  # already exists
+            group = AclGroup(
+                name=name,
+                display_name=display_name or name,
+                description=description,
+                ad_group_dn=ad_group_dn,
+            )
             session.add(group)
             await session.commit()
+            await session.refresh(group)
+            return group
 
     async def list_acl_groups(self, active_only=True):
         async with self.session_factory() as session:
-            stmt = select(AclGroup)
+            stmt = select(AclGroup).order_by(AclGroup.name)
             if active_only:
                 stmt = stmt.where(AclGroup.active == True)
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
+    async def get_acl_group(self, name: str):
+        async with self.session_factory() as session:
+            result = await session.execute(select(AclGroup).where(AclGroup.name == name))
+            return result.scalar_one_or_none()
+
     async def get_acl_group_names(self) -> list[str]:
         """Get just the names of active ACL groups."""
         groups = await self.list_acl_groups()
         return [g.name for g in groups]
+
+    async def update_acl_group(self, name: str, **fields):
+        """Update display fields / active flag. Name is immutable."""
+        allowed = {"display_name", "description", "ad_group_dn", "active"}
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if not values:
+            return await self.get_acl_group(name)
+        async with self.session_factory() as session:
+            await session.execute(
+                update(AclGroup).where(AclGroup.name == name).values(**values)
+            )
+            await session.commit()
+        return await self.get_acl_group(name)
+
+    async def set_acl_group_active(self, name: str, active: bool):
+        return await self.update_acl_group(name, active=active)
+
+    async def count_documents_for_acl_group(self, group_name: str) -> int:
+        """How many documents list this group in acl_groups."""
+        docs = await self.list_documents()
+        return sum(1 for d in docs if group_name in (d.acl_groups or []))
+
+    async def document_acl_group_usage(self) -> dict[str, int]:
+        """Map of group name -> document count across all documents."""
+        usage: dict[str, int] = {}
+        for doc in await self.list_documents():
+            for g in doc.acl_groups or []:
+                if g:
+                    usage[g] = usage.get(g, 0) + 1
+        return usage
+
+    async def discover_orphan_acl_groups(self) -> list[str]:
+        """Group names present on documents but not registered (or inactive)."""
+        registered = {g.name for g in await self.list_acl_groups(active_only=False)}
+        usage = await self.document_acl_group_usage()
+        return sorted(name for name in usage if name not in registered and name != "ALL")
+
+    # --- Personas (lab / playground test users) ---
+
+    async def add_persona(
+        self,
+        name: str,
+        display_name: str = "",
+        role: str = "",
+        groups: list | None = None,
+        sort_order: int = 0,
+        active: bool = True,
+    ):
+        name = (name or "").strip().lower().replace(" ", "_")
+        if not name:
+            return None
+        async with self.session_factory() as session:
+            existing = await session.execute(select(Persona).where(Persona.name == name))
+            if existing.scalar_one_or_none():
+                return None  # already exists
+            persona = Persona(
+                name=name,
+                display_name=display_name or name,
+                role=role or "",
+                groups=list(groups or []),
+                sort_order=sort_order,
+                active=active,
+            )
+            session.add(persona)
+            await session.commit()
+            await session.refresh(persona)
+            return persona
+
+    async def list_personas(self, active_only=True):
+        async with self.session_factory() as session:
+            stmt = select(Persona).order_by(Persona.sort_order, Persona.name)
+            if active_only:
+                stmt = stmt.where(Persona.active == True)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_persona(self, name: str):
+        if not name:
+            return None
+        async with self.session_factory() as session:
+            result = await session.execute(select(Persona).where(Persona.name == name))
+            return result.scalar_one_or_none()
+
+    async def update_persona(self, name: str, **fields):
+        allowed = {"display_name", "role", "groups", "sort_order", "active"}
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if not values:
+            return await self.get_persona(name)
+        async with self.session_factory() as session:
+            await session.execute(
+                update(Persona).where(Persona.name == name).values(**values)
+            )
+            await session.commit()
+        return await self.get_persona(name)
+
+    async def set_persona_active(self, name: str, active: bool):
+        return await self.update_persona(name, active=active)
+
+    async def delete_persona(self, name: str):
+        async with self.session_factory() as session:
+            await session.execute(delete(Persona).where(Persona.name == name))
+            await session.commit()
+
+    async def resolve_play_user_groups(self, play_user: str) -> list[str]:
+        """Resolve a playground/KG identity to ACL groups.
+
+        Accepts a persona name (preferred) or a comma-separated group list
+        (custom / legacy). Empty or 'ALL' returns ['ALL'].
+        """
+        raw = (play_user or "").strip()
+        if not raw or raw.upper() == "ALL":
+            return ["ALL"]
+        persona = await self.get_persona(raw)
+        if persona and persona.active:
+            return list(persona.groups or [])
+        # Legacy / custom: treat as comma-separated groups
+        return [g.strip() for g in raw.split(",") if g.strip()]
+
+    async def uncovered_document_groups(self) -> list[str]:
+        """Document ACL groups not held by any active persona."""
+        usage = await self.document_acl_group_usage()
+        if not usage:
+            return []
+        covered: set[str] = set()
+        for p in await self.list_personas(active_only=True):
+            covered.update(p.groups or [])
+        return sorted(name for name in usage if name not in covered and name != "ALL")
+
+    async def seed_access_control_defaults(self):
+        """Seed default ACL groups and personas when tables are empty."""
+        existing_groups = await self.list_acl_groups(active_only=False)
+        if not existing_groups:
+            for g in DEFAULT_ACL_GROUPS:
+                await self.add_acl_group(**g)
+        existing_personas = await self.list_personas(active_only=False)
+        if not existing_personas:
+            for p in DEFAULT_PERSONAS:
+                await self.add_persona(**p)
+
+    # --- API applications & keys (service credentials) ---
+
+    async def add_api_application(
+        self,
+        name: str,
+        display_name: str = "",
+        description: str = "",
+        active: bool = True,
+    ):
+        name = (name or "").strip().lower().replace(" ", "-")
+        if not name:
+            return None
+        async with self.session_factory() as session:
+            existing = await session.execute(
+                select(ApiApplication).where(ApiApplication.name == name)
+            )
+            if existing.scalar_one_or_none():
+                return None
+            app = ApiApplication(
+                name=name,
+                display_name=display_name or name,
+                description=description or "",
+                active=active,
+            )
+            session.add(app)
+            await session.commit()
+            await session.refresh(app)
+            return app
+
+    async def list_api_applications(self, active_only: bool = False):
+        async with self.session_factory() as session:
+            stmt = select(ApiApplication).order_by(ApiApplication.name)
+            if active_only:
+                stmt = stmt.where(ApiApplication.active == True)  # noqa: E712
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_api_application(self, app_id: int):
+        async with self.session_factory() as session:
+            return await session.get(ApiApplication, app_id)
+
+    async def get_api_application_by_name(self, name: str):
+        if not name:
+            return None
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ApiApplication).where(ApiApplication.name == name)
+            )
+            return result.scalar_one_or_none()
+
+    async def update_api_application(self, app_id: int, **fields):
+        allowed = {"display_name", "description", "active"}
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if not values:
+            return await self.get_api_application(app_id)
+        async with self.session_factory() as session:
+            await session.execute(
+                update(ApiApplication).where(ApiApplication.id == app_id).values(**values)
+            )
+            await session.commit()
+        return await self.get_api_application(app_id)
+
+    async def delete_api_application(self, app_id: int):
+        """Delete app and all its keys."""
+        async with self.session_factory() as session:
+            await session.execute(
+                delete(ApiKeyRecord).where(ApiKeyRecord.application_id == app_id)
+            )
+            await session.execute(
+                delete(ApiApplication).where(ApiApplication.id == app_id)
+            )
+            await session.commit()
+
+    async def add_api_key_record(
+        self,
+        application_id: int,
+        key_hash: str,
+        key_prefix: str = "",
+        label: str = "",
+    ):
+        async with self.session_factory() as session:
+            rec = ApiKeyRecord(
+                application_id=application_id,
+                key_hash=key_hash,
+                key_prefix=key_prefix or "",
+                label=label or "",
+                active=True,
+            )
+            session.add(rec)
+            await session.commit()
+            await session.refresh(rec)
+            return rec
+
+    async def list_api_keys_for_app(self, application_id: int, include_revoked: bool = True):
+        async with self.session_factory() as session:
+            stmt = (
+                select(ApiKeyRecord)
+                .where(ApiKeyRecord.application_id == application_id)
+                .order_by(ApiKeyRecord.created_at.desc())
+            )
+            if not include_revoked:
+                stmt = stmt.where(ApiKeyRecord.revoked_at.is_(None), ApiKeyRecord.active == True)  # noqa: E712
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def get_api_key_by_hash(self, key_hash: str):
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ApiKeyRecord).where(ApiKeyRecord.key_hash == key_hash)
+            )
+            return result.scalar_one_or_none()
+
+    async def get_api_key(self, key_id: int):
+        async with self.session_factory() as session:
+            return await session.get(ApiKeyRecord, key_id)
+
+    async def revoke_api_key(self, key_id: int):
+        from datetime import datetime, timezone
+        async with self.session_factory() as session:
+            await session.execute(
+                update(ApiKeyRecord)
+                .where(ApiKeyRecord.id == key_id)
+                .values(active=False, revoked_at=datetime.now(timezone.utc))
+            )
+            await session.commit()
+        return await self.get_api_key(key_id)
+
+    async def touch_api_key(self, key_id: int):
+        from datetime import datetime, timezone
+        async with self.session_factory() as session:
+            await session.execute(
+                update(ApiKeyRecord)
+                .where(ApiKeyRecord.id == key_id)
+                .values(last_used_at=datetime.now(timezone.utc))
+            )
+            await session.commit()
+
+    async def count_api_keys(self) -> int:
+        async with self.session_factory() as session:
+            result = await session.execute(select(ApiKeyRecord))
+            return len(list(result.scalars().all()))
+
+    async def list_active_api_key_hashes(self) -> list[dict]:
+        """Join active keys with active applications for the auth cache."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ApiKeyRecord, ApiApplication)
+                .join(ApiApplication, ApiKeyRecord.application_id == ApiApplication.id)
+                .where(
+                    ApiKeyRecord.active == True,  # noqa: E712
+                    ApiKeyRecord.revoked_at.is_(None),
+                    ApiApplication.active == True,  # noqa: E712
+                )
+            )
+            out = []
+            for key, app in result.all():
+                out.append({
+                    "key_id": key.id,
+                    "key_hash": key.key_hash,
+                    "key_prefix": key.key_prefix,
+                    "application_id": app.id,
+                    "application_name": app.name,
+                })
+            return out
 
     async def add_proposal(self, proposed_name, proposed_description, proposed_acl_groups, proposed_keywords, proposed_by, proposed_grs=""):
         record = CategoryProposal(proposed_name=proposed_name, proposed_description=proposed_description, proposed_acl_groups=proposed_acl_groups, proposed_keywords=proposed_keywords, proposed_grs=proposed_grs, proposed_by=proposed_by)

@@ -19,6 +19,25 @@ def test_parse_docx():
     assert "server restart" in result.text.lower() or "runbook" in result.text.lower()
 
 
+def test_parse_docx_captures_table_story_text(tmp_path):
+    """Illustrated kids books often put body copy in tables, not body paragraphs."""
+    from docx import Document
+
+    path = tmp_path / "story.docx"
+    doc = Document()
+    doc.add_paragraph("Little Axel")  # title in a normal paragraph
+    table = doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = (
+        "It was a quiet morning in the forest. The little fox sat under a maple tree."
+    )
+    doc.save(path)
+
+    result = parse_document(path)
+    assert result.doc_type == "docx"
+    assert "quiet morning in the forest" in result.text.lower()
+    assert "little fox" in result.text.lower()
+
+
 def test_parse_xlsx():
     result = parse_document(FIXTURES / "sample.xlsx")
     assert result.doc_type == "xlsx"

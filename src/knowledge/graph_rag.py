@@ -2,9 +2,13 @@ from __future__ import annotations
 """LightRAG adapter — uses LightRAG's built-in OpenAI adapter for best format compliance."""
 import asyncio
 import logging
+import shutil
+from pathlib import Path
+
 import numpy as np
 
 from lightrag import LightRAG, QueryParam
+from lightrag.base import DocStatus
 from lightrag.llm.openai import openai_complete_if_cache
 from lightrag.utils import EmbeddingFunc
 
@@ -15,6 +19,28 @@ logger = logging.getLogger(__name__)
 
 _rag_instance: LightRAG | None = None
 _initialized = False
+# Serialize ainsert calls: LightRAG only allows one pipeline worker; concurrent
+# ainserts return early with "Request queued" and the caller marks KG complete
+# with 0 entities even though extraction never ran for that document.
+_insert_lock = asyncio.Lock()
+
+# Default on-disk LightRAG working directory (relative to process cwd).
+LIGHTRAG_DIR = Path("data/lightrag")
+
+
+def plan_orphan_lightrag_docs(
+    live_doc_ids: set[str],
+    lightrag_doc_ids: set[str],
+) -> set[str]:
+    """Return LightRAG doc ids that are safe to drop (not in SAURON metadata).
+
+    Crash/close leaves PROCESSING/PENDING rows in LightRAG's doc_status even
+    after the admin metadata document was deleted. On the next ainsert LightRAG
+    resumes *all* non-processed rows, which is how a deleted PDF reappears as
+    "Chunk N of 42" while a small DOCX is ingesting.
+    """
+    live = {d for d in live_doc_ids if d}
+    return {d for d in lightrag_doc_ids if d and d not in live}
 
 
 async def _llm_func(
@@ -88,6 +114,32 @@ def _safe_concurrency(requested: int) -> int:
     return requested
 
 
+def estimate_kg_timeout_seconds(text: str) -> int:
+    """Wall-clock budget for one LightRAG ainsert based on text size.
+
+    LightRAG splits on token size then runs one extract LLM call per chunk
+    (plus entity merge work). A fixed 10-minute cap is too low for ~100-chunk
+    technical PDFs and causes cancel+full-retry thrashing.
+    """
+    if settings.kg_extract_timeout_seconds and settings.kg_extract_timeout_seconds > 0:
+        return int(settings.kg_extract_timeout_seconds)
+
+    chunk_tok = max(200, int(settings.kg_chunk_token_size))
+    # ~4 chars/token; account for overlap roughly as 0.9x fewer chunks
+    est_chunks = max(1, int(len(text or "") / (chunk_tok * 3.5)))
+    concurrency = max(1, _safe_concurrency(settings.llm_concurrency))
+    sec = (est_chunks / concurrency) * float(settings.kg_extract_sec_per_chunk)
+    sec += 180  # setup, embed, merge, flush buffer
+    lo = int(settings.kg_extract_timeout_min_seconds)
+    hi = int(settings.kg_extract_timeout_max_seconds)
+    budget = int(min(max(sec, lo), hi))
+    logger.info(
+        f"KG timeout estimate: chars={len(text or '')} est_chunks≈{est_chunks} "
+        f"concurrency={concurrency} budget={budget}s"
+    )
+    return budget
+
+
 async def get_lightrag() -> LightRAG:
     """Get or create the LightRAG instance."""
     global _rag_instance, _initialized
@@ -96,14 +148,31 @@ async def get_lightrag() -> LightRAG:
         return _rag_instance
 
     embed_dim = _detect_embed_dim()
-    logger.info(f"Initializing LightRAG (embedding dim: {embed_dim})")
+    llm_async = _safe_concurrency(settings.llm_concurrency)
+    # Parallel insert tracks concurrent docs/chunks in the pipeline. With API
+    # embeddings we can match LLM concurrency; local embedding stays serial so
+    # keep insert parallelism modest.
+    if settings.embedding_mode == "local":
+        parallel_insert = max(1, llm_async // 2)
+        embed_async = 1
+        embed_batch = 4
+    else:
+        parallel_insert = max(1, llm_async)
+        embed_async = max(1, llm_async)
+        embed_batch = 16
+
+    logger.info(
+        f"Initializing LightRAG (embedding dim: {embed_dim}, "
+        f"llm_async={llm_async}, parallel_insert={parallel_insert}, "
+        f"chunk_tokens={settings.kg_chunk_token_size})"
+    )
 
     _rag_instance = LightRAG(
         working_dir="data/lightrag",
         llm_model_func=_llm_func,
         llm_model_name=settings.vllm_model_name,
-        llm_model_max_async=_safe_concurrency(settings.llm_concurrency),
-        max_parallel_insert=max(1, _safe_concurrency(settings.llm_concurrency) // 2),
+        llm_model_max_async=llm_async,
+        max_parallel_insert=parallel_insert,
 
         embedding_func=EmbeddingFunc(
             embedding_dim=embed_dim,
@@ -112,17 +181,17 @@ async def get_lightrag() -> LightRAG:
         ),
         # Local CPU embedding is not thread-safe (nomic-bert rotary cache corruption).
         # Serialize with max_async=1 for local mode; API servers handle concurrency internally.
-        embedding_func_max_async=1 if settings.embedding_mode == "local" else settings.llm_concurrency,
-        embedding_batch_num=4,
+        embedding_func_max_async=embed_async,
+        embedding_batch_num=embed_batch,
         default_embedding_timeout=120,
         # Align LightRAG's per-call LLM timeout with our configured request
         # timeout (worker execution cap is ~2x this) so slow prose chunks have
         # room to finish instead of being killed at the 360s default.
         default_llm_timeout=settings.vllm_request_timeout,
 
-        # Chunking — smaller chunks help smaller models extract entities more reliably
-        chunk_token_size=500,
-        chunk_overlap_token_size=50,
+        # Larger chunks ⇒ fewer extract LLM calls (main KG speed lever for big PDFs).
+        chunk_token_size=max(200, int(settings.kg_chunk_token_size)),
+        chunk_overlap_token_size=max(0, int(settings.kg_chunk_overlap_token_size)),
 
         # Storage — file-based, zero infrastructure
         kv_storage="JsonKVStorage",
@@ -153,28 +222,319 @@ async def get_graph_counts() -> tuple[int, int]:
         return 0, 0
 
 
+async def load_graph_for_ui() -> tuple[list[dict], list[dict]]:
+    """Load entities/relationships for the admin Knowledge Graph page.
+
+    Prefers the live in-memory NetworkX graph (accurate during/after imports).
+    Falls back to the on-disk GraphML file, which is only flushed when a
+    LightRAG insert finishes ``index_done_callback``.
+    """
+    junk = {"entity_name", "source_entity", "target_entity", "entity_type"}
+    entities: list[dict] = []
+    relationships: list[dict] = []
+
+    try:
+        rag = await get_lightrag()
+        nodes = await rag.chunk_entity_relation_graph.get_all_nodes()
+        edges = await rag.chunk_entity_relation_graph.get_all_edges()
+        for node in nodes:
+            name = str(node.get("id") or node.get("entity_id") or "").strip()
+            etype = str(
+                node.get("entity_type") or node.get("type") or "unknown"
+            ).strip()
+            if not name or name.lower() in junk or etype in ("UNKNOWN", "entity_type"):
+                continue
+            entities.append({"name": name, "type": etype})
+        for edge in edges:
+            src = str(edge.get("source") or "").strip()
+            tgt = str(edge.get("target") or "").strip()
+            desc = str(
+                edge.get("description") or edge.get("keywords") or edge.get("label") or ""
+            )
+            desc = desc.split("<SEP>")[0].split("&lt;SEP&gt;")[0].strip()[:120]
+            if src and tgt and src.lower() not in junk and tgt.lower() not in junk:
+                relationships.append({"source": src, "target": tgt, "label": desc})
+        if entities or relationships:
+            return entities, relationships
+    except Exception as e:
+        logger.warning(f"Live graph load failed, falling back to GraphML: {e}")
+
+    # Disk fallback (same shape as admin._load_lightrag_graph)
+    try:
+        import re as re_mod
+        from pathlib import Path
+
+        graphml = Path("data/lightrag/graph_chunk_entity_relation.graphml")
+        if not graphml.exists():
+            return entities, relationships
+        content = graphml.read_text()
+        for match in re_mod.finditer(
+            r'<node id="([^"]+)"[^>]*>.*?<data key="d1">(.*?)</data>',
+            content,
+            re_mod.DOTALL,
+        ):
+            name = match.group(1)
+            etype = match.group(2).strip()
+            if name.lower() not in junk and etype not in ("UNKNOWN", "entity_type"):
+                entities.append({"name": name, "type": etype})
+        for match in re_mod.finditer(
+            r'<edge source="([^"]+)" target="([^"]+)"[^>]*>(.*?)</edge>',
+            content,
+            re_mod.DOTALL,
+        ):
+            src, tgt = match.group(1), match.group(2)
+            desc_match = re_mod.search(
+                r'<data key="d8">(.*?)</data>', match.group(3), re_mod.DOTALL
+            )
+            desc = ""
+            if desc_match:
+                desc = (
+                    desc_match.group(1)
+                    .split("&lt;SEP&gt;")[0]
+                    .split("<SEP>")[0]
+                    .strip()[:120]
+                )
+            if src.lower() not in junk and tgt.lower() not in junk:
+                relationships.append({"source": src, "target": tgt, "label": desc})
+    except Exception as e:
+        logger.warning(f"GraphML load failed: {e}")
+    return entities, relationships
+
+
+async def release_pipeline_busy() -> None:
+    """Clear LightRAG's pipeline busy flag after a cancelled/timed-out insert.
+
+    Without this, a cancelled ainsert can leave busy=True so later inserts
+    only set request_pending and return without extracting entities.
+    """
+    try:
+        from lightrag.kg.shared_storage import get_namespace_data, get_namespace_lock
+
+        rag = await get_lightrag()
+        workspace = getattr(rag, "workspace", None) or ""
+        pipeline_status = await get_namespace_data(
+            "pipeline_status", workspace=workspace
+        )
+        pipeline_status_lock = get_namespace_lock(
+            "pipeline_status", workspace=workspace
+        )
+        async with pipeline_status_lock:
+            if pipeline_status.get("busy"):
+                pipeline_status["busy"] = False
+                pipeline_status["request_pending"] = False
+                pipeline_status["cancellation_requested"] = False
+                pipeline_status["latest_message"] = "Pipeline released after timeout/cancel"
+                logger.warning("Cleared LightRAG pipeline busy flag after insert cancel/timeout")
+        # Persist any partial in-memory graph so the admin UI can see it
+        try:
+            await rag.chunk_entity_relation_graph.index_done_callback()
+        except Exception as e:
+            logger.warning(f"Graph flush after timeout failed: {e}")
+    except Exception as e:
+        logger.warning(f"Could not release LightRAG pipeline: {e}")
+
+
+def _reset_singleton() -> None:
+    global _rag_instance, _initialized
+    _rag_instance = None
+    _initialized = False
+
+
+async def _hard_purge_lightrag_unlocked(*, reason: str = "") -> None:
+    """Caller must hold ``_insert_lock`` (or guarantee no concurrent ainsert)."""
+    try:
+        if _rag_instance is not None and _initialized:
+            await release_pipeline_busy()
+    except Exception:
+        pass
+    _reset_singleton()
+    if LIGHTRAG_DIR.exists():
+        shutil.rmtree(str(LIGHTRAG_DIR))
+    LIGHTRAG_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Hard-purged LightRAG storage%s",
+        f" ({reason})" if reason else "",
+    )
+
+
+async def hard_purge_lightrag(*, reason: str = "") -> None:
+    """Wipe on-disk LightRAG storage and drop the in-memory singleton.
+
+    Holds ``_insert_lock`` so an in-flight ainsert cannot re-flush stale state
+    into a freshly emptied directory (the race that recreates deleted PDFs).
+    Safe after crash: next get_lightrag() rebuilds empty stores.
+    """
+    async with _insert_lock:
+        await _hard_purge_lightrag_unlocked(reason=reason)
+
+
+async def list_lightrag_doc_ids() -> dict[str, str]:
+    """Return {doc_id: status_value} for every document in LightRAG doc_status."""
+    if not (LIGHTRAG_DIR / "kv_store_doc_status.json").exists() and _rag_instance is None:
+        return {}
+    rag = await get_lightrag()
+    out: dict[str, str] = {}
+    for st in (
+        DocStatus.PENDING,
+        DocStatus.PROCESSING,
+        DocStatus.PREPROCESSED,
+        DocStatus.PROCESSED,
+        DocStatus.FAILED,
+    ):
+        try:
+            docs = await rag.doc_status.get_docs_by_status(st)
+        except Exception as e:
+            logger.warning(f"list_lightrag_doc_ids status={st}: {e}")
+            continue
+        for doc_id, meta in (docs or {}).items():
+            status_val = getattr(st, "value", str(st))
+            if meta is not None and getattr(meta, "status", None) is not None:
+                status_val = getattr(meta.status, "value", str(meta.status))
+            out[str(doc_id)] = str(status_val)
+    return out
+
+
+async def _delete_lightrag_doc(rag: LightRAG, doc_id: str) -> bool:
+    """Delete one LightRAG document; return True on success."""
+    try:
+        await asyncio.wait_for(rag.adelete_by_doc_id(doc_id), timeout=120)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(f"LightRAG delete timed out for {doc_id}")
+    except Exception as e:
+        logger.warning(f"LightRAG delete failed for {doc_id}: {e}")
+    return False
+
+
+async def reconcile_lightrag_with_metadata(
+    live_doc_ids: set[str],
+    *,
+    extra_keep: set[str] | None = None,
+) -> dict:
+    """Drop LightRAG docs that are not in SAURON metadata (crash/orphan cleanup).
+
+    - No live docs → hard purge (fast path when corpus is empty).
+    - Else delete each orphan via adelete_by_doc_id (rebuilds shared entities).
+    - Always clears a stuck pipeline busy flag afterward.
+
+    ``extra_keep`` is for the document currently being inserted (may not be in
+    metadata yet when KG runs mid-ingest).
+    """
+    keep = {d for d in live_doc_ids if d} | {d for d in (extra_keep or set()) if d}
+
+    async with _insert_lock:
+        if not keep:
+            await _hard_purge_lightrag_unlocked(reason="no live documents in metadata")
+            return {"action": "hard_purge", "orphans_removed": 0, "kept": 0}
+
+        # Ensure we can read status even if never initialized this process
+        rag = await get_lightrag()
+        try:
+            await release_pipeline_busy()
+        except Exception:
+            pass
+
+        present = await list_lightrag_doc_ids()
+        orphans = plan_orphan_lightrag_docs(keep, set(present))
+        removed = 0
+        for doc_id in sorted(orphans):
+            status = present.get(doc_id, "?")
+            logger.info(
+                f"KG reconcile: removing orphan LightRAG doc {doc_id} (status={status})"
+            )
+            if await _delete_lightrag_doc(rag, doc_id):
+                removed += 1
+
+        if removed:
+            try:
+                await rag.chunk_entity_relation_graph.index_done_callback()
+            except Exception as e:
+                logger.warning(f"Graph flush after reconcile failed: {e}")
+
+        logger.info(
+            f"KG reconcile: removed {removed}/{len(orphans)} orphans; "
+            f"keeping {len(keep)} live id(s); had {len(present)} LightRAG doc(s)"
+        )
+        return {
+            "action": "reconcile",
+            "orphans_removed": removed,
+            "orphans_found": len(orphans),
+            "kept": len(keep),
+            "lightrag_before": len(present),
+        }
+
+
 async def insert_document(text: str, doc_id: str = "", filename: str = "") -> str:
     """Insert a document into LightRAG for knowledge graph extraction."""
     if should_skip_graph(filename):
         logger.info(f"Skipping KG extraction for tabular/numeric file: {filename or doc_id}")
         return "skipped: tabular file has no graph entities"
-    rag = await get_lightrag()
-    try:
-        result = await rag.ainsert(
-            text,
-            ids=[doc_id] if doc_id else None,
-            file_paths=[filename] if filename else None,
-        )
-        logger.info(f"LightRAG insert complete: {filename or doc_id}")
+    async with _insert_lock:
+        # Drop crash leftovers so process_enqueue won't resume deleted PDFs
+        # alongside this insert. Keep metadata live ids + this doc_id.
+        try:
+            from src.db.metadata import MetadataStore
 
-        # Clear cached query responses since graph data changed.
-        # Keep extract/summary caches (expensive, chunk-specific, still valid).
-        _invalidate_query_cache()
+            store = MetadataStore()
+            await store.init()
+            docs = await store.list_documents()
+            live = {d.doc_id for d in docs if getattr(d, "doc_id", None)}
+            if doc_id:
+                live.add(doc_id)
+            # Nested reconcile would re-acquire lock — inline orphan drop here
+            rag = await get_lightrag()
+            present = {}
+            for st in (
+                DocStatus.PENDING,
+                DocStatus.PROCESSING,
+                DocStatus.PREPROCESSED,
+                DocStatus.FAILED,
+                DocStatus.PROCESSED,
+            ):
+                try:
+                    batch = await rag.doc_status.get_docs_by_status(st)
+                    for did in (batch or {}):
+                        present[str(did)] = getattr(st, "value", str(st))
+                except Exception:
+                    pass
+            orphans = plan_orphan_lightrag_docs(live, set(present))
+            for oid in sorted(orphans):
+                logger.info(
+                    f"KG pre-insert: dropping orphan {oid} "
+                    f"(status={present.get(oid)}) before ainsert of {doc_id or filename}"
+                )
+                await _delete_lightrag_doc(rag, oid)
+        except Exception as e:
+            logger.warning(f"KG pre-insert orphan cleanup skipped: {e}")
+            rag = await get_lightrag()
 
-        return result
-    except Exception as e:
-        logger.error(f"LightRAG insert failed: {e}")
-        return f"error: {e}"
+        try:
+            result = await rag.ainsert(
+                text,
+                ids=[doc_id] if doc_id else None,
+                file_paths=[filename] if filename else None,
+            )
+            logger.info(f"LightRAG insert complete: {filename or doc_id}")
+
+            # Ensure GraphML is on disk for the admin UI disk fallback
+            try:
+                await rag.chunk_entity_relation_graph.index_done_callback()
+            except Exception as e:
+                logger.warning(f"Graph flush after insert failed: {e}")
+
+            # Clear cached query responses since graph data changed.
+            # Keep extract/summary caches (expensive, chunk-specific, still valid).
+            _invalidate_query_cache()
+
+            return result
+        except asyncio.CancelledError:
+            # Timeout or task cancel — free the pipeline so the next attempt can run
+            await release_pipeline_busy()
+            raise
+        except Exception as e:
+            logger.error(f"LightRAG insert failed: {e}")
+            await release_pipeline_busy()
+            return f"error: {e}"
 
 
 def _invalidate_query_cache():

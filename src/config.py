@@ -57,6 +57,18 @@ class Settings(BaseSettings):
     async_query_timeout_seconds: int = 600  # per-job ceiling so a wedged query can't hold a slot forever
     llm_concurrency: int = 4  # concurrent LLM calls (map-reduce, entity extraction)
 
+    # Knowledge graph (LightRAG) extract tuning
+    # Smaller chunks = more extract LLM calls (slower, sometimes better for tiny models).
+    # 1200 tokens ≈ half the calls of the old 500 default for large PDFs.
+    kg_chunk_token_size: int = 1200
+    kg_chunk_overlap_token_size: int = 100
+    # 0 = adaptive timeout from estimated chunk count; else fixed seconds per attempt
+    kg_extract_timeout_seconds: int = 0
+    kg_extract_timeout_max_seconds: int = 3600  # cap for adaptive (1 hour)
+    kg_extract_timeout_min_seconds: int = 900   # floor for adaptive (15 min)
+    kg_extract_sec_per_chunk: float = 22.0      # wall-time estimate per chunk / concurrency
+    kg_extract_max_retries: int = 1  # full retries are expensive; prefer one long attempt
+
     # Metadata extraction
     metadata_extraction_enabled: bool = True  # disable to skip metadata step
     metadata_max_doc_length: int = 200000  # chars sent to LLM for extraction
@@ -124,6 +136,19 @@ class Settings(BaseSettings):
 
     # Audit
     audit_log_path: str = "data/audit.jsonl"
+
+    # Embedded figure / image extraction (PDF vision + OCR)
+    figure_extraction_enabled: bool = True
+    figure_max_per_doc: int = 20
+    figure_min_width: int = 80          # skip logos / icons smaller than this
+    figure_min_height: int = 80
+    figure_min_area: int = 12000        # width*height threshold
+    figure_ocr_first: bool = True
+    figure_vision_timeout_seconds: int = 90
+    figure_vision_max_tokens: int = 2048
+    figure_page_render_dpi_scale: float = 1.5  # pypdfium2 render scale (~108 dpi at 1.5)
+    figure_render_text_sparse_pages: bool = True  # full-page render when page text is sparse
+    figure_sparse_text_chars: int = 40  # below this, treat page as image-heavy
 
     @property
     def api_key_list(self) -> list[str]:

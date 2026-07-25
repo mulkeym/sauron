@@ -3,11 +3,20 @@ __pycache__/
 *.pyc
 *.pyo
 .env
-data/
+data/*
+!data/.gitkeep
 *.db
 .DS_Store
 ~$*
 .claude/
-__pycache__/
-*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
 2025_April_Dec_AD_Pay.pdf
+# Local runtime / editor lock files
+*.log
+~$*.docx
+~$*.xlsx
