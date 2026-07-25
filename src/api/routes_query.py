@@ -17,6 +17,7 @@ async def query(request: QueryRequest, user: UserContext = Depends(require_auth)
         question=request.question, user_groups=user.groups,
         vector_store=get_vector_store(), schema_registry=get_schema_registry(),
         metadata_store=get_metadata_store(),
+        skip_cache=request.skip_cache,
     )
     return QueryResponse(
         answer=result.answer,
@@ -31,7 +32,12 @@ async def query_async(request: QueryRequest, user: UserContext = Depends(require
     """Submit a question for async processing. Returns a token to poll for status/result."""
     await query_queue.start_worker(get_vector_store(), get_schema_registry(), get_metadata_store())
     try:
-        token = query_queue.enqueue(question=request.question, username=user.username, groups=user.groups)
+        token = query_queue.enqueue(
+            question=request.question,
+            username=user.username,
+            groups=user.groups,
+            skip_cache=request.skip_cache,
+        )
     except QueueFullError:
         raise HTTPException(status_code=503, detail="Query queue is full; please retry shortly")
     return AsyncQuerySubmitResponse(token=token, status="queued")

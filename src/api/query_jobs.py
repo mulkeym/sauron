@@ -46,6 +46,7 @@ class QueryJob:
     question: str
     username: str
     groups: list[str]
+    skip_cache: bool = False
     status: QueryStatus = QueryStatus.QUEUED
     step: str = "queued"
     answer: str | None = None
@@ -93,14 +94,18 @@ class QueryJobQueue:
         for t in expired:
             del self._jobs[t]
 
-    def enqueue(self, question: str, username: str, groups: list[str]) -> str:
+    def enqueue(self, question: str, username: str, groups: list[str],
+                skip_cache: bool = False) -> str:
         self._evict_expired()
         # Cap total tracked jobs so an authenticated caller can't grow the queue
         # without bound (only terminal jobs are TTL-evicted; queued/processing are not).
         if len(self._jobs) >= self._max_jobs:
             raise QueueFullError(f"async query queue is full ({self._max_jobs} jobs)")
         token = str(uuid.uuid4())
-        self._jobs[token] = QueryJob(token=token, question=question, username=username, groups=groups)
+        self._jobs[token] = QueryJob(
+            token=token, question=question, username=username, groups=groups,
+            skip_cache=skip_cache,
+        )
         if self._queue is not None:
             self._queue.put_nowait(token)
         return token
@@ -181,6 +186,7 @@ class QueryJobQueue:
                         vector_store=vector_store, schema_registry=schema_registry,
                         metadata_store=metadata_store,
                         step_callback=lambda node, detail=None, _t=token: self.update_step(_t, node, detail),
+                        skip_cache=job.skip_cache,
                     ),
                     timeout=self._job_timeout,
                 )

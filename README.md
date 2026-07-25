@@ -278,6 +278,9 @@ curl -s -X POST http://localhost:8080/api/v1/query/async \
   -H "X-API-Key: <your-app-key>" \
   -H "Authorization: Bearer <jwt>" \
   -d '{"question":"What is the expense policy?"}'
+
+# Optional: skip the query cache (force a full retrieval)
+# -d '{"question":"...","skip_cache":true}'
 ```
 
 **CORS:** SAURON allows browser origins on `localhost` / `127.0.0.1` for local demos. Production front-ends should call SAURON only from a **backend** (BFF), not the browser—use a dedicated application API key per client.

@@ -27,6 +27,8 @@ class DocumentInfo(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
+    # When true, skip query-cache lookup (still may store a fresh result after the run).
+    skip_cache: bool = False
 
 class CitationResponse(BaseModel):
     doc_id: str

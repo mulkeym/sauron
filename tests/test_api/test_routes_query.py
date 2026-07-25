@@ -39,3 +39,19 @@ def test_query_empty_question(client, auth_headers):
             with patch("src.api.routes_query.get_schema_registry", return_value=MagicMock()):
                 resp = client.post("/api/v1/query", json={"question": ""}, headers=auth_headers)
     assert resp.status_code == 200
+
+
+def test_query_passes_skip_cache(client, auth_headers):
+    mock_response = RAGResponse(answer="fresh", citations=[])
+    with patch("src.api.routes_query.agent_query", new_callable=AsyncMock, return_value=mock_response) as mock_aq:
+        with patch("src.api.routes_query.get_vector_store", return_value=MagicMock()):
+            with patch("src.api.routes_query.get_schema_registry", return_value=MagicMock()):
+                with patch("src.api.routes_query.get_metadata_store", return_value=MagicMock()):
+                    resp = client.post(
+                        "/api/v1/query",
+                        json={"question": "expense policy?", "skip_cache": True},
+                        headers=auth_headers,
+                    )
+    assert resp.status_code == 200
+    mock_aq.assert_awaited_once()
+    assert mock_aq.await_args.kwargs.get("skip_cache") is True

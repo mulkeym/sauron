@@ -63,7 +63,7 @@ def rag_query(question, user_groups, vector_store, top_k=10):
 
 async def agent_query_streamed(
     question: str, user_groups: list[str], vector_store, schema_registry,
-    metadata_store=None, step_callback=None,
+    metadata_store=None, step_callback=None, skip_cache: bool = False,
 ) -> RAGResponse:
     # Surface the cache lookup as the first observable step. It runs before the
     # graph, so it is not a graph node — emit it explicitly (the spec's data flow
@@ -72,7 +72,7 @@ async def agent_query_streamed(
         step_callback("cache_check")
     # Shared cache decision (embed -> lookup -> LLM applicability judge) — same
     # path the admin playground uses, so the two cannot diverge.
-    decision = await judged_cache_lookup(question, user_groups)
+    decision = await judged_cache_lookup(question, user_groups, skip_cache=skip_cache)
     if decision.accepted:
         cached = decision.cached
         citations = [
@@ -116,9 +116,12 @@ async def agent_query_streamed(
     return result
 
 
-async def agent_query(question: str, user_groups: list[str], vector_store, schema_registry, metadata_store=None) -> RAGResponse:
+async def agent_query(
+    question: str, user_groups: list[str], vector_store, schema_registry,
+    metadata_store=None, skip_cache: bool = False,
+) -> RAGResponse:
     return await agent_query_streamed(
         question=question, user_groups=user_groups, vector_store=vector_store,
         schema_registry=schema_registry, metadata_store=metadata_store,
-        step_callback=None,
+        step_callback=None, skip_cache=skip_cache,
     )
