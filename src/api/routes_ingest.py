@@ -1,8 +1,8 @@
 import json
 import tempfile
 from pathlib import Path
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from src.api.models import DatasetInfo, DocumentInfo, IngestResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from src.api.models import DeleteDocumentResponse, DatasetInfo, DocumentInfo, IngestResponse
 from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.db.metadata import MetadataStore
@@ -174,6 +174,45 @@ async def list_documents(user: UserContext = Depends(require_auth)):
         )
         for d in docs
     ]
+
+
+@router.delete("/documents/{doc_id}", response_model=DeleteDocumentResponse)
+async def delete_document(doc_id: str, user: UserContext = Depends(require_auth)):
+    """Delete an accessible document and all of its indexed artifacts."""
+    store = get_metadata_store()
+    doc = await store.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    user_groups = set(user.groups or [])
+    document_groups = set(doc.acl_groups or [])
+    has_access = (
+        "ALL" in user_groups
+        or "ALL" in document_groups
+        or bool(user_groups & document_groups)
+    )
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this document")
+
+    filename = doc.filename
+    await store.delete_document(doc_id)
+    await store.delete_entities_for_doc(doc_id)
+    get_vector_store().delete_by_doc_id(doc_id)
+
+    from src.ingestion.tabular_ingest import cleanup_spreadsheet_tables
+    await cleanup_spreadsheet_tables(doc_id, store, get_schema_registry())
+
+    # Keep LightRAG consistent before reporting a successful API deletion.
+    remaining = await store.list_documents(None)
+    if remaining:
+        from src.knowledge.graph_rag import reconcile_lightrag_with_metadata
+        live_ids = {d.doc_id for d in remaining if getattr(d, "doc_id", None)}
+        await reconcile_lightrag_with_metadata(live_ids)
+    else:
+        from src.knowledge.graph_rag import hard_purge_lightrag
+        await hard_purge_lightrag(reason="all metadata documents deleted")
+
+    return DeleteDocumentResponse(doc_id=doc_id, filename=filename)
 
 
 @router.get("/datasets", response_model=list[DatasetInfo])

@@ -27,6 +27,12 @@ class DocumentInfo(BaseModel):
     dataset_id: int = 0
 
 
+class DeleteDocumentResponse(BaseModel):
+    doc_id: str
+    filename: str
+    status: str = "deleted"
+
+
 class DatasetInfo(BaseModel):
     id: int
     name: str

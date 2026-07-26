@@ -49,3 +49,66 @@ def test_list_documents(client, auth_headers):
         resp = client.get("/api/v1/documents", headers=auth_headers)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+
+
+def test_delete_document_removes_all_artifacts(client, auth_headers):
+    doc = MagicMock(doc_id="d1", filename="a.pdf", acl_groups=["finance"])
+    remaining = MagicMock(doc_id="d2")
+    store = AsyncMock()
+    store.get_document.return_value = doc
+    store.list_documents.return_value = [remaining]
+    vector_store = MagicMock()
+    schema_registry = MagicMock()
+
+    with patch("src.api.routes_ingest.get_metadata_store", return_value=store), \
+         patch("src.api.routes_ingest.get_vector_store", return_value=vector_store), \
+         patch("src.api.routes_ingest.get_schema_registry", return_value=schema_registry), \
+         patch("src.ingestion.tabular_ingest.cleanup_spreadsheet_tables", new_callable=AsyncMock) as cleanup, \
+         patch("src.knowledge.graph_rag.reconcile_lightrag_with_metadata", new_callable=AsyncMock) as reconcile:
+        resp = client.delete("/api/v1/documents/d1", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"doc_id": "d1", "filename": "a.pdf", "status": "deleted"}
+    store.delete_document.assert_awaited_once_with("d1")
+    store.delete_entities_for_doc.assert_awaited_once_with("d1")
+    vector_store.delete_by_doc_id.assert_called_once_with("d1")
+    cleanup.assert_awaited_once_with("d1", store, schema_registry)
+    reconcile.assert_awaited_once_with({"d2"})
+
+
+def test_delete_document_rejects_inaccessible_document(client, auth_headers):
+    store = AsyncMock()
+    store.get_document.return_value = MagicMock(
+        doc_id="d1", filename="secret.pdf", acl_groups=["executives"]
+    )
+    with patch("src.api.routes_ingest.get_metadata_store", return_value=store):
+        resp = client.delete("/api/v1/documents/d1", headers=auth_headers)
+
+    assert resp.status_code == 403
+    store.delete_document.assert_not_awaited()
+
+
+def test_delete_document_returns_404(client, auth_headers):
+    store = AsyncMock()
+    store.get_document.return_value = None
+    with patch("src.api.routes_ingest.get_metadata_store", return_value=store):
+        resp = client.delete("/api/v1/documents/missing", headers=auth_headers)
+
+    assert resp.status_code == 404
+    store.delete_document.assert_not_awaited()
+
+
+def test_delete_last_document_purges_knowledge_graph(client, auth_headers):
+    doc = MagicMock(doc_id="d1", filename="last.pdf", acl_groups=["ALL"])
+    store = AsyncMock()
+    store.get_document.return_value = doc
+    store.list_documents.return_value = []
+
+    with patch("src.api.routes_ingest.get_metadata_store", return_value=store), \
+         patch("src.api.routes_ingest.get_vector_store", return_value=MagicMock()), \
+         patch("src.ingestion.tabular_ingest.cleanup_spreadsheet_tables", new_callable=AsyncMock), \
+         patch("src.knowledge.graph_rag.hard_purge_lightrag", new_callable=AsyncMock) as purge:
+        resp = client.delete("/api/v1/documents/d1", headers=auth_headers)
+
+    assert resp.status_code == 200
+    purge.assert_awaited_once_with(reason="all metadata documents deleted")
