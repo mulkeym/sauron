@@ -2,7 +2,7 @@ import json
 import tempfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, UploadFile
-from src.api.models import DocumentInfo, IngestResponse
+from src.api.models import DatasetInfo, DocumentInfo, IngestResponse
 from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.db.metadata import MetadataStore
@@ -44,16 +44,53 @@ def get_hint_store():
         _hint_store = HintStore()
     return _hint_store
 
+async def _resolve_ingest_groups(
+    acl_groups: str,
+    dataset_id: int,
+    user: UserContext,
+) -> list[str]:
+    """Prefer explicit acl_groups; else dataset defaults; else caller's JWT groups."""
+    try:
+        groups = json.loads(acl_groups) if acl_groups else []
+    except json.JSONDecodeError:
+        groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
+    if not isinstance(groups, list):
+        groups = []
+    groups = [str(g) for g in groups if g]
+    if groups:
+        return groups
+    if dataset_id:
+        ds = await get_metadata_store().get_dataset(dataset_id)
+        if ds and getattr(ds, "default_acl_groups", None):
+            return list(ds.default_acl_groups or [])
+    return list(user.groups or [])
+
+
 @router.post("/ingest", response_model=IngestResponse)
-async def ingest_file(file: UploadFile = File(...), acl_groups: str = Form(default="[]"), category: str = Form(default=""), user: UserContext = Depends(require_auth)):
-    groups = json.loads(acl_groups)
-    suffix = Path(file.filename).suffix
+async def ingest_file(
+    file: UploadFile = File(...),
+    acl_groups: str = Form(default="[]"),
+    category: str = Form(default=""),
+    dataset_id: int = Form(default=0),
+    user: UserContext = Depends(require_auth),
+):
+    groups = await _resolve_ingest_groups(acl_groups, dataset_id, user)
+    suffix = Path(file.filename or "upload.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = Path(tmp.name)
     try:
-        result = await ingest_document(file_path=tmp_path, acl_groups=groups, uploaded_by=user.username, vector_store=get_vector_store(), metadata_store=get_metadata_store(), category=category, original_filename=file.filename)
+        result = await ingest_document(
+            file_path=tmp_path,
+            acl_groups=groups,
+            uploaded_by=user.username,
+            vector_store=get_vector_store(),
+            metadata_store=get_metadata_store(),
+            category=category,
+            original_filename=file.filename,
+            dataset_id=dataset_id or None,
+        )
     finally:
         tmp_path.unlink(missing_ok=True)
     return IngestResponse(doc_id=result.doc_id, filename=result.filename, doc_type=result.doc_type, chunk_count=result.chunk_count)
@@ -63,13 +100,14 @@ async def ingest_file_async(
     file: UploadFile = File(...),
     acl_groups: str = Form(default="[]"),
     category: str = Form(default=""),
+    dataset_id: int = Form(default=0),
     auto_categorize: str = Form(default="true"),
     user: UserContext = Depends(require_auth),
 ):
     """Queue a document for async ingestion. Returns immediately with a job_id."""
     from src.ingestion.queue import ingest_queue
-    groups = json.loads(acl_groups)
-    suffix = Path(file.filename).suffix
+    groups = await _resolve_ingest_groups(acl_groups, dataset_id, user)
+    suffix = Path(file.filename or "upload.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
         tmp.write(content)
@@ -78,9 +116,10 @@ async def ingest_file_async(
     job_id = ingest_queue.enqueue(
         filename=file.filename, file_path=tmp_path,
         acl_groups=groups, uploaded_by=user.username,
-        category=category, auto_categorize=auto_categorize == "true",
+        category=category, dataset_id=dataset_id or 0,
+        auto_categorize=auto_categorize == "true",
     )
-    return {"job_id": job_id, "status": "queued", "filename": file.filename}
+    return {"job_id": job_id, "status": "queued", "filename": file.filename, "dataset_id": dataset_id or 0}
 
 
 @router.get("/ingest/status/{job_id}", response_model=dict)
@@ -123,4 +162,34 @@ async def ingest_queue_list():
 async def list_documents(user: UserContext = Depends(require_auth)):
     store = get_metadata_store()
     docs = await store.list_documents(user_groups=user.groups)
-    return [DocumentInfo(doc_id=d.doc_id, filename=d.filename, doc_type=d.doc_type, category=d.category, acl_groups=d.acl_groups, chunk_count=d.chunk_count) for d in docs]
+    return [
+        DocumentInfo(
+            doc_id=d.doc_id,
+            filename=d.filename,
+            doc_type=d.doc_type,
+            category=d.category,
+            acl_groups=d.acl_groups,
+            chunk_count=d.chunk_count,
+            dataset_id=getattr(d, "dataset_id", 0) or 0,
+        )
+        for d in docs
+    ]
+
+
+@router.get("/datasets", response_model=list[DatasetInfo])
+async def list_datasets(user: UserContext = Depends(require_auth)):
+    """List active dataset workspaces (for upload targeting and UI filters)."""
+    del user  # auth required; datasets themselves are not ACL-filtered today
+    store = get_metadata_store()
+    datasets = await store.list_datasets(active_only=True)
+    return [
+        DatasetInfo(
+            id=d.id,
+            name=d.name,
+            slug=d.slug,
+            description=d.description or "",
+            default_acl_groups=list(d.default_acl_groups or []),
+            active=bool(d.active),
+        )
+        for d in datasets
+    ]

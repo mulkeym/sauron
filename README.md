@@ -281,6 +281,14 @@ curl -s -X POST http://localhost:8080/api/v1/query/async \
 
 # Optional: skip the query cache (force a full retrieval)
 # -d '{"question":"...","skip_cache":true}'
+
+# List datasets / upload into a dataset
+curl -s http://localhost:8080/api/v1/datasets \
+  -H "X-API-Key: <your-app-key>" -H "Authorization: Bearer <jwt>"
+
+curl -s -X POST http://localhost:8080/api/v1/ingest/async \
+  -H "X-API-Key: <your-app-key>" -H "Authorization: Bearer <jwt>" \
+  -F "file=@./doc.pdf" -F "dataset_id=1"
 ```
 
 **CORS:** SAURON allows browser origins on `localhost` / `127.0.0.1` for local demos. Production front-ends should call SAURON only from a **backend** (BFF), not the browser—use a dedicated application API key per client.

@@ -24,6 +24,16 @@ class DocumentInfo(BaseModel):
     category: str
     acl_groups: list[str]
     chunk_count: int
+    dataset_id: int = 0
+
+
+class DatasetInfo(BaseModel):
+    id: int
+    name: str
+    slug: str
+    description: str = ""
+    default_acl_groups: list[str] = []
+    active: bool = True
 
 class QueryRequest(BaseModel):
     question: str
