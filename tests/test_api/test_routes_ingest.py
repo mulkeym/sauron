@@ -42,6 +42,8 @@ def test_list_documents(client, auth_headers):
     mock_doc.category = ""
     mock_doc.acl_groups = ["finance"]
     mock_doc.chunk_count = 5
+    mock_doc.dataset_id = 0
+    mock_doc.summary = "A short guide to onboarding edge devices."
     with patch("src.api.routes_ingest.get_metadata_store") as mock_get_store:
         mock_store = AsyncMock()
         mock_store.list_documents.return_value = [mock_doc]
@@ -49,6 +51,7 @@ def test_list_documents(client, auth_headers):
         resp = client.get("/api/v1/documents", headers=auth_headers)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+    assert resp.json()[0]["summary"] == "A short guide to onboarding edge devices."
 
 
 def test_delete_document_removes_all_artifacts(client, auth_headers):

@@ -25,6 +25,8 @@ class DocumentInfo(BaseModel):
     acl_groups: list[str]
     chunk_count: int
     dataset_id: int = 0
+    # LLM-generated document summary from ingest (empty if not yet extracted)
+    summary: str = ""
 
 
 class DeleteDocumentResponse(BaseModel):

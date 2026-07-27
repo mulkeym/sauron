@@ -171,6 +171,7 @@ async def list_documents(user: UserContext = Depends(require_auth)):
             acl_groups=d.acl_groups,
             chunk_count=d.chunk_count,
             dataset_id=getattr(d, "dataset_id", 0) or 0,
+            summary=getattr(d, "summary", "") or "",
         )
         for d in docs
     ]
