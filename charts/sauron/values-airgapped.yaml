@@ -1,0 +1,107 @@
+## Example values for air-gapped / on-prem Harbor + Run:ai clusters.
+## Copy and adjust for your environment:
+##
+##   helm upgrade --install sauron ./charts/sauron \
+##     -n sauron --create-namespace \
+##     -f charts/sauron/values-airgapped.yaml \
+##     -f charts/sauron/values-local-secrets.yaml   # gitignored secrets file
+##
+## Or pass secrets via --set / external Secret.
+
+image:
+  # Mirror from GHCR first (GitHub Actions publishes there):
+  #   docker pull ghcr.io/mulkeym/sauron:latest
+  #   docker tag  ghcr.io/mulkeym/sauron:latest harbor.example.local/library/sauron:1.0.0
+  #   docker push harbor.example.local/library/sauron:1.0.0
+  #
+  # Your on-prem Harbor host (no https:// scheme)
+  registry: harbor.example.local
+  # Harbor project / repository path
+  repository: library/sauron
+  # Prefer immutable tags or digests in production
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  # digest: "sha256:REPLACE_ME"
+
+## Create a pull secret from Harbor robot account credentials
+imagePullSecretsCreate:
+  enabled: true
+  name: harbor-pull-secret
+  registry: harbor.example.local
+  username: "robot$sauron-pull"
+  # password: set via --set imagePullSecretsCreate.password=... or a private values file
+  password: ""
+  email: sauron@example.local
+
+## Prefer pre-created secret in production:
+# imagePullSecrets:
+#   - name: harbor-pull-secret
+# imagePullSecretsCreate:
+#   enabled: false
+
+persistence:
+  enabled: true
+  # Set to your on-prem StorageClass (or leave "" for cluster default)
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 100Gi
+
+config:
+  # Internal OpenAI-compatible LLM (vLLM, TGI, etc. on the cluster or LAN)
+  vllmBaseUrl: "http://vllm.inference.svc.cluster.local:8000/v1"
+  vllmModelName: "your-model-name"
+  vllmRequestTimeout: "600"
+
+  # local = in-process embeddings (no outbound HF calls; models baked in image)
+  embeddingMode: "local"
+  embeddingModelName: "nomic-ai/nomic-embed-text-v1"
+
+  # Or use an internal embedding API:
+  # embeddingMode: "api"
+  # embeddingApiUrl: "http://embeddings.inference.svc.cluster.local:8000/v1"
+  # embeddingModelName: "nomic-embed-text"
+
+  sslVerify: "true"
+  hfHubOffline: "1"
+  transformersOffline: "1"
+
+  extraEnv:
+    # Example tuning for air-gapped clusters
+    LLM_CONCURRENCY: "4"
+
+## Do not commit real secrets. Use existingSecret or a private values file.
+secrets:
+  existingSecret: ""
+  jwtSecretKey: "REPLACE-WITH-LONG-RANDOM-STRING"
+  apiKeys: "REPLACE-WITH-APP-KEY"
+  adminUsername: "admin"
+  adminPassword: "REPLACE-WITH-STRONG-PASSWORD"
+  vllmApiKey: ""
+
+api:
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+
+# Optional: pin to a node pool / Run:ai project node group
+# nodeSelector:
+#   node-role.kubernetes.io/worker: "true"
+# tolerations: []
+
+ingress:
+  enabled: false
+  # className: nginx
+  # annotations:
+  #   nginx.ingress.kubernetes.io/proxy-body-size: "200m"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+  # hosts:
+  #   - host: sauron.apps.example.local
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  #         service: api

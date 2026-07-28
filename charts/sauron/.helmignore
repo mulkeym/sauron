@@ -1,0 +1,9 @@
+# Patterns to ignore when packaging.
+.DS_Store
+.git/
+.gitignore
+*.md
+*.tgz
+.charts/
+values-local*.yaml
+values-*-secrets.yaml

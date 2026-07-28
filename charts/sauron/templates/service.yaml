@@ -1,0 +1,68 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sauron.fullname" . }}-api
+  labels:
+    {{- include "sauron.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  {{- with .Values.service.api.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.api.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "sauron.selectorLabels" . | nindent 4 }}
+{{- end }}
+---
+{{- if .Values.mcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sauron.fullname" . }}-mcp
+  labels:
+    {{- include "sauron.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+  {{- with .Values.service.mcp.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.mcp.port }}
+      targetPort: mcp
+      protocol: TCP
+      name: mcp
+  selector:
+    {{- include "sauron.selectorLabels" . | nindent 4 }}
+{{- end }}
+---
+{{- if .Values.mcpo.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sauron.fullname" . }}-mcpo
+  labels:
+    {{- include "sauron.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcpo
+  {{- with .Values.service.mcpo.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.mcpo.port }}
+      targetPort: mcpo
+      protocol: TCP
+      name: mcpo
+  selector:
+    {{- include "sauron.selectorLabels" . | nindent 4 }}
+{{- end }}

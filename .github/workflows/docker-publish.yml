@@ -1,0 +1,109 @@
+# Build the SAURON Docker image and publish to GitHub Container Registry (GHCR).
+#
+# Images:
+#   ghcr.io/mulkeym/sauron:latest          (default branch)
+#   ghcr.io/mulkeym/sauron:<branch>        (other branches)
+#   ghcr.io/mulkeym/sauron:sha-<short>     (every push that publishes)
+#   ghcr.io/mulkeym/sauron:1.2.3           (git tag v1.2.3)
+#
+# First-time package visibility (public repo):
+#   https://github.com/users/mulkeym/packages/container/sauron/settings
+#   → Change package visibility to Public if anonymous pulls are required.
+#
+# Pull:
+#   docker pull ghcr.io/mulkeym/sauron:latest
+#   # private package:
+#   echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+
+name: Docker
+
+on:
+  push:
+    branches: ["master", "main"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["master", "main"]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (saves build minutes).
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR requires lowercase image names
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build and push
+    runs-on: ubuntu-latest
+    # Model bake + pip install can take a while
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      # Required for private repos when using GITHUB_TOKEN with some orgs
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Semver from git tags: v1.2.3 → 1.2.3, 1.2, 1
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # Default branch → latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Branch name (sanitized)
+            type=ref,event=branch
+            # Short git SHA on every publish
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          # PRs: build only (validate Dockerfile). Pushes/tags: publish.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache between runs
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Provenance helps supply-chain tooling; safe for GHCR
+          provenance: true
+          sbom: true
+
+      - name: Image summary
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"

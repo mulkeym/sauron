@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sauron.fullname" . }}-config
+  labels:
+    {{- include "sauron.labels" . | nindent 4 }}
+data:
+  VLLM_BASE_URL: {{ .Values.config.vllmBaseUrl | quote }}
+  VLLM_MODEL_NAME: {{ .Values.config.vllmModelName | quote }}
+  VLLM_REQUEST_TIMEOUT: {{ .Values.config.vllmRequestTimeout | quote }}
+  EMBEDDING_MODE: {{ .Values.config.embeddingMode | quote }}
+  EMBEDDING_API_URL: {{ .Values.config.embeddingApiUrl | quote }}
+  EMBEDDING_MODEL_NAME: {{ .Values.config.embeddingModelName | quote }}
+  LANCEDB_PATH: {{ .Values.config.lancedbPath | quote }}
+  LANCEDB_TABLE_NAME: {{ .Values.config.lancedbTableName | quote }}
+  DATABASE_URL: {{ .Values.config.databaseUrl | quote }}
+  SSL_VERIFY: {{ .Values.config.sslVerify | quote }}
+  HF_HUB_OFFLINE: {{ .Values.config.hfHubOffline | quote }}
+  TRANSFORMERS_OFFLINE: {{ .Values.config.transformersOffline | quote }}
+  MCP_PORT: {{ .Values.mcp.containerPort | quote }}
+  {{- range $key, $value := .Values.config.extraEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

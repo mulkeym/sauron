@@ -1,0 +1,241 @@
+## SAURON Helm chart values
+## For air-gapped / on-prem Harbor deployments, see values-airgapped.yaml
+
+nameOverride: ""
+fullnameOverride: ""
+
+## ---------------------------------------------------------------------------
+## Container image (override for Harbor in air-gapped environments)
+## ---------------------------------------------------------------------------
+image:
+  # GitHub Actions publishes to GHCR: ghcr.io/mulkeym/sauron
+  # For air-gapped Harbor, override registry/repository (see values-airgapped.yaml).
+  registry: ghcr.io
+  # Project/repo path in the registry (no tag)
+  repository: mulkeym/sauron
+  # Image tag. Prefer immutable digests or release tags (e.g. 1.0.0) in production.
+  # CI also pushes: latest (default branch), sha-<short>, and semver from git tags v*.
+  tag: "latest"
+  pullPolicy: IfNotPresent
+  # Optional digest (takes precedence over tag when set), e.g. sha256:abc...
+  digest: ""
+
+## Image pull secrets for private Harbor (create separately or via imagePullSecrets.create)
+imagePullSecrets: []
+  # - name: harbor-pull-secret
+
+imagePullSecretsCreate:
+  enabled: false
+  name: harbor-pull-secret
+  # Base64-encoded dockerconfigjson, or set username/password/registry below
+  # dockerconfigjson: ""
+  registry: ""
+  username: ""
+  password: ""
+  email: ""
+
+## ---------------------------------------------------------------------------
+## Workload
+## ---------------------------------------------------------------------------
+# All components share one pod + PVC (matches docker-compose shared volume;
+# required for SQLite/LanceDB file stores without RWX storage).
+replicaCount: 1
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 0
+
+securityContext: {}
+  # runAsNonRoot: true
+  # runAsUser: 1000
+  # readOnlyRootFilesystem: false
+
+## API + Admin UI (uvicorn on 8080)
+api:
+  enabled: true
+  containerPort: 8080
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  # Local sentence-transformers embeddings need substantial RAM/CPU
+  livenessProbe:
+    httpGet:
+      path: /api/health
+      port: http
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /api/health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+## MCP server (SSE transport)
+mcp:
+  enabled: true
+  containerPort: 8090
+  resources:
+    requests:
+      cpu: "250m"
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  livenessProbe:
+    httpGet:
+      path: /
+      port: mcp
+    initialDelaySeconds: 40
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+## MCP-to-OpenAPI proxy (mcpo) for OpenWebUI / REST clients
+mcpo:
+  enabled: true
+  containerPort: 8091
+  resources:
+    requests:
+      cpu: "100m"
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  livenessProbe:
+    httpGet:
+      path: /openapi.json
+      port: mcpo
+    initialDelaySeconds: 40
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+## Node scheduling (Run:ai / GPU nodes usually not required for SAURON itself;
+## LLM inference is external via vLLM/OpenAI-compatible endpoint)
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+## Optional GPU request if you run local embeddings on GPU (not default)
+# resources may be set per-component above. Example GPU annotation for Run:ai:
+# api.resources.limits."nvidia.com/gpu": 1
+
+## ---------------------------------------------------------------------------
+## Services
+## ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  api:
+    port: 8080
+    annotations: {}
+  mcp:
+    port: 8090
+    annotations: {}
+  mcpo:
+    port: 8091
+    annotations: {}
+
+## ---------------------------------------------------------------------------
+## Ingress (optional)
+## ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+  hosts:
+    - host: sauron.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: api
+        # Optional: expose MCP on a path prefix or separate host
+        # - path: /mcp
+        #   pathType: Prefix
+        #   service: mcp
+  tls: []
+    # - secretName: sauron-tls
+    #   hosts:
+    #     - sauron.example.com
+
+## ---------------------------------------------------------------------------
+## Persistence (LanceDB, SQLite metadata, DuckDB, audit logs)
+## ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  # Use existingClaim to bind a pre-provisioned PVC
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 50Gi
+  annotations: {}
+
+## ---------------------------------------------------------------------------
+## Application configuration (non-secret)
+## ---------------------------------------------------------------------------
+config:
+  # LLM — OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, OpenAI, etc.)
+  vllmBaseUrl: "http://vllm.example.svc.cluster.local:8000/v1"
+  vllmModelName: "google/gemma-4-31b-it"
+  vllmRequestTimeout: "300"
+
+  # Embeddings: "local" (in-process sentence-transformers) or "api"
+  embeddingMode: "local"
+  embeddingApiUrl: "http://embeddings.example.svc.cluster.local:8000/v1"
+  embeddingModelName: "nomic-ai/nomic-embed-text-v1"
+
+  lancedbPath: "/app/data/lancedb"
+  lancedbTableName: "chunks"
+  databaseUrl: "sqlite+aiosqlite:///./data/metadata.db"
+
+  # Set false for self-signed internal certs
+  sslVerify: "true"
+
+  # Offline HF (already baked into the image; keep true in air-gap)
+  hfHubOffline: "1"
+  transformersOffline: "1"
+
+  # Extra env vars (key: value). Secrets should go in secrets.extra / existingSecret.
+  extraEnv: {}
+    # LDAP_ENABLED: "false"
+    # LLM_CONCURRENCY: "4"
+
+## ---------------------------------------------------------------------------
+## Secrets
+## ---------------------------------------------------------------------------
+# Prefer existingSecret in production (created by sealed-secrets / external-secrets / vault).
+secrets:
+  # If set, use this Secret name and do not create one from chart values.
+  existingSecret: ""
+  # Keys expected in existingSecret (override if your secret uses different names):
+  #   JWT_SECRET_KEY, API_KEYS, ADMIN_USERNAME, ADMIN_PASSWORD, VLLM_API_KEY
+  jwtSecretKey: "change-me-in-production"
+  apiKeys: "dev-key-1"
+  adminUsername: "admin"
+  adminPassword: "password123"
+  vllmApiKey: ""
+  # Additional key/value pairs stored in the chart-managed Secret
+  extra: {}
+
+## ---------------------------------------------------------------------------
+## Service account
+## ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automount: true

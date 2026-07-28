@@ -28,5 +28,8 @@ rm -f ~$*.docx data/test_metadata.db
 
 ## After push
 
-- [ ] Tag release if desired (`v0.x.y`)  
-- [ ] Confirm GitHub Actions / secrets are not required for public clone + local run  
+- [ ] Confirm **Docker** GitHub Action succeeded (builds & pushes to GHCR)  
+- [ ] Image available: `ghcr.io/mulkeym/sauron:latest` (and `sha-…` tag)  
+- [ ] Tag release if desired (`v0.x.y`) → also publishes `ghcr.io/mulkeym/sauron:0.x.y`  
+- [ ] If the package is private, set visibility or document pull credentials for deploy  
+- [ ] Confirm secrets are not required for public clone + local `docker compose` run  

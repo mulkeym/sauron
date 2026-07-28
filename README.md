@@ -20,7 +20,7 @@ SAURON is a self-hosted agentic RAG (Retrieval-Augmented Generation) system with
 - **Streaming Answers** -- SSE-based token streaming in the playground
 - **OpenAI-Compatible API** -- Drop-in `/v1/chat/completions` endpoint with citations
 - **Application API Keys** -- DB-backed multi-app service credentials (hashed, revocable) for backends that call SAURON
-- **Docker Ready** -- Multi-stage build with health checks and shared data volumes
+- **Docker Ready** -- Multi-stage build with health checks; CI publishes to `ghcr.io/mulkeym/sauron`
 
 ## Architecture
 
@@ -368,12 +368,23 @@ mcpo --port 8091 -- python -m src.mcp.run_stdio
 
 ### Docker
 
+**Build locally** (compose builds from the Dockerfile):
+
 ```bash
 cp .env.example .env
 # Edit .env with your LLM and embedding server URLs
 
 docker compose up -d
 ```
+
+**Or pull the CI image** (published by GitHub Actions on every push to `master` and on `v*` tags):
+
+```bash
+docker pull ghcr.io/mulkeym/sauron:latest
+# Tags also include sha-<short> and release versions (e.g. 1.0.0 from tag v1.0.0)
+```
+
+Kubernetes / Run:ai: use the Helm chart under [`charts/sauron`](charts/sauron) (defaults to the GHCR image).
 
 Services:
 - **API + Admin UI**: http://localhost:8080

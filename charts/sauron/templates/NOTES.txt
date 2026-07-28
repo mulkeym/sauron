@@ -1,0 +1,40 @@
+SAURON has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+{{- if .Values.api.enabled }}
+  - API + Admin UI  → service {{ include "sauron.fullname" . }}-api:{{ .Values.service.api.port }}
+{{- end }}
+{{- if .Values.mcp.enabled }}
+  - MCP (SSE)       → service {{ include "sauron.fullname" . }}-mcp:{{ .Values.service.mcp.port }}
+{{- end }}
+{{- if .Values.mcpo.enabled }}
+  - MCP OpenAPI     → service {{ include "sauron.fullname" . }}-mcpo:{{ .Values.service.mcpo.port }}
+{{- end }}
+
+Image: {{ include "sauron.image" . }}
+
+{{- if .Values.ingress.enabled }}
+
+Ingress hosts:
+{{- range .Values.ingress.hosts }}
+  - http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+To port-forward the Admin UI / API locally:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "sauron.fullname" . }}-api {{ .Values.service.api.port }}:{{ .Values.service.api.port }}
+
+Then open: http://localhost:{{ .Values.service.api.port }}/admin
+{{- end }}
+
+Health check:
+
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "sauron.fullname" . }} -c api -- curl -sf http://localhost:{{ .Values.api.containerPort }}/api/health
+
+IMPORTANT (air-gapped / Harbor):
+  1. Build & push the image to Harbor before install.
+  2. Set image.registry / image.repository / image.tag (or digest).
+  3. Configure imagePullSecrets (or imagePullSecretsCreate) for Harbor auth.
+  4. Point config.vllmBaseUrl at your internal OpenAI-compatible LLM endpoint.
+  5. Rotate secrets.jwtSecretKey, secrets.apiKeys, and secrets.adminPassword.
