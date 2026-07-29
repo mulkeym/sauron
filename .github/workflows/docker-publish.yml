@@ -1,5 +1,7 @@
 # Build the SAURON Docker image and publish to GitHub Container Registry (GHCR).
 #
+# Multi-arch: linux/amd64 + linux/arm64 (Apple Silicon Macs, Graviton, etc.)
+#
 # Images:
 #   ghcr.io/mulkeym/sauron:latest          (default branch)
 #   ghcr.io/mulkeym/sauron:<branch>        (other branches)
@@ -39,8 +41,8 @@ jobs:
   build-and-push:
     name: Build and push
     runs-on: ubuntu-latest
-    # Model bake + pip install can take a while
-    timeout-minutes: 120
+    # Multi-arch (QEMU arm64) + model bake is slow on first run
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: write
@@ -51,6 +53,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Emulate arm64 on the amd64 runner for multi-platform builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -86,6 +92,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          # Apple Silicon (arm64) + servers (amd64). PRs: amd64 only (faster CI).
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           # PRs: build only (validate Dockerfile). Pushes/tags: publish.
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -93,14 +101,16 @@ jobs:
           # Layer cache between runs
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Provenance helps supply-chain tooling; safe for GHCR
-          provenance: true
+          # Multi-platform needs mode=max for a usable manifest list + attestations
+          provenance: mode=max
           sbom: true
 
       - name: Image summary
         if: github.event_name != 'pull_request'
         run: |
           echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Platforms: \`linux/amd64\`, \`linux/arm64\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
