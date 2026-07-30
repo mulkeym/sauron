@@ -78,6 +78,9 @@ Chart defaults already point at GHCR (`image.registry=ghcr.io`, `image.repositor
    ```
 
    The Dockerfile already prefetches PDF/OCR models and sets `HF_HUB_OFFLINE=1` for offline runtime.
+   It also installs **CPU-only** PyTorch (no `nvidia-*` CUDA wheels). If the build host
+   cannot reach `download.pytorch.org`, mirror the CPU wheel index and pass
+   `--build-arg TORCH_CPU_INDEX=https://your-mirror/.../whl/cpu`.
 
 2. **Mirror base layers** into Harbor if builders cannot reach Docker Hub (`python:3.11-slim`, etc.).
 

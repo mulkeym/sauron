@@ -32,7 +32,13 @@ sentence-transformers>=3.3.0
 einops>=0.8.0
 lancedb>=0.30.0
 onnx>=1.22.0
-# torch: upgrade to >=2.13.0 when your platform wheel is available (CVE remediation)
+# torch is a transitive dep of sentence-transformers (local embeddings + CrossEncoder).
+# Do NOT install default PyPI torch on Linux — it pulls multi-GB nvidia-* CUDA wheels.
+# The Dockerfile installs CPU-only torch/torchvision from
+# https://download.pytorch.org/whl/cpu (override with TORCH_CPU_INDEX build-arg).
+# For local dev on Linux, prefer the same:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt -c constraints-security.txt
 
 # Knowledge Graph
 lightrag-hku>=1.5.4

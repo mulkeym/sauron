@@ -30,7 +30,8 @@ pydantic-settings>=2.14.2
 
 # Embeddings stack (transitive)
 onnx>=1.22.0
-# torch: pin when available; see requirements.txt note
+# torch: install CPU wheels only (see Dockerfile TORCH_CPU_INDEX / requirements.txt).
+# Do not pin a CUDA torch build here — that reintroduces nvidia-* packages.
 
 # Parsing helpers
 soupsieve>=2.8.4

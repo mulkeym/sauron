@@ -416,6 +416,21 @@ pip-audit -r requirements.lock.txt   # expect: no known vulnerabilities
 
 See `constraints-security.txt` for High/Critical CVE minimum versions.
 
+### CPU-only PyTorch (Docker / air-gapped)
+
+SAURON uses **torch** only for local CPU embeddings and CrossEncoder reranking. It does **not** need NVIDIA GPUs or CUDA in the app container.
+
+The Dockerfile therefore installs **CPU-only** `torch` / `torchvision` from the official CPU wheel index before the rest of `requirements.txt`. That avoids multi-GB `nvidia-*` CUDA packages that default PyPI Linux torch wheels pull in.
+
+```bash
+# Local Linux installs (same idea as the Dockerfile):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt -c constraints-security.txt
+
+# Air-gapped Docker build: mirror the CPU index, then:
+docker build --build-arg TORCH_CPU_INDEX=https://your-mirror/.../whl/cpu -t sauron .
+```
+
 ## Configuration
 
 See `.env.example` for all available settings. Key configuration:
