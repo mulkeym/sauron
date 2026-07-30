@@ -23,6 +23,25 @@ def test_apply_settings_update_bool_roundtrip():
     assert settings.feedback_enabled is True
 
 
+def test_apply_settings_update_ssl_verify_ignore_checkbox():
+    # Models section: hidden ssl_verify=true + optional checkbox value=false (last wins).
+    settings.ssl_verify = True
+    _apply_settings_update({"ssl_verify": "false"})
+    assert settings.ssl_verify is False
+    _apply_settings_update({"ssl_verify": "true"})
+    assert settings.ssl_verify is True
+    # Simulates both form fields when ignore-errors is checked (true then false).
+    class _Form:
+        def __init__(self, data):
+            self._data = data
+        def __contains__(self, name):
+            return name in self._data
+        def getlist(self, name):
+            return self._data[name]
+    _apply_settings_update(_Form({"ssl_verify": ["true", "false"]}))
+    assert settings.ssl_verify is False
+
+
 def test_apply_settings_update_keeps_blank_credential():
     settings.admin_password = "secret"
     _apply_settings_update({"admin_password": ""})           # blank submit must not clear it

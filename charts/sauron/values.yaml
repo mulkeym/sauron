@@ -202,7 +202,9 @@ config:
   lancedbTableName: "chunks"
   databaseUrl: "sqlite+aiosqlite:///./data/metadata.db"
 
-  # Set false for self-signed internal certs
+  # TLS verification for outbound model API calls (LLM + embeddings).
+  # Set "false" for private CAs / self-signed endpoints. Can also be toggled
+  # at runtime in Admin → Settings → Models (persists on the PVC settings.json).
   sslVerify: "true"
 
   # Offline HF (already baked into the image; keep true in air-gap)

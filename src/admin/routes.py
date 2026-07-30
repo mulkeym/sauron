@@ -2461,6 +2461,7 @@ async def settings_section_page(request: Request, section: str):
 _SETTINGS_FIELDS = {
     "admin_username": str, "admin_password": str, "api_keys": str,
     "vllm_base_url": str, "vllm_model_name": str, "vllm_api_key": str,
+    "ssl_verify": bool,
     "embedding_mode": str, "embedding_api_url": str, "embedding_model_name": str,
     "mcp_port": int, "mcp_alt_port": int,
     "entity_merge_auto_threshold": float, "entity_merge_review_threshold": float,
@@ -2511,6 +2512,10 @@ async def save_settings(request: Request):
     """Persist a partial settings update (only the submitted section's fields)."""
     persist = _apply_settings_update(await request.form())
     Path("data/settings.json").write_text(json.dumps(persist, indent=2) + "\n")
+    # Apply TLS-disable patches without restart when ssl_verify was turned off.
+    if not settings.ssl_verify:
+        from src.main import apply_ssl_verify_setting
+        apply_ssl_verify_setting()
     return HTMLResponse('<div class="status-ok">Settings saved successfully.</div>')
 
 

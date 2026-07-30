@@ -20,6 +20,17 @@
         <span style="font-size:0.8rem; color:#6b7280;">Required for OpenAI, Anthropic, etc. Leave empty for local endpoints.</span>
     </div>
     <div class="form-group">
+        {# Hidden posts ssl_verify=true; checked box posts false last so ignore-errors wins. #}
+        <input type="hidden" name="ssl_verify" value="true">
+        <label for="ssl_verify_ignore" style="display:flex; align-items:center; gap:0.5rem; font-weight:600; cursor:pointer;">
+            <input type="checkbox" id="ssl_verify_ignore" name="ssl_verify" value="false"
+                   {% if not settings.ssl_verify %}checked{% endif %}
+                   style="width:auto; max-width:none; margin:0;">
+            Ignore SSL certificate errors
+        </label>
+        <span style="font-size:0.8rem; color:#6b7280;">Allow model API calls to endpoints using private CAs or self-signed certificates. Use only on trusted networks.</span>
+    </div>
+    <div class="form-group">
         <label for="vllm_model_name">Model</label>
         <div id="llm-model-select">
             <select name="vllm_model_name" id="vllm_model_name">

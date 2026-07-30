@@ -340,7 +340,7 @@ Three transport modes:
 | Proposals | Approve/reject auto-categorization and entity merge proposals |
 | Playground | Query testing with step trace, streaming answers, dataset and persona filters |
 | Knowledge Graph | GPU-accelerated (cosmos.gl) or 3D entity visualization with dataset, persona, and type filtering; click-to-highlight connections |
-| Settings | LLM/embedding endpoints, Security (ACL, personas, application API keys), backup & restore |
+| Settings | LLM/embedding endpoints (incl. ignore SSL cert errors for private CAs), Security (ACL, personas, application API keys), backup & restore |
 | Audit Log | JSONL audit trail of all operations |
 
 ## Quick Start
@@ -433,6 +433,11 @@ EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
 # EMBEDDING_MODE=api
 # EMBEDDING_API_URL=http://your-embedding-host:8000/v1
 
+# TLS verification for outbound model API calls (LLM + embeddings).
+# Set false when endpoints use private CAs or self-signed certs.
+# Can also be toggled in Admin → Settings → Models (persists to data/settings.json).
+SSL_VERIFY=true
+
 # Vector store (embedded, no server needed)
 LANCEDB_PATH=data/lancedb
 
@@ -443,6 +448,18 @@ API_KEYS=your-api-key-here
 ```
 
 Prefer creating **per-application keys** in Admin → Security after first boot. Keep `JWT_SECRET_KEY` strong in production.
+
+### Private CAs / self-signed model endpoints
+
+If your LLM or embedding API uses an untrusted or private CA certificate:
+
+1. Open **Admin → Settings → Models**
+2. Check **Ignore SSL certificate errors**
+3. Click **Save**
+
+This sets `ssl_verify=false` for outbound model HTTP clients (LLM chat, embeddings, and admin connection tests). Prefer installing the private CA into the container/host trust store when possible; the ignore option is for trusted private networks only.
+
+Equivalent env/Helm: `SSL_VERIFY=false` or `config.sslVerify: "false"`.
 
 ## Thinking Model Support
 
