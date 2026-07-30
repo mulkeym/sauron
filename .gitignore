@@ -22,3 +22,7 @@ build/
 ~$*.xlsx
 # Keep requirements.lock.txt committed for reproducible secure installs
 !requirements.lock.txt
+
+# Optional org/private root CA bundle for Docker builds (see certs/README.md)
+certs/Trusted_Root_CAs.pem
+Trusted_Root_CAs.pem

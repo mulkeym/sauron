@@ -431,6 +431,29 @@ pip install -r requirements.txt -c constraints-security.txt
 docker build --build-arg TORCH_CPU_INDEX=https://your-mirror/.../whl/cpu -t sauron .
 ```
 
+### Custom root CAs (private PKI)
+
+If your environment uses private / internal root CAs, place a PEM bundle at:
+
+```text
+certs/Trusted_Root_CAs.pem
+```
+
+At **image build** time the Dockerfile:
+
+1. Copies `certs/` into the image (the directory always exists; the `.pem` is optional)
+2. If `Trusted_Root_CAs.pem` is present and non-empty, installs it via `update-ca-certificates`
+3. Sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE` to the system CA bundle so **OS tools, pip, and Python** (`ssl` / `requests` / `httpx`) trust those roots
+
+This runs in both the builder stage (so `pip install` can reach internal HTTPS mirrors) and the runtime stage (so LLM / embedding API calls trust your private CA). If the file is missing, the default public CA set is used unchanged.
+
+```bash
+cp /path/to/org-roots.pem certs/Trusted_Root_CAs.pem
+docker build -t sauron .
+```
+
+Prefer this over **Admin → Models → Ignore SSL certificate errors** when you can distribute the real roots. The PEM is gitignored by default; force-add it only if you intentionally want it in git.
+
 ## Configuration
 
 See `.env.example` for all available settings. Key configuration:
