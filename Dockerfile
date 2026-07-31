@@ -53,6 +53,8 @@ ARG PIP_EXTRA_INDEX_URL=
 # Space-separated hostnames, e.g. "pypi.org files.pythonhosted.org my-pypi.local"
 ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org"
 # Persist pip config for all subsequent pip invocations (incl. venv).
+# Note: ConfigParser forbids repeated keys — use one trusted-host with a
+# multi-line indented list (pip's documented form), not multiple assignments.
 RUN set -eu; \
     { \
       echo "[global]"; \
@@ -60,7 +62,8 @@ RUN set -eu; \
       if [ -n "${PIP_INDEX_URL}" ]; then echo "index-url = ${PIP_INDEX_URL}"; fi; \
       if [ -n "${PIP_EXTRA_INDEX_URL}" ]; then echo "extra-index-url = ${PIP_EXTRA_INDEX_URL}"; fi; \
       if [ -n "${PIP_TRUSTED_HOST}" ]; then \
-        for h in ${PIP_TRUSTED_HOST}; do echo "trusted-host = ${h}"; done; \
+        echo "trusted-host ="; \
+        for h in ${PIP_TRUSTED_HOST}; do echo "    ${h}"; done; \
       fi; \
     } > /etc/pip.conf; \
     mkdir -p /etc/xdg/pip && cp /etc/pip.conf /etc/xdg/pip/pip.conf; \
