@@ -2,17 +2,38 @@
 time so the runtime image needs no network for scanned-PDF OCR. Run during
 docker build, BEFORE HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE are set.
 
-TLS notes (corporate MITM):
-  - Hugging Face hub downloads use **httpx**, not requests — system CA env
-    vars and certifi merges are not always enough.
-  - Set SAURON_PREFETCH_INSECURE_SSL=1 to disable TLS verify for this step only
-    (patches ssl, urllib3, requests, and httpx).
+Corporate / MITM notes:
+  - Hugging Face hub uses httpx; set SAURON_PREFETCH_INSECURE_SSL=1 if needed.
+  - HF XET (hf-xet / xet-bridge / xet-read-token) is disabled — it breaks behind
+    many proxies. We also uninstall hf-xet in the Dockerfile.
+  - CDN 503s on us.aws.cdn.hf.co are retried with backoff.
+  - SKIP_PDF_MODEL_PREFETCH=1 skips this step entirely (build succeeds; first
+    hi_res PDF parse at runtime will need network or a pre-seeded cache).
 """
 from __future__ import annotations
 
 import os
 import ssl
 import sys
+import time
+from pathlib import Path
+
+
+# Known weights pulled by unstructured hi_res + table structure (best-effort
+# pre-warm before partition_pdf). Missing files are non-fatal; partition_pdf
+# remains the source of truth for "models ready".
+_PREFETCH_FILES: list[tuple[str, str]] = [
+    ("unstructuredio/yolo_x_layout", "yolox_l0.05.onnx"),
+    ("unstructuredio/yolo_x_layout", "yolox_tiny.onnx"),
+    (
+        "microsoft/table-transformer-structure-recognition-v1.1-all",
+        "model.safetensors",
+    ),
+    (
+        "microsoft/table-transformer-structure-recognition-v1.1-all",
+        "config.json",
+    ),
+]
 
 
 def _truthy(val: str | None) -> bool:
@@ -27,7 +48,6 @@ def _disable_ssl_verify_everywhere() -> None:
         flush=True,
     )
 
-    # Stop client libs from preferring a "real" CA bundle that rejects the proxy.
     for key in (
         "SSL_CERT_FILE",
         "REQUESTS_CA_BUNDLE",
@@ -38,28 +58,19 @@ def _disable_ssl_verify_everywhere() -> None:
     ):
         os.environ.pop(key, None)
 
-    # stdlib
     ssl._create_default_https_context = ssl._create_unverified_context  # noqa: SLF001
     try:
         ssl.create_default_context = lambda *a, **k: ssl._create_unverified_context()  # type: ignore[assignment,misc]
     except Exception:
         pass
 
-    # urllib3
     try:
         import urllib3
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        try:
-            from urllib3.util import ssl_ as urllib3_ssl
-
-            urllib3_ssl.DEFAULT_CERT_REQUIREMENTS = None  # type: ignore[attr-defined]
-        except Exception:
-            pass
     except Exception as e:
         print(f"prefetch_pdf_models: urllib3 patch skipped: {e}", flush=True)
 
-    # requests (some paths still use it)
     try:
         import requests
 
@@ -74,7 +85,6 @@ def _disable_ssl_verify_everywhere() -> None:
     except Exception as e:
         print(f"prefetch_pdf_models: requests patch skipped: {e}", flush=True)
 
-    # httpx — used by modern huggingface_hub (yolox_l0.05.onnx download path)
     try:
         import httpx
 
@@ -92,7 +102,6 @@ def _disable_ssl_verify_everywhere() -> None:
         httpx.Client.__init__ = _client_init  # type: ignore[method-assign]
         httpx.AsyncClient.__init__ = _async_init  # type: ignore[method-assign]
 
-        # Also patch request helpers that construct ephemeral clients
         if hasattr(httpx, "request"):
             _orig_httpx_request = httpx.request
 
@@ -106,13 +115,12 @@ def _disable_ssl_verify_everywhere() -> None:
     except Exception as e:
         print(f"prefetch_pdf_models: httpx patch skipped: {e}", flush=True)
 
-    # huggingface_hub backend hook (when available)
     try:
         from huggingface_hub import configure_http_backend
         import httpx as _httpx
 
         def _backend_factory() -> _httpx.Client:
-            return _httpx.Client(verify=False, follow_redirects=True, timeout=60.0)
+            return _httpx.Client(verify=False, follow_redirects=True, timeout=120.0)
 
         configure_http_backend(backend_factory=_backend_factory)
         print("prefetch_pdf_models: huggingface_hub HTTP backend verify=False", flush=True)
@@ -120,16 +128,138 @@ def _disable_ssl_verify_everywhere() -> None:
         print(f"prefetch_pdf_models: huggingface_hub backend patch skipped: {e}", flush=True)
 
 
+def _force_disable_xet() -> None:
+    """Disable HF XET before huggingface_hub is imported (constants read at import)."""
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+    # Belt-and-suspenders: hide the package from import if still installed
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("hf_xet") is not None:
+            print(
+                "prefetch_pdf_models: warning: hf_xet still installed; "
+                "HF_HUB_DISABLE_XET=1 should skip it",
+                flush=True,
+            )
+    except Exception:
+        pass
+    print("prefetch_pdf_models: HF_HUB_DISABLE_XET=1 (classic HTTPS downloads)", flush=True)
+
+
+def _retry(label: str, fn, attempts: int = 8, base_delay: float = 2.0):
+    last: BaseException | None = None
+    for i in range(1, attempts + 1):
+        try:
+            print(f"prefetch_pdf_models: {label} (attempt {i}/{attempts})", flush=True)
+            return fn()
+        except BaseException as e:  # noqa: BLE001 — build script; retry network flakiness
+            last = e
+            msg = str(e)
+            retryable = any(
+                s in msg.lower()
+                for s in (
+                    "503",
+                    "502",
+                    "429",
+                    "timeout",
+                    "timed out",
+                    "connection",
+                    "network",
+                    "temporarily",
+                    "xet",
+                    "ssl",
+                    "reset",
+                )
+            )
+            print(f"prefetch_pdf_models: {label} failed: {e}", flush=True)
+            if i >= attempts or not retryable:
+                break
+            delay = min(base_delay * (2 ** (i - 1)), 60.0)
+            print(f"prefetch_pdf_models: retrying in {delay:.0f}s...", flush=True)
+            time.sleep(delay)
+    assert last is not None
+    raise last
+
+
+def _httpx_download(url: str, dest: Path, verify: bool, attempts: int = 8) -> None:
+    import httpx
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+
+    def _once() -> None:
+        with httpx.Client(verify=verify, follow_redirects=True, timeout=300.0) as client:
+            with client.stream("GET", url) as resp:
+                if resp.status_code in (502, 503, 429):
+                    raise RuntimeError(f"HTTP {resp.status_code} for {url}")
+                resp.raise_for_status()
+                with open(tmp, "wb") as f:
+                    for chunk in resp.iter_bytes(1024 * 1024):
+                        f.write(chunk)
+        tmp.replace(dest)
+        print(f"prefetch_pdf_models: saved {dest} ({dest.stat().st_size} bytes)", flush=True)
+
+    try:
+        _retry(f"httpx GET {url}", _once, attempts=attempts)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _prewarm_hf_files(verify: bool) -> None:
+    """Best-effort: pull known weights via hf_hub_download with retries, then
+    fall back to raw resolve/main URLs if the hub client still hits XET CDN 503s.
+    """
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.constants import HF_HUB_DISABLE_XET
+
+    print(f"prefetch_pdf_models: constants.HF_HUB_DISABLE_XET={HF_HUB_DISABLE_XET!r}", flush=True)
+
+    for repo_id, filename in _PREFETCH_FILES:
+        label = f"{repo_id}/{filename}"
+
+        def _hub() -> str:
+            return hf_hub_download(repo_id=repo_id, filename=filename)
+
+        try:
+            path = _retry(f"hf_hub_download {label}", _hub, attempts=5)
+            print(f"prefetch_pdf_models: hub ok {path}", flush=True)
+            continue
+        except Exception as e:
+            print(f"prefetch_pdf_models: hub failed for {label}: {e}", flush=True)
+
+        # Fallback: classic resolve URL (still may redirect to CDN; retries help)
+        url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+        # Also try the us-east CDN-style path is automatic via redirects.
+        dest = Path("/tmp/hf_manual") / repo_id.replace("/", "__") / filename
+        try:
+            _httpx_download(url, dest, verify=verify, attempts=6)
+            # Re-try hub download — sometimes a second pass works after CDN blip;
+            # if not, place file where LazyDict local-path check can find it.
+            local_dir = Path(repo_id)
+            local_dir.mkdir(parents=True, exist_ok=True)
+            target = local_dir / filename
+            if not target.exists():
+                target.write_bytes(dest.read_bytes())
+                print(f"prefetch_pdf_models: staged local path {target}", flush=True)
+        except Exception as e:
+            print(f"prefetch_pdf_models: manual download failed for {label}: {e}", flush=True)
+
+
 def main() -> int:
-    # Hugging Face XET (hf-xet) uses cas-bridge / xet-read-token endpoints that
-    # often break behind corporate MITM proxies even when plain HTTPS works.
-    # Force classic HTTP downloads of model files (yolox onnx, etc.).
-    os.environ["HF_HUB_DISABLE_XET"] = os.environ.get("HF_HUB_DISABLE_XET", "1")
-    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
-    print(
-        f"prefetch_pdf_models: HF_HUB_DISABLE_XET={os.environ.get('HF_HUB_DISABLE_XET')!r}",
-        flush=True,
-    )
+    if _truthy(os.environ.get("SKIP_PDF_MODEL_PREFETCH")):
+        print(
+            "prefetch_pdf_models: SKIP_PDF_MODEL_PREFETCH set — skipping model bake",
+            flush=True,
+        )
+        return 0
+
+    # MUST run before any huggingface_hub import (constants bind at import time).
+    _force_disable_xet()
 
     raw_flag = os.environ.get("SAURON_PREFETCH_INSECURE_SSL")
     print(
@@ -137,12 +267,10 @@ def main() -> int:
         f"(truthy={_truthy(raw_flag)})",
         flush=True,
     )
-
     insecure = _truthy(raw_flag)
     if insecure:
         _disable_ssl_verify_everywhere()
     else:
-        # Prefer system bundle (includes MITM roots when Trusted_Root_CAs.pem present).
         ca = "/etc/ssl/certs/ca-certificates.crt"
         if os.path.isfile(ca):
             os.environ.setdefault("SSL_CERT_FILE", ca)
@@ -150,21 +278,33 @@ def main() -> int:
             os.environ.setdefault("CURL_CA_BUNDLE", ca)
             print(f"prefetch_pdf_models: using CA bundle {ca}", flush=True)
 
-    # Import AFTER SSL / XET env so clients created at import time see them.
+    verify = not insecure
+    _prewarm_hf_files(verify=verify)
+
     from unstructured.partition.pdf import partition_pdf
 
+    smoke = "tests/fixtures/pdf/tiny_smoke.pdf"
+    if not os.path.isfile(smoke):
+        print(f"prefetch_pdf_models: missing {smoke}", file=sys.stderr)
+        return 1
+
     try:
-        partition_pdf(
-            filename="tests/fixtures/pdf/tiny_smoke.pdf",
-            strategy="hi_res",
-            infer_table_structure=True,
-        )
+        def _run():
+            return partition_pdf(
+                filename=smoke,
+                strategy="hi_res",
+                infer_table_structure=True,
+            )
+
+        _retry("partition_pdf hi_res", _run, attempts=6, base_delay=3.0)
     except Exception as e:
         print(f"prefetch failed: {e}", file=sys.stderr)
         print(
-            "hint: rebuild with --build-arg SAURON_PREFETCH_INSECURE_SSL=1 "
-            "(HF downloads use httpx; must see 'httpx patched' in the log). "
-            "Or ensure certs/Trusted_Root_CAs.pem is your MITM inspection CA.",
+            "hint: CDN 503 / xet-bridge often means Hugging Face storage is "
+            "unreachable from this network. Rebuild with:\n"
+            "  --build-arg SAURON_PREFETCH_INSECURE_SSL=1\n"
+            "or skip baking models (app still runs; hi_res needs network later):\n"
+            "  --build-arg SKIP_PDF_MODEL_PREFETCH=1",
             file=sys.stderr,
         )
         return 1

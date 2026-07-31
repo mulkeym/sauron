@@ -107,6 +107,7 @@ RUN set -eu; \
       -c constraints-security.txt \
       --cert /etc/ssl/certs/ca-certificates.crt \
       ${TH_ARGS} \
+ && pip uninstall -y hf-xet hf_xet 2>/dev/null || true \
  && python - <<'PY'
 import pathlib
 import torch
@@ -191,20 +192,21 @@ RUN python scripts/inject_system_cas_into_certifi.py
 # are not resident (offline guarantee). Runs while network is still available;
 # HF_HUB_OFFLINE is set later (in the ENV block below).
 #
-# MITM escape hatch (HF hub uses httpx; certifi/system CAs often still fail):
-#   docker build --build-arg SAURON_PREFETCH_INSECURE_SSL=1 ...
-# Log must show: "SAURON_PREFETCH_INSECURE_SSL is ON" and "httpx patched".
-#
-# HF_HUB_DISABLE_XET: HF's xet/cas-bridge download path (xet-read-token URLs)
-# fails on many corporate proxies; use classic HTTPS file downloads instead.
+# MITM / HF download knobs:
+#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1  (skip TLS verify for this step)
+#   --build-arg SKIP_PDF_MODEL_PREFETCH=1       (skip bake if HF CDN is blocked)
+# HF_HUB_DISABLE_XET + pip uninstall hf-xet: avoid xet-bridge / xet-read-token.
+# Prefetch retries 503s from us.aws.cdn.hf.co.
 ARG SAURON_PREFETCH_INSECURE_SSL=0
+ARG SKIP_PDF_MODEL_PREFETCH=0
 ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
+    SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
-# Pass the flag on the command line as well so a stale ENV layer cannot hide it.
-RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} HF_HUB_DISABLE_XET=1" \
+RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} HF_HUB_DISABLE_XET=1" \
  && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
+    SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
     python scripts/prefetch_pdf_models.py
