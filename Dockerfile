@@ -128,6 +128,11 @@ assert "+cpu" in torch.__version__ or not torch.cuda.is_available(), (
 print("OK: CPU-only torch (no nvidia-* packages)")
 PY
 
+# Merge OS CA bundle (incl. MITM roots) into certifi so huggingface_hub /
+# requests / urllib3 trust the same roots as the system store.
+COPY scripts/inject_system_cas_into_certifi.py /tmp/inject_system_cas_into_certifi.py
+RUN python /tmp/inject_system_cas_into_certifi.py
+
 # Stage 2: Runtime
 FROM python:3.11-slim
 WORKDIR /app
@@ -155,6 +160,20 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
+# Explicit proxy for runtime layer too (prefetch + later LLM calls if set).
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG http_proxy=
+ARG https_proxy=
+ARG no_proxy=
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy}
+
 # Copy Python virtualenv from builder
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -162,11 +181,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY src/ src/
 COPY scripts/ scripts/
-RUN chmod +x scripts/entrypoint.sh
+RUN chmod +x scripts/entrypoint.sh scripts/inject_system_cas_into_certifi.py
+
+# Re-merge system CAs into certifi on this stage (runtime OS bundle + MITM roots).
+# huggingface_hub / unstructured model downloads use certifi, not only SSL_CERT_FILE.
+RUN python scripts/inject_system_cas_into_certifi.py
 
 # Bake offline hi_res PDF/OCR models into the image and FAIL the build if they
 # are not resident (offline guarantee). Runs while network is still available;
 # HF_HUB_OFFLINE is set later (in the ENV block below).
+# MITM escape hatch: --build-arg SAURON_PREFETCH_INSECURE_SSL=1
+ARG SAURON_PREFETCH_INSECURE_SSL=0
+ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL}
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
 RUN python scripts/prefetch_pdf_models.py
 

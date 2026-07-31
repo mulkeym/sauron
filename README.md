@@ -473,7 +473,16 @@ The PEM is gitignored by default.
 Builder `pip` also defaults `--trusted-host` for `pypi.org`,
 `files.pythonhosted.org`, `pypi.python.org`, and `download.pytorch.org` so MITM
 inspection cannot break package downloads even when the CA chain is incomplete.
-Override with `--build-arg PIP_TRUSTED_HOST="..."`. See `certs/README.md`.
+Override with `--build-arg PIP_TRUSTED_HOST="..."`.
+
+Hugging Face model prefetch uses **certifi**; the image merges the system CA
+bundle into certifi so MITM roots apply there too. If prefetch still fails TLS:
+
+```bash
+docker build -t sauron --build-arg SAURON_PREFETCH_INSECURE_SSL=1 .
+```
+
+See `certs/README.md`.
 
 ## Configuration
 

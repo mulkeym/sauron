@@ -90,11 +90,27 @@ To disable trusted-host entirely (strict TLS only):
 docker build -t sauron --build-arg PIP_TRUSTED_HOST="" .
 ```
 
-## Runtime
+## Runtime + Hugging Face model prefetch
 
 The same PEM is installed in the **runtime** image stage so LLM / embedding
 HTTPS through the MITM proxy trusts the inspection CA. Prefer this over
 **Admin → Models → Ignore SSL certificate errors**.
+
+During build, `scripts/prefetch_pdf_models.py` downloads unstructured /
+Hugging Face layout models (e.g. YOLOX ONNX). Those libraries use **certifi**,
+which does **not** automatically include OS/MITM roots. The Dockerfile therefore
+runs `scripts/inject_system_cas_into_certifi.py` so certifi’s bundle includes
+`/etc/ssl/certs/ca-certificates.crt` (with your inspection CA).
+
+If prefetch still fails with `SSL: CERTIFICATE_VERIFY_FAILED` against
+`huggingface.co`, rebuild with:
+
+```bash
+docker build -t sauron --build-arg SAURON_PREFETCH_INSECURE_SSL=1 .
+```
+
+That disables TLS verify **only** for the prefetch step (models are still
+baked into the image; runtime stays on normal verify + your CA).
 
 `Trusted_Root_CAs.pem` is gitignored so environment-specific CAs are not
 committed by accident. Force-add it if you intentionally want it in the repo.
