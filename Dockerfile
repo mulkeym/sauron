@@ -3,11 +3,15 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # ca-certificates needed so optional custom roots can be merged into the
-# system trust store before pip hits internal HTTPS indexes / mirrors.
+# system trust store before pip hits HTTPS (public or internal).
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional custom roots: drop certs/Trusted_Root_CAs.pem in the build context.
+# Primary use case: corporate MITM / TLS inspection proxies that re-sign
+# outbound HTTPS (Zscaler, Palo Alto, Netskope, Blue Coat, etc.). Without
+# that proxy CA in the trust store, pip fails with CERTIFICATE_VERIFY_FAILED
+# even when the network is not air-gapped.
 # Directory always exists (certs/.gitkeep); the .pem itself is optional.
 # Run via `sh` (not ./script) so CRLF checkouts / missing +x never produce a
 # cryptic "/tmp/install_trusted_root_cas.sh: not found" from a broken shebang.
@@ -25,11 +29,23 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Air-gapped / private package indexes (optional).
-# Example:
-#   --build-arg PIP_INDEX_URL=https://pypi.internal.example/simple \
-#   --build-arg PIP_TRUSTED_HOST=pypi.internal.example \
-#   --build-arg TORCH_CPU_INDEX=https://pypi.internal.example/simple
+# Explicit forward proxy (only if inspection is NOT transparent).
+# Docker also accepts the usual --build-arg HTTP_PROXY=... from the client.
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG http_proxy=
+ARG https_proxy=
+ARG no_proxy=
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy}
+
+# Optional private package indexes (air-gap mirrors). Not required for MITM:
+# with the inspection CA installed you can keep default PyPI / pytorch.org.
 # Prefer fixing trust with certs/Trusted_Root_CAs.pem over trusted-host.
 ARG PIP_INDEX_URL=
 ARG PIP_EXTRA_INDEX_URL=
@@ -59,8 +75,8 @@ COPY requirements.txt constraints-security.txt ./
 # with torch already satisfied, the full requirements install will not replace
 # it with a CUDA build from PyPI.
 #
-# Air-gapped: mirror the CPU wheel index (or your private PyPI that hosts torch)
-# and pass --build-arg TORCH_CPU_INDEX=https://your-mirror/.../simple
+# Override only if you mirror torch (air-gap). MITM sites can leave the default
+# once certs/Trusted_Root_CAs.pem trusts the inspection proxy.
 ARG TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir --upgrade 'pip>=26.1.2' 'setuptools>=83.0.0' wheel \
       --cert /etc/ssl/certs/ca-certificates.crt \
@@ -114,6 +130,7 @@ RUN sed -i 's/\r$//' /tmp/install_trusted_root_cas.sh \
  && rm -rf /tmp/certs /tmp/install_trusted_root_cas.sh
 
 # Prefer the system bundle (includes any custom roots) over certifi alone.
+# Same MITM CA trust as builder so runtime LLM/embed HTTPS through the proxy works.
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \

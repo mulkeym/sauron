@@ -82,9 +82,11 @@ Chart defaults already point at GHCR (`image.registry=ghcr.io`, `image.repositor
    cannot reach `download.pytorch.org`, mirror the CPU wheel index and pass
    `--build-arg TORCH_CPU_INDEX=https://your-mirror/.../whl/cpu`.
 
-   **Private root CAs:** drop a PEM bundle at `certs/Trusted_Root_CAs.pem` before
-   `docker build` (optional). The image merges it into the system trust store and
-   points Python/requests/curl at that store. See `certs/README.md`.
+   **MITM / private root CAs:** drop the TLS-inspection CA PEM at
+   `certs/Trusted_Root_CAs.pem` before `docker build` (optional). The image merges
+   it into the system trust store and points Python/requests/curl/pip at that
+   store — required when outbound HTTPS is re-signed by a corporate proxy.
+   See `certs/README.md`.
 
 2. **Mirror base layers** into Harbor if builders cannot reach Docker Hub (`python:3.11-slim`, etc.).
 

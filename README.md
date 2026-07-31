@@ -431,45 +431,45 @@ pip install -r requirements.txt -c constraints-security.txt
 docker build --build-arg TORCH_CPU_INDEX=https://your-mirror/.../whl/cpu -t sauron .
 ```
 
-### Custom root CAs (private PKI)
+### Custom root CAs (MITM / private PKI)
 
-If your environment uses private / internal root CAs, place a PEM bundle at:
+If outbound HTTPS is **TLS-inspected** (corporate MITM proxy re-signs traffic),
+or you use private roots, place a PEM bundle at:
 
 ```text
 certs/Trusted_Root_CAs.pem
 ```
 
+For MITM, this should be the **inspection / SSL-decrypt CA** from your security
+stack (not a random internal web server cert). Without it, `pip` during
+`docker build` fails with `CERTIFICATE_VERIFY_FAILED` even though the network
+has internet access.
+
 At **image build** time the Dockerfile:
 
 1. Copies `certs/` into the image (the directory always exists; the `.pem` is optional)
 2. If `Trusted_Root_CAs.pem` is present and non-empty, installs it via `update-ca-certificates`
-3. Sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE` to the system CA bundle so **OS tools, pip, and Python** (`ssl` / `requests` / `httpx`) trust those roots
+3. Sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, and `PIP_CERT` to the system CA bundle so **OS tools, pip, and Python** trust those roots
 
-This runs in both the builder stage (so `pip install` can reach internal HTTPS mirrors) and the runtime stage (so LLM / embedding API calls trust your private CA). If the file is missing, the default public CA set is used unchanged.
+This runs in both the **builder** (pip → PyPI / pytorch.org through the proxy)
+and **runtime** (LLM / embedding HTTPS through the same proxy). If the file is
+missing, only the default public CA set is used.
 
 ```bash
-cp /path/to/org-roots.pem certs/Trusted_Root_CAs.pem
+# Typical MITM fix — no private PyPI required:
+cp /path/to/corp-inspection-ca.pem certs/Trusted_Root_CAs.pem
 docker build -t sauron .
-```
 
-Prefer this over **Admin → Settings → Models → Ignore SSL certificate errors** when you can distribute the real roots. The PEM is gitignored by default; force-add it only if you intentionally want it in git.
-
-If **`pip install` fails with SSL errors** during the image build (common on
-air-gapped / TLS-intercepting networks), the builder is reaching an HTTPS index
-without trusting its issuer. Fix:
-
-1. Ensure `certs/Trusted_Root_CAs.pem` is present in the build context (build log
-   lists `certs/` contents and whether the PEM was installed).
-2. Point indexes at your internal mirrors:
-
-```bash
+# If the proxy is explicit (not transparent):
 docker build -t sauron \
-  --build-arg PIP_INDEX_URL=https://pypi.internal.example/simple \
-  --build-arg TORCH_CPU_INDEX=https://pypi.internal.example/simple \
+  --build-arg HTTPS_PROXY=http://proxy.example:8080 \
+  --build-arg HTTP_PROXY=http://proxy.example:8080 \
   .
 ```
 
-See `certs/README.md` for `PIP_TRUSTED_HOST` and more detail.
+Prefer this over **Admin → Settings → Models → Ignore SSL certificate errors**.
+The PEM is gitignored by default. See `certs/README.md` for air-gap mirrors and
+`PIP_TRUSTED_HOST`.
 
 ## Configuration
 
