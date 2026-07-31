@@ -121,6 +121,16 @@ def _disable_ssl_verify_everywhere() -> None:
 
 
 def main() -> int:
+    # Hugging Face XET (hf-xet) uses cas-bridge / xet-read-token endpoints that
+    # often break behind corporate MITM proxies even when plain HTTPS works.
+    # Force classic HTTP downloads of model files (yolox onnx, etc.).
+    os.environ["HF_HUB_DISABLE_XET"] = os.environ.get("HF_HUB_DISABLE_XET", "1")
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+    print(
+        f"prefetch_pdf_models: HF_HUB_DISABLE_XET={os.environ.get('HF_HUB_DISABLE_XET')!r}",
+        flush=True,
+    )
+
     raw_flag = os.environ.get("SAURON_PREFETCH_INSECURE_SSL")
     print(
         f"prefetch_pdf_models: SAURON_PREFETCH_INSECURE_SSL={raw_flag!r} "
@@ -140,7 +150,7 @@ def main() -> int:
             os.environ.setdefault("CURL_CA_BUNDLE", ca)
             print(f"prefetch_pdf_models: using CA bundle {ca}", flush=True)
 
-    # Import AFTER SSL patches so clients created at import time see them.
+    # Import AFTER SSL / XET env so clients created at import time see them.
     from unstructured.partition.pdf import partition_pdf
 
     try:

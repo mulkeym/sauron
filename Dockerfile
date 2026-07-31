@@ -194,12 +194,19 @@ RUN python scripts/inject_system_cas_into_certifi.py
 # MITM escape hatch (HF hub uses httpx; certifi/system CAs often still fail):
 #   docker build --build-arg SAURON_PREFETCH_INSECURE_SSL=1 ...
 # Log must show: "SAURON_PREFETCH_INSECURE_SSL is ON" and "httpx patched".
+#
+# HF_HUB_DISABLE_XET: HF's xet/cas-bridge download path (xet-read-token URLs)
+# fails on many corporate proxies; use classic HTTPS file downloads instead.
 ARG SAURON_PREFETCH_INSECURE_SSL=0
-ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL}
+ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
+    HF_HUB_DISABLE_XET=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=0
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
 # Pass the flag on the command line as well so a stale ENV layer cannot hide it.
-RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL}" \
+RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} HF_HUB_DISABLE_XET=1" \
  && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
+    HF_HUB_DISABLE_XET=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=0 \
     python scripts/prefetch_pdf_models.py
 
 # Create data directory
@@ -211,7 +218,8 @@ ENV LANCEDB_PATH=/app/data/lancedb \
     DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db \
     VLLM_REQUEST_TIMEOUT=300 \
     HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_XET=1
 
 EXPOSE 8080
 VOLUME /app/data

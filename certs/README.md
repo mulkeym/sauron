@@ -112,5 +112,9 @@ docker build -t sauron --build-arg SAURON_PREFETCH_INSECURE_SSL=1 .
 That disables TLS verify **only** for the prefetch step (models are still
 baked into the image; runtime stays on normal verify + your CA).
 
+If you see errors mentioning **`xet-read-token`**, **`cas-bridge`**, or
+**`hf-xet`**, that is Hugging Face’s XET transfer path (often broken behind
+MITM). The image sets `HF_HUB_DISABLE_XET=1` so downloads use normal HTTPS.
+
 `Trusted_Root_CAs.pem` is gitignored so environment-specific CAs are not
 committed by accident. Force-add it if you intentionally want it in the repo.
