@@ -14,12 +14,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY certs/ /tmp/certs/
 COPY scripts/install_trusted_root_cas.sh /tmp/install_trusted_root_cas.sh
 RUN sed -i 's/\r$//' /tmp/install_trusted_root_cas.sh \
+ && echo "certs/ contents:" && ls -la /tmp/certs/ \
  && sh /tmp/install_trusted_root_cas.sh /tmp/certs/Trusted_Root_CAs.pem
 
 # Prefer the system bundle (includes any custom roots) over certifi alone.
+# PIP_CERT is required: pip does not always honor SSL_CERT_FILE for index TLS.
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
-    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Air-gapped / private package indexes (optional).
+# Example:
+#   --build-arg PIP_INDEX_URL=https://pypi.internal.example/simple \
+#   --build-arg PIP_TRUSTED_HOST=pypi.internal.example \
+#   --build-arg TORCH_CPU_INDEX=https://pypi.internal.example/simple
+# Prefer fixing trust with certs/Trusted_Root_CAs.pem over trusted-host.
+ARG PIP_INDEX_URL=
+ARG PIP_EXTRA_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+RUN set -eu; \
+    { \
+      echo "[global]"; \
+      echo "cert = /etc/ssl/certs/ca-certificates.crt"; \
+      if [ -n "${PIP_INDEX_URL}" ]; then echo "index-url = ${PIP_INDEX_URL}"; fi; \
+      if [ -n "${PIP_EXTRA_INDEX_URL}" ]; then echo "extra-index-url = ${PIP_EXTRA_INDEX_URL}"; fi; \
+      if [ -n "${PIP_TRUSTED_HOST}" ]; then \
+        for h in ${PIP_TRUSTED_HOST}; do echo "trusted-host = ${h}"; done; \
+      fi; \
+    } > /etc/pip.conf; \
+    echo "---- /etc/pip.conf ----"; cat /etc/pip.conf; echo "-----------------------"
 
 # Isolated venv so CPU torch is visible to the second pip install ( --prefix
 # installs are not considered "installed" by a later bare pip resolve).
@@ -34,16 +59,19 @@ COPY requirements.txt constraints-security.txt ./
 # with torch already satisfied, the full requirements install will not replace
 # it with a CUDA build from PyPI.
 #
-# Air-gapped: mirror the CPU wheel index and build with
-#   --build-arg TORCH_CPU_INDEX=https://your-mirror/.../whl/cpu
+# Air-gapped: mirror the CPU wheel index (or your private PyPI that hosts torch)
+# and pass --build-arg TORCH_CPU_INDEX=https://your-mirror/.../simple
 ARG TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir --upgrade 'pip>=26.1.2' 'setuptools>=83.0.0' wheel \
+      --cert /etc/ssl/certs/ca-certificates.crt \
  && pip install --no-cache-dir \
       torch torchvision \
       --index-url "${TORCH_CPU_INDEX}" \
+      --cert /etc/ssl/certs/ca-certificates.crt \
  && pip install --no-cache-dir \
       -r requirements.txt \
       -c constraints-security.txt \
+      --cert /etc/ssl/certs/ca-certificates.crt \
  && python - <<'PY'
 import pathlib
 import torch
@@ -81,13 +109,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY certs/ /tmp/certs/
 COPY scripts/install_trusted_root_cas.sh /tmp/install_trusted_root_cas.sh
 RUN sed -i 's/\r$//' /tmp/install_trusted_root_cas.sh \
+ && echo "certs/ contents:" && ls -la /tmp/certs/ \
  && sh /tmp/install_trusted_root_cas.sh /tmp/certs/Trusted_Root_CAs.pem \
  && rm -rf /tmp/certs /tmp/install_trusted_root_cas.sh
 
 # Prefer the system bundle (includes any custom roots) over certifi alone.
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
-    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
 # Copy Python virtualenv from builder
 COPY --from=builder /opt/venv /opt/venv

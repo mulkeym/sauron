@@ -452,7 +452,24 @@ cp /path/to/org-roots.pem certs/Trusted_Root_CAs.pem
 docker build -t sauron .
 ```
 
-Prefer this over **Admin → Models → Ignore SSL certificate errors** when you can distribute the real roots. The PEM is gitignored by default; force-add it only if you intentionally want it in git.
+Prefer this over **Admin → Settings → Models → Ignore SSL certificate errors** when you can distribute the real roots. The PEM is gitignored by default; force-add it only if you intentionally want it in git.
+
+If **`pip install` fails with SSL errors** during the image build (common on
+air-gapped / TLS-intercepting networks), the builder is reaching an HTTPS index
+without trusting its issuer. Fix:
+
+1. Ensure `certs/Trusted_Root_CAs.pem` is present in the build context (build log
+   lists `certs/` contents and whether the PEM was installed).
+2. Point indexes at your internal mirrors:
+
+```bash
+docker build -t sauron \
+  --build-arg PIP_INDEX_URL=https://pypi.internal.example/simple \
+  --build-arg TORCH_CPU_INDEX=https://pypi.internal.example/simple \
+  .
+```
+
+See `certs/README.md` for `PIP_TRUSTED_HOST` and more detail.
 
 ## Configuration
 

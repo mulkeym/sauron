@@ -9,6 +9,7 @@
 #   SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 #   REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 #   CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+#   PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 set -eu
 
 PEM="${1:-/tmp/certs/Trusted_Root_CAs.pem}"
@@ -17,6 +18,7 @@ DEST_CRT="${DEST_DIR}/Trusted_Root_CAs.crt"
 
 if [ ! -f "$PEM" ]; then
   echo "install_trusted_root_cas: no file at ${PEM}; using default CA trust store"
+  echo "install_trusted_root_cas: if pip TLS fails against internal HTTPS, add certs/Trusted_Root_CAs.pem"
   exit 0
 fi
 
@@ -29,6 +31,17 @@ if ! command -v update-ca-certificates >/dev/null 2>&1; then
   echo "install_trusted_root_cas: update-ca-certificates not found; install ca-certificates package" >&2
   exit 1
 fi
+
+# Normalize CRLF in the PEM (common when files are copied from Windows).
+sed -i 's/\r$//' "$PEM" 2>/dev/null || sed -i '' 's/\r$//' "$PEM" 2>/dev/null || true
+
+if ! grep -q "BEGIN CERTIFICATE" "$PEM"; then
+  echo "install_trusted_root_cas: ${PEM} has no BEGIN CERTIFICATE markers (need PEM, not DER/JKS)" >&2
+  exit 1
+fi
+
+ncerts=$(grep -c "BEGIN CERTIFICATE" "$PEM" || true)
+echo "install_trusted_root_cas: found ${ncerts} certificate(s) in ${PEM}"
 
 mkdir -p "$DEST_DIR"
 # Debian expects .crt under /usr/local/share/ca-certificates/ (PEM content is fine).
