@@ -9,10 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 # Optional custom roots: drop certs/Trusted_Root_CAs.pem in the build context.
 # Directory always exists (certs/.gitkeep); the .pem itself is optional.
+# Run via `sh` (not ./script) so CRLF checkouts / missing +x never produce a
+# cryptic "/tmp/install_trusted_root_cas.sh: not found" from a broken shebang.
 COPY certs/ /tmp/certs/
 COPY scripts/install_trusted_root_cas.sh /tmp/install_trusted_root_cas.sh
-RUN chmod +x /tmp/install_trusted_root_cas.sh \
- && /tmp/install_trusted_root_cas.sh /tmp/certs/Trusted_Root_CAs.pem
+RUN sed -i 's/\r$//' /tmp/install_trusted_root_cas.sh \
+ && sh /tmp/install_trusted_root_cas.sh /tmp/certs/Trusted_Root_CAs.pem
 
 # Prefer the system bundle (includes any custom roots) over certifi alone.
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
@@ -78,8 +80,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).
 COPY certs/ /tmp/certs/
 COPY scripts/install_trusted_root_cas.sh /tmp/install_trusted_root_cas.sh
-RUN chmod +x /tmp/install_trusted_root_cas.sh \
- && /tmp/install_trusted_root_cas.sh /tmp/certs/Trusted_Root_CAs.pem \
+RUN sed -i 's/\r$//' /tmp/install_trusted_root_cas.sh \
+ && sh /tmp/install_trusted_root_cas.sh /tmp/certs/Trusted_Root_CAs.pem \
  && rm -rf /tmp/certs /tmp/install_trusted_root_cas.sh
 
 # Prefer the system bundle (includes any custom roots) over certifi alone.

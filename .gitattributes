@@ -1,0 +1,4 @@
+# Keep shell scripts LF so Docker RUN does not hit "script: not found"
+# (CRLF makes the shebang `#!/bin/sh\r`, which the kernel cannot exec).
+*.sh text eol=lf
+scripts/* text eol=lf

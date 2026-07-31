@@ -1,5 +1,6 @@
 #!/bin/sh
 # Install an optional PEM bundle of custom root CAs into the OS trust store.
+# Prefer: sh install_trusted_root_cas.sh  (avoids shebang/CRLF exec issues)
 #
 # Usage: install_trusted_root_cas.sh [path-to-Trusted_Root_CAs.pem]
 # If the file is missing or empty, exit 0 and leave the default trust store.
