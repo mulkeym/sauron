@@ -190,11 +190,17 @@ RUN python scripts/inject_system_cas_into_certifi.py
 # Bake offline hi_res PDF/OCR models into the image and FAIL the build if they
 # are not resident (offline guarantee). Runs while network is still available;
 # HF_HUB_OFFLINE is set later (in the ENV block below).
-# MITM escape hatch: --build-arg SAURON_PREFETCH_INSECURE_SSL=1
+#
+# MITM escape hatch (HF hub uses httpx; certifi/system CAs often still fail):
+#   docker build --build-arg SAURON_PREFETCH_INSECURE_SSL=1 ...
+# Log must show: "SAURON_PREFETCH_INSECURE_SSL is ON" and "httpx patched".
 ARG SAURON_PREFETCH_INSECURE_SSL=0
 ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL}
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
-RUN python scripts/prefetch_pdf_models.py
+# Pass the flag on the command line as well so a stale ENV layer cannot hide it.
+RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL}" \
+ && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
+    python scripts/prefetch_pdf_models.py
 
 # Create data directory
 RUN mkdir -p /app/data/lancedb
