@@ -468,8 +468,12 @@ docker build -t sauron \
 ```
 
 Prefer this over **Admin → Settings → Models → Ignore SSL certificate errors**.
-The PEM is gitignored by default. See `certs/README.md` for air-gap mirrors and
-`PIP_TRUSTED_HOST`.
+The PEM is gitignored by default.
+
+Builder `pip` also defaults `--trusted-host` for `pypi.org`,
+`files.pythonhosted.org`, `pypi.python.org`, and `download.pytorch.org` so MITM
+inspection cannot break package downloads even when the CA chain is incomplete.
+Override with `--build-arg PIP_TRUSTED_HOST="..."`. See `certs/README.md`.
 
 ## Configuration
 

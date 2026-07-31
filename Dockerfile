@@ -44,12 +44,15 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     https_proxy=${https_proxy} \
     no_proxy=${no_proxy}
 
-# Optional private package indexes (air-gap mirrors). Not required for MITM:
-# with the inspection CA installed you can keep default PyPI / pytorch.org.
-# Prefer fixing trust with certs/Trusted_Root_CAs.pem over trusted-host.
+# Package indexes (optional overrides for air-gap mirrors).
 ARG PIP_INDEX_URL=
 ARG PIP_EXTRA_INDEX_URL=
-ARG PIP_TRUSTED_HOST=
+# MITM proxies often break pip TLS even when a custom CA is installed (pip's
+# certifi path, incomplete chain, etc.). Default trusted-host list covers the
+# public indexes used by this Dockerfile; override/extend via build-arg.
+# Space-separated hostnames, e.g. "pypi.org files.pythonhosted.org my-pypi.local"
+ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org"
+# Persist pip config for all subsequent pip invocations (incl. venv).
 RUN set -eu; \
     { \
       echo "[global]"; \
@@ -60,12 +63,16 @@ RUN set -eu; \
         for h in ${PIP_TRUSTED_HOST}; do echo "trusted-host = ${h}"; done; \
       fi; \
     } > /etc/pip.conf; \
+    mkdir -p /etc/xdg/pip && cp /etc/pip.conf /etc/xdg/pip/pip.conf; \
     echo "---- /etc/pip.conf ----"; cat /etc/pip.conf; echo "-----------------------"
 
 # Isolated venv so CPU torch is visible to the second pip install ( --prefix
 # installs are not considered "installed" by a later bare pip resolve).
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+RUN python -m venv /opt/venv \
+ && mkdir -p /opt/venv/pip \
+ && cp /etc/pip.conf /opt/venv/pip/pip.conf
+ENV PATH="/opt/venv/bin:$PATH" \
+    PIP_CONFIG_FILE=/etc/pip.conf
 
 COPY requirements.txt constraints-security.txt ./
 
@@ -77,17 +84,26 @@ COPY requirements.txt constraints-security.txt ./
 #
 # Override only if you mirror torch (air-gap). MITM sites can leave the default
 # once certs/Trusted_Root_CAs.pem trusts the inspection proxy.
+# Re-declare ARG so this RUN layer sees the values (Docker ARG scope).
+ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org"
 ARG TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir --upgrade 'pip>=26.1.2' 'setuptools>=83.0.0' wheel \
+RUN set -eu; \
+    TH_ARGS=""; \
+    for h in ${PIP_TRUSTED_HOST}; do TH_ARGS="${TH_ARGS} --trusted-host ${h}"; done; \
+    echo "pip trusted-host args:${TH_ARGS}"; \
+    pip install --no-cache-dir --upgrade 'pip>=26.1.2' 'setuptools>=83.0.0' wheel \
       --cert /etc/ssl/certs/ca-certificates.crt \
+      ${TH_ARGS} \
  && pip install --no-cache-dir \
       torch torchvision \
       --index-url "${TORCH_CPU_INDEX}" \
       --cert /etc/ssl/certs/ca-certificates.crt \
+      ${TH_ARGS} \
  && pip install --no-cache-dir \
       -r requirements.txt \
       -c constraints-security.txt \
       --cert /etc/ssl/certs/ca-certificates.crt \
+      ${TH_ARGS} \
  && python - <<'PY'
 import pathlib
 import torch

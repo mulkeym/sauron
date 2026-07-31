@@ -68,10 +68,26 @@ docker build -t sauron \
   .
 ```
 
-Optional escape hatch when you cannot load the CA yet (prefer fixing the PEM):
+### pip `--trusted-host` (MITM escape hatch)
+
+The Dockerfile **defaults** `PIP_TRUSTED_HOST` to the public indexes used at
+build time (`pypi.org`, `files.pythonhosted.org`, `pypi.python.org`,
+`download.pytorch.org`) and passes `--trusted-host` on every builder `pip`
+call. That skips TLS verification for those hosts when inspection still
+breaks verification even with the CA PEM installed.
+
+Extend or replace the list if you use other hosts:
 
 ```bash
---build-arg PIP_TRUSTED_HOST="pypi.internal.example files.internal.example"
+docker build -t sauron \
+  --build-arg PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org pypi.internal.example" \
+  .
+```
+
+To disable trusted-host entirely (strict TLS only):
+
+```bash
+docker build -t sauron --build-arg PIP_TRUSTED_HOST="" .
 ```
 
 ## Runtime
