@@ -237,20 +237,24 @@ COPY hf-cache/ /root/.cache/huggingface/
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
 # Pass HF_ENDPOINT / token only on this RUN (bake). Prefer Artifactory remote URL
 # when public huggingface.co is blocked or slow. Token is not written into final ENV.
-RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH} HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}" \
- && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
-    SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
-    SKIP_HF_MODEL_PREFETCH=${SKIP_HF_MODEL_PREFETCH} \
-    SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
-    EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME} \
-    RERANK_MODEL=${RERANK_MODEL} \
-    HF_ENDPOINT=${HF_ENDPOINT} \
-    HF_TOKEN=${HF_TOKEN} \
-    HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN}} \
-    HF_HUB_DISABLE_XET=1 \
-    HF_HUB_ENABLE_HF_TRANSFER=0 \
-    python scripts/prefetch_hf_models.py \
- && if [ "${SAURON_PREFETCH_ALLOW_FAIL}" != "1" ] && [ "${SKIP_HF_MODEL_PREFETCH}" != "1" ] && [ "${SKIP_PDF_MODEL_PREFETCH}" != "1" ]; then \
+# Do not export empty HF_ENDPOINT= — hub treats that as a blank base URL and fails.
+RUN set -eu; \
+    echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH} HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co (default)}"; \
+    export SAURON_PREFETCH_INSECURE_SSL="${SAURON_PREFETCH_INSECURE_SSL}" \
+      SKIP_PDF_MODEL_PREFETCH="${SKIP_PDF_MODEL_PREFETCH}" \
+      SKIP_HF_MODEL_PREFETCH="${SKIP_HF_MODEL_PREFETCH}" \
+      SAURON_PREFETCH_ALLOW_FAIL="${SAURON_PREFETCH_ALLOW_FAIL}" \
+      EMBEDDING_MODEL_NAME="${EMBEDDING_MODEL_NAME}" \
+      RERANK_MODEL="${RERANK_MODEL}" \
+      HF_HUB_DISABLE_XET=1 \
+      HF_HUB_ENABLE_HF_TRANSFER=0; \
+    if [ -n "${HF_ENDPOINT}" ]; then export HF_ENDPOINT="${HF_ENDPOINT}"; else unset HF_ENDPOINT || true; fi; \
+    if [ -n "${HF_TOKEN}" ]; then export HF_TOKEN="${HF_TOKEN}"; else unset HF_TOKEN || true; fi; \
+    if [ -n "${HUGGING_FACE_HUB_TOKEN}" ]; then export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN}"; \
+    elif [ -n "${HF_TOKEN:-}" ]; then export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"; \
+    else unset HUGGING_FACE_HUB_TOKEN || true; fi; \
+    python scripts/prefetch_hf_models.py; \
+    if [ "${SAURON_PREFETCH_ALLOW_FAIL}" != "1" ] && [ "${SKIP_HF_MODEL_PREFETCH}" != "1" ] && [ "${SKIP_PDF_MODEL_PREFETCH}" != "1" ]; then \
       test -f /app/.pdf_models_ready; \
     fi
 

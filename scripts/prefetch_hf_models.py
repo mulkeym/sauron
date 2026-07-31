@@ -305,9 +305,13 @@ def main() -> int:
     # Corporate Artifactory / HF mirror — huggingface_hub reads HF_ENDPOINT + HF_TOKEN
     # (or HUGGING_FACE_HUB_TOKEN). Example:
     #   HF_ENDPOINT=https://artifactory.example/artifactory/api/huggingfaceml/huggingface-remote
+    # IMPORTANT: an empty HF_ENDPOINT= (from Docker ARG default) breaks httpx with
+    # "Request URL is missing an 'http://' or 'https://' protocol" — must unset.
     hf_endpoint = (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
     if hf_endpoint:
         os.environ["HF_ENDPOINT"] = hf_endpoint
+    else:
+        os.environ.pop("HF_ENDPOINT", None)
     # Normalize token env names (hub accepts either)
     token = (
         (os.environ.get("HF_TOKEN") or "").strip()
@@ -316,6 +320,9 @@ def main() -> int:
     if token:
         os.environ["HF_TOKEN"] = token
         os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+    else:
+        os.environ.pop("HF_TOKEN", None)
+        os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
 
     insecure = _truthy(os.environ.get("SAURON_PREFETCH_INSECURE_SSL"))
     print(
