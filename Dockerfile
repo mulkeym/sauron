@@ -188,25 +188,27 @@ RUN chmod +x scripts/entrypoint.sh scripts/inject_system_cas_into_certifi.py
 # huggingface_hub / unstructured model downloads use certifi, not only SSL_CERT_FILE.
 RUN python scripts/inject_system_cas_into_certifi.py
 
-# Bake offline hi_res PDF/OCR models into the image and FAIL the build if they
-# are not resident (offline guarantee). Runs while network is still available;
-# HF_HUB_OFFLINE is set later (in the ENV block below).
+# Best-effort bake of hi_res PDF/OCR models (Hugging Face).
+# Corporate networks often get persistent 503 from us.aws.cdn.hf.co / xet-bridge;
+# by default prefetch is allowed to fail so the image still builds.
 #
-# MITM / HF download knobs:
-#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1  (skip TLS verify for this step)
-#   --build-arg SKIP_PDF_MODEL_PREFETCH=1       (skip bake if HF CDN is blocked)
-# HF_HUB_DISABLE_XET + pip uninstall hf-xet: avoid xet-bridge / xet-read-token.
-# Prefetch retries 503s from us.aws.cdn.hf.co.
+#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1
+#   --build-arg SKIP_PDF_MODEL_PREFETCH=1          # skip HF entirely
+#   --build-arg SAURON_PREFETCH_ALLOW_FAIL=0       # hard-fail build on HF errors
+# On success writes /app/.pdf_models_ready; entrypoint then enables HF offline.
 ARG SAURON_PREFETCH_INSECURE_SSL=0
 ARG SKIP_PDF_MODEL_PREFETCH=0
+ARG SAURON_PREFETCH_ALLOW_FAIL=1
 ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
+    SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
-RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} HF_HUB_DISABLE_XET=1" \
+RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL}" \
  && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
+    SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
     python scripts/prefetch_pdf_models.py
@@ -214,13 +216,12 @@ RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} SKI
 # Create data directory
 RUN mkdir -p /app/data/lancedb
 
-# Default environment
+# Default environment. HF_HUB_OFFLINE is NOT forced here: entrypoint enables
+# offline mode only when /app/.pdf_models_ready exists (successful bake).
 ENV LANCEDB_PATH=/app/data/lancedb \
     LANCEDB_TABLE_NAME=chunks \
     DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db \
     VLLM_REQUEST_TIMEOUT=300 \
-    HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1 \
     HF_HUB_DISABLE_XET=1
 
 EXPOSE 8080

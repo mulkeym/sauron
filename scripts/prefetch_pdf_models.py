@@ -250,12 +250,37 @@ def _prewarm_hf_files(verify: bool) -> None:
             print(f"prefetch_pdf_models: manual download failed for {label}: {e}", flush=True)
 
 
+# Written into the image so the entrypoint can decide HF offline mode.
+_READY_MARKER = Path("/app/.pdf_models_ready")
+_FAILED_MARKER = Path("/app/.pdf_models_prefetch_failed")
+
+
+def _mark_ready() -> None:
+    _FAILED_MARKER.unlink(missing_ok=True)
+    _READY_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    _READY_MARKER.write_text("ok\n", encoding="utf-8")
+    print(f"prefetch_pdf_models: wrote {_READY_MARKER}", flush=True)
+
+
+def _mark_failed(reason: str) -> None:
+    _READY_MARKER.unlink(missing_ok=True)
+    _FAILED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    _FAILED_MARKER.write_text(reason.rstrip() + "\n", encoding="utf-8")
+    print(f"prefetch_pdf_models: wrote {_FAILED_MARKER}", flush=True)
+
+
 def main() -> int:
+    # Default allow-fail: corporate networks often cannot reach HF XET/CDN (503).
+    # Build still succeeds; hi_res OCR can use network at runtime unless models
+    # were baked (see entrypoint + .pdf_models_ready).
+    allow_fail = _truthy(os.environ.get("SAURON_PREFETCH_ALLOW_FAIL", "1"))
+
     if _truthy(os.environ.get("SKIP_PDF_MODEL_PREFETCH")):
         print(
             "prefetch_pdf_models: SKIP_PDF_MODEL_PREFETCH set — skipping model bake",
             flush=True,
         )
+        _mark_failed("skipped by SKIP_PDF_MODEL_PREFETCH")
         return 0
 
     # MUST run before any huggingface_hub import (constants bind at import time).
@@ -264,7 +289,7 @@ def main() -> int:
     raw_flag = os.environ.get("SAURON_PREFETCH_INSECURE_SSL")
     print(
         f"prefetch_pdf_models: SAURON_PREFETCH_INSECURE_SSL={raw_flag!r} "
-        f"(truthy={_truthy(raw_flag)})",
+        f"(truthy={_truthy(raw_flag)}) allow_fail={allow_fail}",
         flush=True,
     )
     insecure = _truthy(raw_flag)
@@ -279,6 +304,8 @@ def main() -> int:
             print(f"prefetch_pdf_models: using CA bundle {ca}", flush=True)
 
     verify = not insecure
+    # Fewer attempts when we will not fail the build (saves time on blocked CDN).
+    attempts = 3 if allow_fail else 6
     _prewarm_hf_files(verify=verify)
 
     from unstructured.partition.pdf import partition_pdf
@@ -286,6 +313,9 @@ def main() -> int:
     smoke = "tests/fixtures/pdf/tiny_smoke.pdf"
     if not os.path.isfile(smoke):
         print(f"prefetch_pdf_models: missing {smoke}", file=sys.stderr)
+        if allow_fail:
+            _mark_failed(f"missing {smoke}")
+            return 0
         return 1
 
     try:
@@ -296,18 +326,30 @@ def main() -> int:
                 infer_table_structure=True,
             )
 
-        _retry("partition_pdf hi_res", _run, attempts=6, base_delay=3.0)
+        _retry("partition_pdf hi_res", _run, attempts=attempts, base_delay=3.0)
     except Exception as e:
         print(f"prefetch failed: {e}", file=sys.stderr)
         print(
-            "hint: CDN 503 / xet-bridge often means Hugging Face storage is "
-            "unreachable from this network. Rebuild with:\n"
+            "Hugging Face storage (xet-bridge / us.aws.cdn.hf.co) is often "
+            "unreachable from corporate networks (HTTP 503).\n"
+            "Build will CONTINUE without baked PDF models "
+            f"(SAURON_PREFETCH_ALLOW_FAIL={allow_fail}).\n"
+            "Options:\n"
+            "  --build-arg SKIP_PDF_MODEL_PREFETCH=1     # skip retries entirely\n"
+            "  --build-arg SAURON_PREFETCH_ALLOW_FAIL=0  # hard-fail the build again\n"
             "  --build-arg SAURON_PREFETCH_INSECURE_SSL=1\n"
-            "or skip baking models (app still runs; hi_res needs network later):\n"
-            "  --build-arg SKIP_PDF_MODEL_PREFETCH=1",
+            "hi_res OCR can still download models at runtime if the pod has HF access.",
             file=sys.stderr,
         )
+        _mark_failed(str(e))
+        if allow_fail:
+            print(
+                "prefetch_pdf_models: allowing failure — image build continues",
+                flush=True,
+            )
+            return 0
         return 1
+    _mark_ready()
     print("pdf models prefetched", flush=True)
     return 0
 

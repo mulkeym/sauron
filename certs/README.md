@@ -120,12 +120,19 @@ Face’s XET/CDN storage path (often broken or 503 behind MITM). The image:
 - uninstalls the `hf-xet` package
 - retries downloads on 503
 
-If Hugging Face is still unreachable from the build network:
+If Hugging Face is still unreachable from the build network (persistent **503**
+on `us.aws.cdn.hf.co` / `xet-bridge`):
+
+**Default behavior:** prefetch is **allowed to fail** (`SAURON_PREFETCH_ALLOW_FAIL=1`).
+The image still builds; hi_res OCR models are not baked in. The entrypoint leaves
+HF online so runtime can download later if the network allows.
 
 ```bash
-# Build without baking PDF OCR models (app runs; hi_res needs network later
-# or a volume with ~/.cache/huggingface):
+# Skip HF retries entirely (faster build when you know CDN is blocked):
 docker build -t sauron --build-arg SKIP_PDF_MODEL_PREFETCH=1 .
+
+# Old strict behavior (fail the image build if models cannot be baked):
+docker build -t sauron --build-arg SAURON_PREFETCH_ALLOW_FAIL=0 .
 ```
 
 `Trusted_Root_CAs.pem` is gitignored so environment-specific CAs are not
