@@ -194,41 +194,65 @@ RUN chmod +x scripts/entrypoint.sh scripts/inject_system_cas_into_certifi.py
 # huggingface_hub / unstructured model downloads use certifi, not only SSL_CERT_FILE.
 RUN python scripts/inject_system_cas_into_certifi.py
 
-# Best-effort bake of hi_res PDF/OCR models (Hugging Face).
-# Corporate networks often get persistent 503 from us.aws.cdn.hf.co / xet-bridge;
-# by default prefetch is allowed to fail so the image still builds.
+# Bake ALL Hugging Face / local ML weights required at runtime:
+#   nomic embeddings, cross-encoder rerankers, YOLOX layout, table-transformer.
+# Default: hard-fail the build if any download fails (offline-ready image).
 #
-#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1
-#   --build-arg SKIP_PDF_MODEL_PREFETCH=1          # skip HF entirely
-#   --build-arg SAURON_PREFETCH_ALLOW_FAIL=0       # hard-fail build on HF errors
-# On success writes /app/.pdf_models_ready; entrypoint then enables HF offline.
+#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1   # MITM TLS
+#   --build-arg SAURON_PREFETCH_ALLOW_FAIL=1     # do not fail build (not recommended)
+#   --build-arg SKIP_HF_MODEL_PREFETCH=1         # skip bake (runtime needs HF)
+# Optional: pre-seed host cache into the image (air-gap friendly):
+#   mkdir -p hf-cache && # copy ~/.cache/huggingface contents here
+# Optional host cache is copied when present (see COPY below).
 ARG SAURON_PREFETCH_INSECURE_SSL=0
 ARG SKIP_PDF_MODEL_PREFETCH=0
-ARG SAURON_PREFETCH_ALLOW_FAIL=1
+ARG SKIP_HF_MODEL_PREFETCH=0
+ARG SAURON_PREFETCH_ALLOW_FAIL=0
+ARG EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
+ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
+    SKIP_HF_MODEL_PREFETCH=${SKIP_HF_MODEL_PREFETCH} \
     SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
-    HF_HUB_DISABLE_XET=1 \
-    HF_HUB_ENABLE_HF_TRANSFER=0
-COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
-RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL}" \
- && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
-    SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
-    SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
+    EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME} \
+    RERANK_MODEL=${RERANK_MODEL} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
-    python scripts/prefetch_pdf_models.py
+    HF_HOME=/root/.cache/huggingface \
+    TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
+    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+
+# Optional pre-seeded HF hub cache from build context (for true air-gap builds).
+# Create hf-cache/ on the host with hub/ blobs from a machine that can reach HF.
+COPY hf-cache/ /root/.cache/huggingface/
+
+COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
+RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH}" \
+ && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
+    SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
+    SKIP_HF_MODEL_PREFETCH=${SKIP_HF_MODEL_PREFETCH} \
+    SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
+    EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME} \
+    RERANK_MODEL=${RERANK_MODEL} \
+    HF_HUB_DISABLE_XET=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=0 \
+    python scripts/prefetch_hf_models.py \
+ && if [ "${SAURON_PREFETCH_ALLOW_FAIL}" != "1" ] && [ "${SKIP_HF_MODEL_PREFETCH}" != "1" ] && [ "${SKIP_PDF_MODEL_PREFETCH}" != "1" ]; then \
+      test -f /app/.pdf_models_ready; \
+    fi
 
 # Create data directory
 RUN mkdir -p /app/data/lancedb
 
-# Default environment. HF_HUB_OFFLINE is NOT forced here: entrypoint enables
-# offline mode only when /app/.pdf_models_ready exists (successful bake).
+# HF cache paths. Offline mode is applied by entrypoint when /.pdf_models_ready exists.
 ENV LANCEDB_PATH=/app/data/lancedb \
     LANCEDB_TABLE_NAME=chunks \
     DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db \
     VLLM_REQUEST_TIMEOUT=300 \
-    HF_HUB_DISABLE_XET=1
+    HF_HUB_DISABLE_XET=1 \
+    HF_HOME=/root/.cache/huggingface \
+    TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
+    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 
 EXPOSE 8080
 VOLUME /app/data

@@ -380,9 +380,8 @@ docker compose up -d
 **Corporate MITM / SSL errors during `docker compose build` (PyPI):**
 
 1. Put your TLS inspection CA at `certs/Trusted_Root_CAs.pem`
-2. Compose already passes pip `--trusted-host` for public PyPI hosts and skips
-   Hugging Face model bake by default (see `docker-compose.yml` `x-sauron-build`)
-3. If you use an explicit proxy or private PyPI, set in `.env`:
+2. Compose passes pip `--trusted-host` for public PyPI hosts (see `x-sauron-build`)
+3. Optional proxy / private PyPI in `.env`:
 
 ```bash
 # HTTP_PROXY=http://proxy.example:8080
@@ -390,6 +389,7 @@ docker compose up -d
 # PIP_INDEX_URL=https://pypi.internal.example/simple
 # PIP_TRUSTED_HOST=pypi.internal.example files.internal.example
 # TORCH_CPU_INDEX=https://pypi.internal.example/simple
+# SAURON_PREFETCH_INSECURE_SSL=1
 ```
 
 ```bash
@@ -397,8 +397,34 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-Confirm in the build log: `certs/ contents:` lists `Trusted_Root_CAs.pem` and
-`pip trusted-host args:` includes your hosts.
+Confirm in the build log: `certs/ contents:` lists `Trusted_Root_CAs.pem`,
+`pip trusted-host args:` includes your hosts, and
+`prefetch_hf_models: ALL models baked successfully`.
+
+### Hugging Face models baked at build time
+
+The image **must** download these during `docker build` / `compose build` so
+runtime never calls Hugging Face:
+
+| Model | Purpose |
+|-------|---------|
+| `nomic-ai/nomic-embed-text-v1` | Local embeddings |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | App reranker |
+| `cross-encoder/ms-marco-TinyBERT-L-6` | LanceDB CrossEncoder default |
+| `unstructuredio/yolo_x_layout` | PDF hi_res layout (YOLOX) |
+| `microsoft/table-transformer-structure-recognition*` | PDF tables |
+
+If Hugging Face is unreachable from the build host, pre-seed a cache on a
+machine that can reach HF, copy it into `hf-cache/`, then build:
+
+```bash
+# on a connected machine:
+huggingface-cli download nomic-ai/nomic-embed-text-v1
+# ...or run: python scripts/prefetch_hf_models.py
+cp -a ~/.cache/huggingface/. /path/to/sauron/hf-cache/
+# then on the restricted host:
+docker compose build
+```
 
 **Or pull the CI image** (published by GitHub Actions on every push to `master` and on `v*` tags):
 
