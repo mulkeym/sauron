@@ -302,9 +302,26 @@ def main() -> int:
 
     _force_disable_xet()
 
+    # Corporate Artifactory / HF mirror — huggingface_hub reads HF_ENDPOINT + HF_TOKEN
+    # (or HUGGING_FACE_HUB_TOKEN). Example:
+    #   HF_ENDPOINT=https://artifactory.example/artifactory/api/huggingfaceml/huggingface-remote
+    hf_endpoint = (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
+    if hf_endpoint:
+        os.environ["HF_ENDPOINT"] = hf_endpoint
+    # Normalize token env names (hub accepts either)
+    token = (
+        (os.environ.get("HF_TOKEN") or "").strip()
+        or (os.environ.get("HUGGING_FACE_HUB_TOKEN") or "").strip()
+    )
+    if token:
+        os.environ["HF_TOKEN"] = token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+
     insecure = _truthy(os.environ.get("SAURON_PREFETCH_INSECURE_SSL"))
     print(
-        f"prefetch_hf_models: insecure_ssl={insecure} allow_fail={allow_fail}",
+        f"prefetch_hf_models: insecure_ssl={insecure} allow_fail={allow_fail} "
+        f"HF_ENDPOINT={hf_endpoint or 'https://huggingface.co (default)'} "
+        f"HF_TOKEN={'set' if token else 'unset'}",
         flush=True,
     )
     if insecure:
@@ -319,6 +336,7 @@ def main() -> int:
     # Prefer a stable cache location inside the image
     os.environ.setdefault("HF_HOME", "/root/.cache/huggingface")
     os.environ.setdefault("TRANSFORMERS_CACHE", "/root/.cache/huggingface/hub")
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/root/.cache/huggingface/hub")
     os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", "/root/.cache/torch/sentence_transformers")
 
     attempts = 3 if allow_fail else 8

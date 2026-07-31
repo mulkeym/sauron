@@ -414,15 +414,23 @@ runtime never calls Hugging Face:
 | `unstructuredio/yolo_x_layout` | PDF hi_res layout (YOLOX) |
 | `microsoft/table-transformer-structure-recognition*` | PDF tables |
 
-If Hugging Face is unreachable from the build host, pre-seed a cache on a
-machine that can reach HF, copy it into `hf-cache/`, then build:
+**Artifactory / corporate HF proxy** (recommended on work networks): set in `.env`
+before `docker compose build`:
 
 ```bash
-# on a connected machine:
+HF_ENDPOINT=https://artifactory.example.com/artifactory/api/huggingfaceml/huggingface-remote
+HF_TOKEN=your-token
+SAURON_PREFETCH_INSECURE_SSL=1   # if the proxy uses a private CA (also use certs/Trusted_Root_CAs.pem)
+```
+
+`huggingface_hub` honors `HF_ENDPOINT` + `HF_TOKEN` during the bake step. After
+models are in the image, runtime stays offline (`HF_HUB_OFFLINE=1`).
+
+If the hub is fully unreachable, pre-seed `hf-cache/` on a connected machine:
+
+```bash
 huggingface-cli download nomic-ai/nomic-embed-text-v1
-# ...or run: python scripts/prefetch_hf_models.py
 cp -a ~/.cache/huggingface/. /path/to/sauron/hf-cache/
-# then on the restricted host:
 docker compose build
 ```
 

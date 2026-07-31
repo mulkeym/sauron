@@ -210,6 +210,13 @@ ARG SKIP_HF_MODEL_PREFETCH=0
 ARG SAURON_PREFETCH_ALLOW_FAIL=0
 ARG EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
 ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+# Hugging Face hub (public or Artifactory / corporate mirror). Used only during
+# model bake — not left as permanent runtime env for the token.
+# Example Artifactory remote:
+#   HF_ENDPOINT=https://artifactory.example.com/artifactory/api/huggingfaceml/huggingface-remote
+ARG HF_ENDPOINT=
+ARG HF_TOKEN=
+ARG HUGGING_FACE_HUB_TOKEN=
 ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
     SKIP_HF_MODEL_PREFETCH=${SKIP_HF_MODEL_PREFETCH} \
@@ -228,13 +235,18 @@ ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
 COPY hf-cache/ /root/.cache/huggingface/
 
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
-RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH}" \
+# Pass HF_ENDPOINT / token only on this RUN (bake). Prefer Artifactory remote URL
+# when public huggingface.co is blocked or slow. Token is not written into final ENV.
+RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH} HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}" \
  && SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
     SKIP_HF_MODEL_PREFETCH=${SKIP_HF_MODEL_PREFETCH} \
     SAURON_PREFETCH_ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} \
     EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME} \
     RERANK_MODEL=${RERANK_MODEL} \
+    HF_ENDPOINT=${HF_ENDPOINT} \
+    HF_TOKEN=${HF_TOKEN} \
+    HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN}} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
     python scripts/prefetch_hf_models.py \
