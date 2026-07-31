@@ -28,14 +28,21 @@ from pathlib import Path
 _READY_MARKER = Path("/app/.pdf_models_ready")
 _FAILED_MARKER = Path("/app/.pdf_models_prefetch_failed")
 
-# Full HF repos to snapshot (layout / table / misc)
+# Full HF repos to snapshot into the hub cache (must include nomic remote-code deps).
 _SNAPSHOT_REPOS: list[str] = [
+    # Local embeddings — nomic pulls trust_remote_code from nomic-bert-2048
+    "nomic-ai/nomic-embed-text-v1",
+    "nomic-ai/nomic-bert-2048",
+    # Rerankers
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "cross-encoder/ms-marco-TinyBERT-L-6",
+    # PDF hi_res layout + tables
     "unstructuredio/yolo_x_layout",
     "microsoft/table-transformer-structure-recognition",
     "microsoft/table-transformer-structure-recognition-v1.1-all",
 ]
 
-# sentence-transformers style ids loaded via library (populates HF cache correctly)
+# sentence-transformers style ids loaded via library (populates ST + hub caches)
 _ST_MODELS: list[str] = [
     # config defaults — also overridable via env at build
     os.environ.get("EMBEDDING_MODEL_NAME", "nomic-ai/nomic-embed-text-v1"),
@@ -172,7 +179,7 @@ def _download_snapshots(attempts: int) -> None:
         _retry(f"snapshot_download {repo}", _one, attempts=attempts)
 
 
-def _load_sentence_transformers(attempts: int) -> None:
+def _load_sentence_transformers(attempts: int, *, local_only: bool = False) -> None:
     from sentence_transformers import SentenceTransformer, CrossEncoder
 
     seen: set[str] = set()
@@ -184,21 +191,45 @@ def _load_sentence_transformers(attempts: int) -> None:
 
         def _load(model_id=mid) -> None:
             # Cross-encoders vs bi-encoders
-            if "cross-encoder" in model_id.lower() or model_id.lower().startswith("cross-encoder"):
-                m = CrossEncoder(model_id)
-                # Touch the model so weights are fully resolved
+            if "cross-encoder" in model_id.lower():
+                m = CrossEncoder(model_id, local_files_only=local_only)
                 _ = m.predict([("query", "document")])
-                print(f"prefetch_hf_models: CrossEncoder loaded {model_id}", flush=True)
+                print(
+                    f"prefetch_hf_models: CrossEncoder loaded {model_id} "
+                    f"(local_only={local_only})",
+                    flush=True,
+                )
             else:
-                m = SentenceTransformer(model_id, device="cpu", trust_remote_code=True)
+                m = SentenceTransformer(
+                    model_id,
+                    device="cpu",
+                    trust_remote_code=True,
+                    local_files_only=local_only,
+                )
                 _ = m.encode(["warmup"], show_progress_bar=False)
+                dim = (
+                    m.get_embedding_dimension()
+                    if hasattr(m, "get_embedding_dimension")
+                    else m.get_sentence_embedding_dimension()
+                )
                 print(
                     f"prefetch_hf_models: SentenceTransformer loaded {model_id} "
-                    f"dim={m.get_sentence_embedding_dimension()}",
+                    f"dim={dim} (local_only={local_only})",
                     flush=True,
                 )
 
         _retry(f"load {mid}", _load, attempts=attempts)
+
+
+def _verify_offline_reload() -> None:
+    """Prove the hub/ST caches work with no network (catches missing nomic-bert-2048)."""
+    print("prefetch_hf_models: verifying offline reload...", flush=True)
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+    # Fresh import path not required; libraries honor env on next from_pretrained.
+    _load_sentence_transformers(attempts=2, local_only=True)
+    print("prefetch_hf_models: offline reload OK", flush=True)
 
 
 def _load_table_transformers(attempts: int) -> None:
@@ -295,9 +326,11 @@ def main() -> int:
     try:
         _download_snapshots(attempts=attempts)
         _load_table_transformers(attempts=attempts)
-        _load_sentence_transformers(attempts=attempts)
+        _load_sentence_transformers(attempts=attempts, local_only=False)
         _warmup_lancedb_reranker(attempts=attempts)
         _warmup_partition_pdf(attempts=attempts)
+        # Must pass with HF offline — ensures nomic remote code + weights are local.
+        _verify_offline_reload()
     except Exception as e:
         print(f"prefetch_hf_models FAILED: {e}", file=sys.stderr)
         traceback.print_exc()

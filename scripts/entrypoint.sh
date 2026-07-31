@@ -2,11 +2,21 @@
 set -e
 
 # HF models must be baked at image build (scripts/prefetch_hf_models.py).
-# When ready, force offline so runtime never hits huggingface.co.
+# Force offline so runtime never hits huggingface.co when the bake marker exists.
+export HF_HOME="${HF_HOME:-/root/.cache/huggingface}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/root/.cache/huggingface/hub}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-/root/.cache/huggingface/hub}"
+export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-/root/.cache/torch/sentence_transformers}"
+
 if [ -f /app/.pdf_models_ready ]; then
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
-    echo "HF models baked — HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1"
+    export HF_DATASETS_OFFLINE=1
+    echo "HF models baked — offline mode ON (HF_HOME=${HF_HOME})"
+    # Sanity: nomic hub cache dir should exist in the image
+    if ! ls -d "${HF_HOME}/hub"/models--nomic-ai--nomic-embed-text-v1 >/dev/null 2>&1; then
+        echo "WARNING: nomic-embed-text-v1 not found under ${HF_HOME}/hub — embeddings may fail offline"
+    fi
 elif [ -f /app/.pdf_models_prefetch_failed ]; then
     echo "WARNING: HF models were NOT baked at build time:"
     cat /app/.pdf_models_prefetch_failed 2>/dev/null || true

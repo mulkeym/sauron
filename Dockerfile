@@ -220,6 +220,7 @@ ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
     HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
+    HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \
     SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 
 # Optional pre-seeded HF hub cache from build context (for true air-gap builds).
@@ -244,14 +245,19 @@ RUN echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALL
 # Create data directory
 RUN mkdir -p /app/data/lancedb
 
-# HF cache paths. Offline mode is applied by entrypoint when /.pdf_models_ready exists.
+# HF cache paths + offline by default (models baked above). Entrypoint reinforces
+# offline when /app/.pdf_models_ready exists.
 ENV LANCEDB_PATH=/app/data/lancedb \
     LANCEDB_TABLE_NAME=chunks \
     DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db \
     VLLM_REQUEST_TIMEOUT=300 \
     HF_HUB_DISABLE_XET=1 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_DATASETS_OFFLINE=1 \
     HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
+    HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \
     SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 
 EXPOSE 8080

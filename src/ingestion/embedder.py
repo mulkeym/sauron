@@ -81,11 +81,19 @@ def _get_local_model():
         pass  # already set or parallel work started
     logger.info(f"CPU threading: {cores} cores")
 
-    logger.info(f"Loading local embedding model: {settings.embedding_model_name} on cpu")
+    # Prefer baked HF cache (image build). Offline / local_files_only avoids
+    # runtime downloads of nomic-ai/* (and nomic-bert-2048 remote code).
+    offline = os.environ.get("HF_HUB_OFFLINE", "").strip() in ("1", "true", "True")
+    offline = offline or os.environ.get("TRANSFORMERS_OFFLINE", "").strip() in ("1", "true", "True")
+    logger.info(
+        f"Loading local embedding model: {settings.embedding_model_name} on cpu "
+        f"(local_files_only={offline})"
+    )
     model = SentenceTransformer(
         settings.embedding_model_name,
         device="cpu",
         trust_remote_code=True,
+        local_files_only=offline,
     )
     dim = model.get_embedding_dimension() if hasattr(model, 'get_embedding_dimension') else model.get_sentence_embedding_dimension()
     logger.info(f"Model loaded: {dim} dimensions on cpu")

@@ -50,8 +50,16 @@ class VectorStore:
         Lance query pipelines)."""
         # NOTE: cached for the process lifetime; changing settings.rerank_model needs a restart.
         if cls._cross_encoder_model is None:
+            import os
             from sentence_transformers import CrossEncoder
-            cls._cross_encoder_model = CrossEncoder(settings.rerank_model)
+            offline = os.environ.get("HF_HUB_OFFLINE", "").strip() in ("1", "true", "True")
+            offline = offline or os.environ.get("TRANSFORMERS_OFFLINE", "").strip() in (
+                "1", "true", "True"
+            )
+            cls._cross_encoder_model = CrossEncoder(
+                settings.rerank_model,
+                local_files_only=offline,
+            )
         return cls._cross_encoder_model
 
     @property
