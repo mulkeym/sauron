@@ -377,6 +377,29 @@ cp .env.example .env
 docker compose up -d
 ```
 
+**Corporate MITM / SSL errors during `docker compose build` (PyPI):**
+
+1. Put your TLS inspection CA at `certs/Trusted_Root_CAs.pem`
+2. Compose already passes pip `--trusted-host` for public PyPI hosts and skips
+   Hugging Face model bake by default (see `docker-compose.yml` `x-sauron-build`)
+3. If you use an explicit proxy or private PyPI, set in `.env`:
+
+```bash
+# HTTP_PROXY=http://proxy.example:8080
+# HTTPS_PROXY=http://proxy.example:8080
+# PIP_INDEX_URL=https://pypi.internal.example/simple
+# PIP_TRUSTED_HOST=pypi.internal.example files.internal.example
+# TORCH_CPU_INDEX=https://pypi.internal.example/simple
+```
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+Confirm in the build log: `certs/ contents:` lists `Trusted_Root_CAs.pem` and
+`pip trusted-host args:` includes your hosts.
+
 **Or pull the CI image** (published by GitHub Actions on every push to `master` and on `v*` tags):
 
 ```bash

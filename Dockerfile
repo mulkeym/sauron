@@ -51,7 +51,7 @@ ARG PIP_EXTRA_INDEX_URL=
 # certifi path, incomplete chain, etc.). Default trusted-host list covers the
 # public indexes used by this Dockerfile; override/extend via build-arg.
 # Space-separated hostnames, e.g. "pypi.org files.pythonhosted.org my-pypi.local"
-ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org"
+ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org pythonhosted.org download.pytorch.org"
 # Persist pip config for all subsequent pip invocations (incl. venv).
 # Note: ConfigParser forbids repeated keys — use one trusted-host with a
 # multi-line indented list (pip's documented form), not multiple assignments.
@@ -88,15 +88,21 @@ COPY requirements.txt constraints-security.txt ./
 # Override only if you mirror torch (air-gap). MITM sites can leave the default
 # once certs/Trusted_Root_CAs.pem trusts the inspection proxy.
 # Re-declare ARG so this RUN layer sees the values (Docker ARG scope).
-ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org"
+ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org pythonhosted.org download.pytorch.org"
+ARG PIP_INDEX_URL=
+ARG PIP_EXTRA_INDEX_URL=
 ARG TORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
 RUN set -eu; \
     TH_ARGS=""; \
     for h in ${PIP_TRUSTED_HOST}; do TH_ARGS="${TH_ARGS} --trusted-host ${h}"; done; \
+    IDX_ARGS=""; \
+    if [ -n "${PIP_INDEX_URL}" ]; then IDX_ARGS="${IDX_ARGS} -i ${PIP_INDEX_URL}"; fi; \
+    if [ -n "${PIP_EXTRA_INDEX_URL}" ]; then IDX_ARGS="${IDX_ARGS} --extra-index-url ${PIP_EXTRA_INDEX_URL}"; fi; \
     echo "pip trusted-host args:${TH_ARGS}"; \
+    echo "pip index args:${IDX_ARGS}"; \
     pip install --no-cache-dir --upgrade 'pip>=26.1.2' 'setuptools>=83.0.0' wheel \
       --cert /etc/ssl/certs/ca-certificates.crt \
-      ${TH_ARGS} \
+      ${TH_ARGS} ${IDX_ARGS} \
  && pip install --no-cache-dir \
       torch torchvision \
       --index-url "${TORCH_CPU_INDEX}" \
@@ -106,7 +112,7 @@ RUN set -eu; \
       -r requirements.txt \
       -c constraints-security.txt \
       --cert /etc/ssl/certs/ca-certificates.crt \
-      ${TH_ARGS} \
+      ${TH_ARGS} ${IDX_ARGS} \
  && pip uninstall -y hf-xet hf_xet 2>/dev/null || true \
  && python - <<'PY'
 import pathlib

@@ -1,7 +1,32 @@
+# Shared build for all services (one image, MITM/air-gap friendly args from .env).
+# Place certs/Trusted_Root_CAs.pem (inspection CA) before: docker compose build
+x-sauron-build: &sauron-build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    # Forward proxy (if not transparent MITM)
+    HTTP_PROXY: ${HTTP_PROXY:-}
+    HTTPS_PROXY: ${HTTPS_PROXY:-}
+    NO_PROXY: ${NO_PROXY:-}
+    http_proxy: ${HTTP_PROXY:-}
+    https_proxy: ${HTTPS_PROXY:-}
+    no_proxy: ${NO_PROXY:-}
+    # Private PyPI / torch mirror (optional)
+    PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+    PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+    # Skip TLS verify for these hosts during pip (MITM). Space-separated.
+    PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.org files.pythonhosted.org pypi.python.org pythonhosted.org download.pytorch.org}
+    TORCH_CPU_INDEX: ${TORCH_CPU_INDEX:-https://download.pytorch.org/whl/cpu}
+    # Hugging Face model bake (often blocked on corporate nets)
+    SAURON_PREFETCH_INSECURE_SSL: ${SAURON_PREFETCH_INSECURE_SSL:-1}
+    SKIP_PDF_MODEL_PREFETCH: ${SKIP_PDF_MODEL_PREFETCH:-1}
+    SAURON_PREFETCH_ALLOW_FAIL: ${SAURON_PREFETCH_ALLOW_FAIL:-1}
+
 services:
   # SAURON API + Admin UI
   api:
-    build: .
+    image: sauron:local
+    build: *sauron-build
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -19,13 +44,17 @@ services:
       - API_KEYS=${API_KEYS:-dev-key-1}
       - SSL_VERIFY=${SSL_VERIFY:-true}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
     volumes:
       - app_data:/app/data
     restart: unless-stopped
 
   # MCP Server (SSE transport for direct MCP clients)
   mcp:
-    build: .
+    image: sauron:local
+    build: *sauron-build
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "src.mcp.run"]
@@ -45,6 +74,9 @@ services:
       - SSL_VERIFY=${SSL_VERIFY:-true}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
       - MCP_PORT=8090
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
     volumes:
       - app_data:/app/data
     # Override the image's healthcheck (which targets the api on :8080). The MCP
@@ -60,7 +92,8 @@ services:
 
   # MCP-to-OpenAPI proxy (for OpenWebUI and REST clients)
   mcpo:
-    build: .
+    image: sauron:local
+    build: *sauron-build
     extra_hosts:
       - "host.docker.internal:host-gateway"
     entrypoint: ["mcpo", "--port", "8091", "--", "python", "-m", "src.mcp.run_stdio"]
@@ -79,6 +112,9 @@ services:
       - API_KEYS=${API_KEYS:-dev-key-1}
       - SSL_VERIFY=${SSL_VERIFY:-true}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
     volumes:
       - app_data:/app/data
     # Override the image's healthcheck (which targets the api on :8080). mcpo
