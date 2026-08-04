@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Bake all Hugging Face / local ML weights into the image at Docker build time.
+"""Bake all network-fetched ML/runtime assets into the image at build time.
 
 Runtime must not need network access to HF for:
   - local embeddings (sentence-transformers)
   - CrossEncoder reranking (app setting + LanceDB default)
   - unstructured hi_res PDF layout + table structure models
+  - LightRAG token counting (all tiktoken encoding vocabularies)
 
 Run BEFORE HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE are forced on for production
 images. On success writes /app/.pdf_models_ready (name kept for entrypoint).
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import os
 import ssl
+import subprocess
 import sys
 import time
 import traceback
@@ -27,6 +29,7 @@ from pathlib import Path
 # Markers consumed by scripts/entrypoint.sh
 _READY_MARKER = Path("/app/.pdf_models_ready")
 _FAILED_MARKER = Path("/app/.pdf_models_prefetch_failed")
+_TIKTOKEN_CACHE_DEFAULT = "/app/.cache/tiktoken"
 
 # Full HF repos to snapshot into the hub cache (must include nomic remote-code deps).
 _SNAPSHOT_REPOS: list[str] = [
@@ -232,6 +235,62 @@ def _verify_offline_reload() -> None:
     print("prefetch_hf_models: offline reload OK", flush=True)
 
 
+def _warmup_tiktoken(attempts: int) -> list[str]:
+    """Cache every encoding vocabulary shipped by the installed tiktoken.
+
+    tiktoken's Python package contains constructors, not the vocabulary data.
+    The first ``get_encoding`` call otherwise downloads from OpenAI blob
+    storage at runtime, which breaks LightRAG initialization in an air gap.
+    """
+    cache_dir = (os.environ.get("TIKTOKEN_CACHE_DIR") or _TIKTOKEN_CACHE_DEFAULT).strip()
+    os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+    import tiktoken
+
+    names = sorted(tiktoken.list_encoding_names())
+    if not names:
+        raise RuntimeError("tiktoken reported no available encodings")
+
+    for name in names:
+        _retry(
+            f"tiktoken encoding {name}",
+            lambda encoding_name=name: tiktoken.get_encoding(encoding_name),
+            attempts=attempts,
+        )
+    print(
+        f"prefetch_hf_models: tiktoken cached {len(names)} encoding(s): "
+        f"{', '.join(names)}",
+        flush=True,
+    )
+    return names
+
+
+def _verify_tiktoken_offline() -> None:
+    """Reload every tiktoken encoding in a fresh process with HTTP blocked."""
+    cache_dir = (
+        os.environ.get("TIKTOKEN_CACHE_DIR") or _TIKTOKEN_CACHE_DEFAULT
+    ).strip()
+    verify_code = r'''
+import requests
+
+def blocked(*args, **kwargs):
+    raise RuntimeError("network access attempted during tiktoken offline verification")
+
+requests.get = blocked
+
+import tiktoken
+
+names = sorted(tiktoken.list_encoding_names())
+for name in names:
+    tiktoken.get_encoding(name)
+print(f"tiktoken offline reload OK: {', '.join(names)}")
+'''
+    env = os.environ.copy()
+    env["TIKTOKEN_CACHE_DIR"] = cache_dir
+    subprocess.run([sys.executable, "-c", verify_code], env=env, check=True)
+
+
 def _load_table_transformers(attempts: int) -> None:
     """Warm transformers weights used by unstructured table structure."""
     try:
@@ -345,6 +404,9 @@ def main() -> int:
     os.environ.setdefault("TRANSFORMERS_CACHE", "/root/.cache/huggingface/hub")
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/root/.cache/huggingface/hub")
     os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", "/root/.cache/torch/sentence_transformers")
+    os.environ["TIKTOKEN_CACHE_DIR"] = (
+        os.environ.get("TIKTOKEN_CACHE_DIR") or _TIKTOKEN_CACHE_DEFAULT
+    ).strip()
 
     attempts = 3 if allow_fail else 8
 
@@ -354,8 +416,12 @@ def main() -> int:
         _load_sentence_transformers(attempts=attempts, local_only=False)
         _warmup_lancedb_reranker(attempts=attempts)
         _warmup_partition_pdf(attempts=attempts)
+        _warmup_tiktoken(attempts=attempts)
         # Must pass with HF offline — ensures nomic remote code + weights are local.
         _verify_offline_reload()
+        # Must pass with requests.get blocked — ensures LightRAG cannot lazily
+        # fetch an OpenAI tokenizer vocabulary after deployment.
+        _verify_tiktoken_offline()
     except Exception as e:
         print(f"prefetch_hf_models FAILED: {e}", file=sys.stderr)
         traceback.print_exc()

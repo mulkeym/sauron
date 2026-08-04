@@ -7,6 +7,7 @@ export HF_HOME="${HF_HOME:-/root/.cache/huggingface}"
 export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/root/.cache/huggingface/hub}"
 export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-/root/.cache/huggingface/hub}"
 export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-/root/.cache/torch/sentence_transformers}"
+export TIKTOKEN_CACHE_DIR="${TIKTOKEN_CACHE_DIR:-/app/.cache/tiktoken}"
 
 if [ -f /app/.pdf_models_ready ]; then
     export HF_HUB_OFFLINE=1
@@ -16,6 +17,9 @@ if [ -f /app/.pdf_models_ready ]; then
     # Sanity: nomic hub cache dir should exist in the image
     if ! ls -d "${HF_HOME}/hub"/models--nomic-ai--nomic-embed-text-v1 >/dev/null 2>&1; then
         echo "WARNING: nomic-embed-text-v1 not found under ${HF_HOME}/hub — embeddings may fail offline"
+    fi
+    if ! find "${TIKTOKEN_CACHE_DIR}" -type f ! -name README.md ! -name .gitkeep -print -quit 2>/dev/null | grep -q .; then
+        echo "WARNING: tiktoken cache is empty — LightRAG initialization may try network access"
     fi
 elif [ -f /app/.pdf_models_prefetch_failed ]; then
     echo "WARNING: HF models were NOT baked at build time:"

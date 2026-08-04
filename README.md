@@ -539,6 +539,12 @@ bundle into certifi so MITM roots apply there too. If prefetch still fails TLS:
 docker build -t sauron --build-arg SAURON_PREFETCH_INSECURE_SSL=1 .
 ```
 
+The image build also caches and offline-verifies every vocabulary supported by
+the installed `tiktoken` package. LightRAG otherwise downloads its tokenizer
+data from OpenAI blob storage the first time the knowledge graph is opened or
+built. For a build host with no network, pre-populate `tiktoken-cache/`; the
+Dockerfile copies it to the runtime `TIKTOKEN_CACHE_DIR`.
+
 See `certs/README.md`.
 
 ## Configuration

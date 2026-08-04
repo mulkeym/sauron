@@ -228,11 +228,16 @@ ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
     HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \
-    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers \
+    TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken
 
 # Optional pre-seeded HF hub cache from build context (for true air-gap builds).
 # Create hf-cache/ on the host with hub/ blobs from a machine that can reach HF.
 COPY hf-cache/ /root/.cache/huggingface/
+
+# Optional pre-seeded tiktoken cache for builds that cannot reach OpenAI blob
+# storage. On connected builds scripts/prefetch_hf_models.py fills this path.
+COPY tiktoken-cache/ /app/.cache/tiktoken/
 
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
 # Pass HF_ENDPOINT / token only on this RUN (bake). Prefer Artifactory remote URL
@@ -274,7 +279,8 @@ ENV LANCEDB_PATH=/app/data/lancedb \
     HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
     HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \
-    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers \
+    TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken
 
 EXPOSE 8080
 VOLUME /app/data
