@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from src.auth.jwt import create_token
 from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
-from src.mcp.http import create_mcp_http_app
+from src.mcp.http import add_mcp_http_route, create_mcp_http_app
 from src.mcp.server import create_mcp_server
 from src.config import settings
 
@@ -23,7 +23,12 @@ def _app(metadata_store=None):
     )
     mcp_app = create_mcp_http_app(server)
     app = FastAPI(lifespan=mcp_app.lifespan)
-    app.mount("/", mcp_app)
+
+    @app.get("/admin/")
+    async def admin_page():
+        return {"admin": True}
+
+    add_mcp_http_route(app, mcp_app)
     return app
 
 
@@ -48,6 +53,15 @@ def test_native_mcp_rejects_missing_application_key():
     with TestClient(_app()) as client:
         response = client.post("/mcp", json=_request("tools/list"))
     assert response.status_code == 403
+
+
+def test_native_mcp_does_not_intercept_admin_redirect_or_unknown_routes():
+    with TestClient(_app(), follow_redirects=False) as client:
+        admin = client.get("/admin")
+        unknown = client.get("/not-an-mcp-route")
+    assert admin.status_code == 307
+    assert admin.headers["location"].endswith("/admin/")
+    assert unknown.status_code == 404
 
 
 def test_native_mcp_initializes_on_shared_app_path():

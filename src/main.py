@@ -108,7 +108,7 @@ def create_app() -> FastAPI:
     if settings.mcp_enabled:
         from fastmcp.utilities.lifespan import combine_lifespans
         from src.mcp.agent_registry import AgentRegistry
-        from src.mcp.http import create_mcp_http_app
+        from src.mcp.http import add_mcp_http_route, create_mcp_http_app
         from src.mcp.server import create_mcp_server
 
         mcp_server = create_mcp_server(
@@ -158,10 +158,9 @@ def create_app() -> FastAPI:
     if ADMIN_STATIC.exists():
         app.mount("/admin/static", StaticFiles(directory=str(ADMIN_STATIC)), name="admin-static")
     if mcp_http_app is not None:
-        # Mount last so explicit API/admin routes retain precedence. The child
-        # app owns settings.mcp_path (normally /mcp), allowing it to share the
-        # existing Uvicorn/Run:AI port without a second container process.
-        app.mount("/", mcp_http_app, name="mcp")
+        # Register only the exact MCP path. A root mount would intercept normal
+        # FastAPI fallback handling such as the /admin -> /admin/ redirect.
+        add_mcp_http_route(app, mcp_http_app)
         app.state.mcp_http_app = mcp_http_app
     return app
 

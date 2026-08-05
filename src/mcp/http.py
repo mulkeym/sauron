@@ -75,3 +75,24 @@ def create_mcp_http_app(server: Any):
         json_response=True,
         middleware=[Middleware(MCPAuthenticationMiddleware)],
     )
+
+
+def add_mcp_http_route(app: Any, mcp_http_app: Any) -> None:
+    """Register MCP only at MCP_PATH without claiming unrelated fallback URLs.
+
+    A root-level ASGI mount would send otherwise-unmatched paths such as bare
+    ``/admin`` through MCP authentication before FastAPI can issue its normal
+    slash redirect. An exact ASGI Route preserves the child app's middleware
+    while limiting it to the configured MCP endpoint.
+    """
+    from starlette.routing import Route
+    from src.config import settings
+
+    app.router.routes.append(
+        Route(
+            settings.mcp_path.strip(),
+            endpoint=mcp_http_app,
+            name="mcp",
+            include_in_schema=False,
+        )
+    )
