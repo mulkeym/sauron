@@ -47,6 +47,61 @@ class ImageRegion:
     ocr_text: str = ""
     kind: ImageKind = ImageKind.OTHER
     content_hash: str = ""
+    figure_id: str = ""
+    relationship_id: str = ""
+    body_index: int | None = None
+    section_path: list[str] = field(default_factory=list)
+    caption: str = ""
+    alt_text: str = ""
+    previous_text: str = ""
+    following_text: str = ""
+    bbox: tuple[float, float, float, float] | None = None
+
+
+@dataclass
+class FigureRecord:
+    """Searchable analysis and provenance for one figure occurrence."""
+
+    figure_id: str
+    description: str
+    kind: str
+    content_hash: str = ""
+    body_index: int | None = None
+    section_path: list[str] = field(default_factory=list)
+    caption: str = ""
+    alt_text: str = ""
+    previous_text: str = ""
+    following_text: str = ""
+    page: int | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    source: str = ""
+    slide: int | None = None
+
+    def retrieval_text(self) -> str:
+        parts = [f"Figure: {self.figure_id}"]
+        if self.page is not None:
+            parts.append(f"Page: {self.page + 1}")
+        if self.slide is not None:
+            parts.append(f"Slide: {self.slide + 1}")
+        if self.section_path:
+            parts.append("Section: " + " > ".join(self.section_path))
+        if self.caption:
+            parts.append(f"Caption: {self.caption}")
+        if self.alt_text:
+            parts.append(f"Alt text: {self.alt_text}")
+        if self.previous_text:
+            parts.append(f"Context before: {self.previous_text}")
+        parts.append(self.description.strip())
+        if self.following_text:
+            parts.append(f"Context after: {self.following_text}")
+        return "\n".join(p for p in parts if p.strip())
+
+
+@dataclass
+class OfficeFigureResult:
+    enriched_text: str
+    table_grids: list[SheetGrid] = field(default_factory=list)
+    figures: list[FigureRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -57,6 +112,7 @@ class FigureEnrichmentResult:
     figures_seen: int = 0
     figures_used: int = 0
     figures_skipped: int = 0
+    figure_records: list[FigureRecord] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -161,37 +217,53 @@ def extract_image_regions_from_zip_media(
 
 
 def extract_image_regions_docx(path: Path) -> list[ImageRegion]:
-    """Embedded images from a Word .docx (word/media/*)."""
+    """Embedded Word images with their actual body placements and context."""
     path = Path(path)
-    regions = extract_image_regions_from_zip_media(
-        path, media_prefixes=("word/media/",), source="docx",
-    )
-    # Prefer document-order indices from relationships when possible
+    # Resolve relationship IDs captured by the ordered Word parser.  A fresh
+    # decode set per placement deliberately retains repeated occurrences.
     try:
         from docx import Document
+        from src.ingestion.parser import parse_document
 
         doc = Document(str(path))
-        seen: set[str] = set()
         ordered: list[ImageRegion] = []
-        idx = 0
-        for rel in doc.part.rels.values():
-            if "image" not in (rel.reltype or ""):
+        parsed = parse_document(path)
+        placements = [
+            b.figure for b in parsed.blocks
+            if b.block_type == "figure" and b.figure is not None
+        ]
+        for idx, placement in enumerate(placements):
+            rel = doc.part.rels.get(placement.relationship_id)
+            if rel is None or "image" not in (rel.reltype or ""):
                 continue
             try:
                 raw = rel.target_part.blob
             except Exception:
                 continue
             reg = _region_from_image_bytes(
-                raw, page=0, index=idx, source="docx", seen_hashes=seen,
+                raw, page=0, index=idx, source="docx", seen_hashes=set(),
             )
             if reg:
+                reg.figure_id = placement.figure_id
+                reg.relationship_id = placement.relationship_id
+                reg.body_index = placement.body_index
+                reg.section_path = list(placement.section_path)
+                reg.caption = placement.caption
+                reg.alt_text = placement.alt_text
+                reg.previous_text = placement.previous_text
+                reg.following_text = placement.following_text
                 ordered.append(reg)
-                idx += 1
         if ordered:
-            # Re-index; keep zip fallback only if rels found nothing
             return ordered
     except Exception as e:
-        logger.debug(f"figure extract: docx rel walk failed: {e}")
+        logger.debug(f"figure extract: ordered DOCX walk failed: {e}")
+
+    regions = extract_image_regions_from_zip_media(
+        path, media_prefixes=("word/media/",), source="docx",
+    )
+    # Compatibility fallback for malformed documents without body anchors.
+    for i, region in enumerate(regions):
+        region.figure_id = f"fig-{i + 1:03d}"
     return regions
 
 
@@ -244,6 +316,59 @@ def extract_image_regions_xlsx(path: Path) -> list[ImageRegion]:
     return regions
 
 
+def extract_image_regions_pptx(path: Path) -> list[ImageRegion]:
+    """PowerPoint pictures resolved from slide-local relationship IDs."""
+    path = Path(path)
+    try:
+        from pptx import Presentation
+        from src.ingestion.parser import parse_document
+
+        presentation = Presentation(str(path))
+        parsed = parse_document(path)
+        ordered: list[ImageRegion] = []
+        placements = [
+            block.figure for block in parsed.blocks
+            if block.block_type == "figure" and block.figure is not None
+        ]
+        for placement in placements:
+            if placement.page is None or placement.page >= len(presentation.slides):
+                continue
+            slide = presentation.slides[placement.page]
+            rel = slide.part.rels.get(placement.relationship_id)
+            if rel is None or "image" not in (rel.reltype or ""):
+                continue
+            try:
+                raw = rel.target_part.blob
+            except Exception:
+                continue
+            reg = _region_from_image_bytes(
+                raw, page=placement.page, index=len(ordered), source="pptx",
+                seen_hashes=set(),
+            )
+            if reg:
+                reg.figure_id = placement.figure_id
+                reg.relationship_id = placement.relationship_id
+                reg.body_index = placement.body_index
+                reg.section_path = list(placement.section_path)
+                reg.caption = placement.caption
+                reg.alt_text = placement.alt_text
+                reg.previous_text = placement.previous_text
+                reg.following_text = placement.following_text
+                reg.bbox = placement.bbox
+                ordered.append(reg)
+        if ordered:
+            return ordered
+    except Exception as e:
+        logger.debug(f"figure extract: ordered PPTX walk failed: {e}")
+
+    regions = extract_image_regions_from_zip_media(
+        path, media_prefixes=("ppt/media/",), source="pptx",
+    )
+    for i, region in enumerate(regions):
+        region.figure_id = f"s1-fig-{i + 1:03d}"
+    return regions
+
+
 def extract_image_regions(path: Path) -> list[ImageRegion]:
     """Collect embedded images and optional full-page renders from a PDF."""
     import pypdfium2 as pdfium
@@ -263,6 +388,10 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
         for page_idx in range(len(pdf)):
             page = pdf[page_idx]
             img_idx = 0
+            try:
+                page_width, page_height = page.get_size()
+            except Exception:
+                page_width = page_height = 0
 
             # --- Embedded image objects ---
             try:
@@ -288,9 +417,19 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
                             continue
                         png = _pil_to_png_bytes(pil)
                         digest = hashlib.sha256(png).hexdigest()[:16]
-                        if digest in seen_hashes:
-                            continue
-                        seen_hashes.add(digest)
+                        bbox = None
+                        try:
+                            left, bottom, right, top = obj.get_bounds()
+                            # PDFium uses a bottom-left origin; pdfplumber's text
+                            # layout uses a top-left origin.
+                            bbox = (
+                                float(min(left, right)),
+                                float(page_height - max(top, bottom)),
+                                float(max(left, right)),
+                                float(page_height - min(top, bottom)),
+                            )
+                        except Exception:
+                            pass
                         regions.append(
                             ImageRegion(
                                 page=page_idx,
@@ -300,6 +439,7 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
                                 height=pil.height,
                                 source="embedded",
                                 content_hash=digest,
+                                bbox=bbox,
                             )
                         )
                         img_idx += 1
@@ -340,6 +480,11 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
                                             height=pil.height,
                                             source="page_render",
                                             content_hash=digest,
+                                            bbox=(
+                                                0.0, 0.0,
+                                                float(page_width or pil.width),
+                                                float(page_height or pil.height),
+                                            ),
                                         )
                                     )
                         except Exception as e:
@@ -350,6 +495,17 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
         except Exception:
             pass
 
+    regions.sort(key=lambda r: (
+        r.page,
+        r.bbox[1] if r.bbox else float("inf"),
+        r.bbox[0] if r.bbox else r.index,
+    ))
+    per_page: dict[int, int] = {}
+    for body_index, region in enumerate(regions):
+        per_page[region.page] = per_page.get(region.page, 0) + 1
+        region.index = per_page[region.page] - 1
+        region.figure_id = f"p{region.page + 1}-fig-{per_page[region.page]:03d}"
+        region.body_index = body_index
     return regions
 
 
@@ -364,9 +520,7 @@ def extract_image_regions_for_path(path: Path) -> list[ImageRegion]:
     if suffix in (".xlsx", ".xlsm"):
         return extract_image_regions_xlsx(path)
     if suffix == ".pptx":
-        return extract_image_regions_from_zip_media(
-            path, media_prefixes=("ppt/media/",), source="pptx",
-        )
+        return extract_image_regions_pptx(path)
     logger.info(f"figure extract: no image collector for {suffix}")
     return []
 
@@ -948,6 +1102,51 @@ Use network for topology / wiring diagrams.
 """
 
 
+def _document_context_hint(region: ImageRegion) -> str:
+    """Give vision local context without claiming that it is visible pixels."""
+    fields: list[str] = []
+    if region.section_path:
+        fields.append("Section: " + " > ".join(region.section_path))
+    if region.caption:
+        fields.append(f"Caption: {region.caption}")
+    if region.alt_text:
+        fields.append(f"Office alt text: {region.alt_text}")
+    if region.previous_text:
+        fields.append(f"Text immediately before: {region.previous_text[:1000]}")
+    if region.following_text:
+        fields.append(f"Text immediately after: {region.following_text[:1000]}")
+    if not fields:
+        return ""
+    return (
+        "\n\nDOCUMENT CONTEXT (use to disambiguate the image, but do not report "
+        "context text as visually observed unless you can confirm it in the image):\n"
+        + "\n".join(fields)
+    )
+
+
+def _format_figure_for_placement(region: ImageRegion, text: str) -> str:
+    """Retag model prose with a stable figure ID and source context."""
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+    label = region.figure_id or f"p.{region.page + 1}"
+    clean = re.sub(r"^\[Figure\s+[^\]—]+\s*—", f"[Figure {label} —", clean, count=1)
+    if not clean.startswith("[Figure"):
+        clean = f"[Figure {label} — {region.kind.value}]\n{clean}\n[/Figure]"
+
+    provenance: list[str] = []
+    if region.section_path:
+        provenance.append("Section: " + " > ".join(region.section_path))
+    if region.caption:
+        provenance.append(f"Caption: {region.caption}")
+    if region.alt_text:
+        provenance.append(f"Alt text: {region.alt_text}")
+    if provenance:
+        first, sep, rest = clean.partition("\n")
+        clean = first + "\n" + "\n".join(provenance) + (sep + rest if sep else "")
+    return clean
+
+
 def _vision(image_bytes: bytes, user_prompt: str, max_tokens: int | None = None) -> str:
     from src.generation.llm_client import generate_vision
 
@@ -998,7 +1197,11 @@ def strategy_table(region: ImageRegion) -> tuple[list[SheetGrid], list[ProseBloc
     if region.ocr_text and len(region.ocr_text) > 20:
         hint = f"\n\nOCR hint (may be noisy; prefer what you see in the image):\n{region.ocr_text[:1500]}"
     try:
-        raw = _vision(region.image_bytes, _PROMPT_TABLE + hint, max_tokens=3000)
+        raw = _vision(
+            region.image_bytes,
+            _PROMPT_TABLE + hint + _document_context_hint(region),
+            max_tokens=3000,
+        )
     except Exception as e:
         logger.warning(f"TABLE vision failed p{region.page} img{region.index}: {e}")
         return strategy_ocr(region)
@@ -1071,7 +1274,11 @@ def looks_like_refusal(text: str) -> bool:
 
 def strategy_illustration(region: ImageRegion) -> tuple[list[SheetGrid], list[ProseBlock]]:
     """Always-on descriptive path for photos, art, logos, and soft content."""
-    prompt = _PROMPT_ILLUSTRATION.format(page=region.page + 1) + _ocr_hint_block(region)
+    prompt = (
+        _PROMPT_ILLUSTRATION.format(page=region.page + 1)
+        + _ocr_hint_block(region)
+        + _document_context_hint(region)
+    )
     try:
         raw = _vision(region.image_bytes, prompt)
     except Exception as e:
@@ -1116,12 +1323,20 @@ def _vision_with_illustration_fallback(
 
 
 def strategy_network(region: ImageRegion) -> tuple[list[SheetGrid], list[ProseBlock]]:
-    prompt = _PROMPT_NETWORK.format(page=region.page + 1) + _ocr_hint_block(region)
+    prompt = (
+        _PROMPT_NETWORK.format(page=region.page + 1)
+        + _ocr_hint_block(region)
+        + _document_context_hint(region)
+    )
     return _vision_with_illustration_fallback(region, prompt, tag="network")
 
 
 def strategy_process(region: ImageRegion) -> tuple[list[SheetGrid], list[ProseBlock]]:
-    prompt = _PROMPT_PROCESS.format(page=region.page + 1) + _ocr_hint_block(region)
+    prompt = (
+        _PROMPT_PROCESS.format(page=region.page + 1)
+        + _ocr_hint_block(region)
+        + _document_context_hint(region)
+    )
     return _vision_with_illustration_fallback(region, prompt, tag="process")
 
 
@@ -1197,6 +1412,146 @@ def merge_prose_by_page(
     return [b for _, b in indexed]
 
 
+def _looks_like_pdf_heading(block: ProseBlock, page_blocks: list[ProseBlock]) -> bool:
+    text = block.text.strip()
+    if not text or len(text) > 180:
+        return False
+    sizes = sorted(b.font_size for b in page_blocks if b.font_size and b.font_size > 0)
+    median = sizes[len(sizes) // 2] if sizes else 0
+    if block.font_size and median and block.font_size >= median * 1.15:
+        return True
+    return bool(re.match(r"(?i)^(section|chapter|appendix)\s+[\w.:-]+", text))
+
+
+def attach_pdf_context(
+    regions: list[ImageRegion],
+    extracted: ExtractedPdf,
+) -> None:
+    """Attach nearby positioned PDF text before vision analysis."""
+    layout_by_page: dict[int, list[ProseBlock]] = {}
+    prose_by_page: dict[int, list[ProseBlock]] = {}
+    for block in extracted.layout_blocks:
+        layout_by_page.setdefault(block.page, []).append(block)
+    for block in extracted.prose_blocks:
+        prose_by_page.setdefault(block.page, []).append(block)
+
+    for region in regions:
+        blocks = sorted(
+            layout_by_page.get(region.page, []),
+            key=lambda b: (b.bbox[1], b.bbox[0]) if b.bbox else (0, 0),
+        )
+        if not blocks or not region.bbox or region.source == "page_render":
+            page_text = "\n".join(b.text for b in prose_by_page.get(region.page, []))
+            region.following_text = page_text[:1200]
+            headings = [b.text for b in blocks if _looks_like_pdf_heading(b, blocks)]
+            if headings:
+                region.section_path = [headings[0]]
+            continue
+
+        _, top, _, bottom = region.bbox
+        before = [
+            b for b in blocks if b.bbox and b.bbox[3] <= top + 3
+        ]
+        after = [
+            b for b in blocks if b.bbox and b.bbox[1] >= bottom - 3
+        ]
+        region.previous_text = "\n".join(b.text for b in before[-3:])[-1200:]
+        region.following_text = "\n".join(b.text for b in after[:3])[:1200]
+
+        caption_candidates = before[-2:] + after[:2]
+        caption_candidates.sort(key=lambda b: min(
+            abs((b.bbox[3] if b.bbox else top) - top),
+            abs((b.bbox[1] if b.bbox else bottom) - bottom),
+        ))
+        for candidate in caption_candidates:
+            if re.match(r"(?i)^\s*(figure|fig\.)\s*\d+", candidate.text):
+                region.caption = candidate.text.strip()
+                break
+
+        headings = [
+            b for b in before if _looks_like_pdf_heading(b, blocks)
+        ]
+        if headings:
+            region.section_path = [headings[-1].text.strip()]
+
+
+def merge_pdf_prose_by_position(
+    extracted: ExtractedPdf,
+    figures: list[FigureRecord],
+) -> list[ProseBlock]:
+    """Interleave digital PDF text and figures using top-left page coordinates."""
+    base_by_page: dict[int, list[ProseBlock]] = {}
+    layout_by_page: dict[int, list[ProseBlock]] = {}
+    figures_by_page: dict[int, list[FigureRecord]] = {}
+    for block in extracted.prose_blocks:
+        base_by_page.setdefault(block.page, []).append(block)
+    for block in extracted.layout_blocks:
+        layout_by_page.setdefault(block.page, []).append(block)
+    for record in figures:
+        if record.page is not None:
+            figures_by_page.setdefault(record.page, []).append(record)
+
+    pages = sorted(set(base_by_page) | set(layout_by_page) | set(figures_by_page))
+    merged: list[ProseBlock] = []
+    for page in pages:
+        page_figures = figures_by_page.get(page, [])
+        page_layout = layout_by_page.get(page, [])
+        if not page_figures:
+            merged.extend(base_by_page.get(page, []))
+            continue
+        if not page_layout:
+            # Scanned/full-page figures have page-level, not object-level,
+            # placement. Put the page description before OCR prose.
+            for record in page_figures:
+                merged.append(ProseBlock(
+                    text=record.description, page=page, bbox=record.bbox,
+                    content_type="figure", figure_id=record.figure_id,
+                ))
+            merged.extend(base_by_page.get(page, []))
+            continue
+
+        events: list[tuple[float, float, str, object]] = []
+        for block in page_layout:
+            if not block.bbox:
+                continue
+            cx = (block.bbox[0] + block.bbox[2]) / 2
+            cy = (block.bbox[1] + block.bbox[3]) / 2
+            inside_figure = any(
+                record.bbox
+                and record.source == "embedded"
+                and record.bbox[0] <= cx <= record.bbox[2]
+                and record.bbox[1] <= cy <= record.bbox[3]
+                for record in page_figures
+            )
+            if not inside_figure:
+                events.append((block.bbox[1], block.bbox[0], "text", block))
+        for record in page_figures:
+            top = record.bbox[1] if record.bbox else float("inf")
+            left = record.bbox[0] if record.bbox else float("inf")
+            events.append((top, left, "figure", record))
+        events.sort(key=lambda event: (event[0], event[1], event[2] != "figure"))
+
+        pending_text: list[str] = []
+
+        def flush_text() -> None:
+            if pending_text:
+                merged.append(ProseBlock(text="\n".join(pending_text), page=page))
+                pending_text.clear()
+
+        for _, _, event_type, value in events:
+            if event_type == "text":
+                pending_text.append(value.text)
+            else:
+                flush_text()
+                record = value
+                merged.append(ProseBlock(
+                    text=record.description, page=page, bbox=record.bbox,
+                    content_type="figure", figure_id=record.figure_id,
+                ))
+        flush_text()
+    return merged
+
+
 def pages_with_digital_tables(extracted: ExtractedPdf) -> set[int]:
     """Page indices that already have pdfplumber tables (avoid double table extract)."""
     pages: set[int] = set()
@@ -1226,8 +1581,25 @@ def process_image_regions(
 
     digital_table_pages = digital_table_pages or set()
     max_n = max(0, settings.figure_max_per_doc)
-    regions = sorted(regions, key=lambda r: r.width * r.height, reverse=True)[:max_n]
     regions = sorted(regions, key=lambda r: (r.page, r.index))
+    # The budget applies to distinct image content, not placements. Repeated
+    # figures reuse analysis but remain present everywhere they occur.
+    selected: list[ImageRegion] = []
+    selected_hashes: set[str] = set()
+    for region in regions:
+        digest = region.content_hash or f"placement:{region.page}:{region.index}"
+        if digest in selected_hashes:
+            selected.append(region)
+            continue
+        if max_n and len(selected_hashes) >= max_n:
+            result.figures_skipped += 1
+            continue
+        selected_hashes.add(digest)
+        selected.append(region)
+    regions = selected
+    analysis_cache: dict[
+        str, tuple[ImageKind, str, list[SheetGrid], list[ProseBlock]]
+    ] = {}
 
     for i, region in enumerate(regions):
         if progress_cb:
@@ -1236,16 +1608,24 @@ def process_image_regions(
             except Exception:
                 pass
 
-        if settings.figure_ocr_first:
-            region.ocr_text = ocr_image(region.image_bytes)
+        cached = analysis_cache.get(region.content_hash) if region.content_hash else None
+        if cached:
+            kind, cached_ocr, cached_grids, cached_prose = cached
+            region.ocr_text = cached_ocr
+            # Structured image tables are stored once; prose is placed at every
+            # occurrence with placement-specific context below.
+            grids, prose = [], list(cached_prose)
+        else:
+            if settings.figure_ocr_first:
+                region.ocr_text = ocr_image(region.image_bytes)
 
-        kind = classify_region(region)
-        if kind == ImageKind.OTHER and region.width * region.height > 80_000:
-            vkind = _vision_classify(region)
-            if vkind is not None and vkind != ImageKind.TEXT_SCAN:
-                kind = vkind
-            elif vkind == ImageKind.TEXT_SCAN and looks_like_diagram(region, region.ocr_text or ""):
-                kind = ImageKind.PROCESS
+            kind = classify_region(region)
+            if kind == ImageKind.OTHER and region.width * region.height > 80_000:
+                vkind = _vision_classify(region)
+                if vkind is not None and vkind != ImageKind.TEXT_SCAN:
+                    kind = vkind
+                elif vkind == ImageKind.TEXT_SCAN and looks_like_diagram(region, region.ocr_text or ""):
+                    kind = ImageKind.PROCESS
 
         if (
             kind == ImageKind.TABLE
@@ -1266,14 +1646,24 @@ def process_image_regions(
             f"source={region.source} size={region.width}x{region.height} "
             f"bytes={len(region.image_bytes)} ocr_preview={ocr_preview!r}"
         )
-        try:
-            grids, prose = run_strategy(region)
-        except Exception as e:
-            logger.warning(f"figure strategy failed p{region.page} img{region.index}: {e}")
-            result.figures_skipped += 1
-            continue
+        if not cached:
+            try:
+                grids, prose = run_strategy(region)
+            except Exception as e:
+                logger.warning(f"figure strategy failed p{region.page} img{region.index}: {e}")
+                result.figures_skipped += 1
+                continue
+            if region.content_hash:
+                analysis_cache[region.content_hash] = (
+                    region.kind, region.ocr_text, list(grids), list(prose),
+                )
 
-        if grids or prose:
+        placed_prose = [
+            ProseBlock(text=_format_figure_for_placement(region, b.text), page=b.page)
+            for b in prose if b.text.strip()
+        ]
+
+        if grids or placed_prose:
             for g in grids:
                 # Namespace sheet names by source for Office docs
                 if region.source in ("docx", "xlsx", "pptx") and not g.sheet_name.startswith(region.source):
@@ -1282,13 +1672,35 @@ def process_image_regions(
                     f"figure p{region.page} img{region.index}: TABLE grid "
                     f"{g.sheet_name} rows={len(g.rows)} cols={len(g.rows[0]) if g.rows else 0}"
                 )
-            for b in prose:
+            for b in placed_prose:
                 pprev = b.text.replace("\n", " \\n ")[:350]
                 logger.info(
                     f"figure p{region.page} img{region.index}: prose ({len(b.text)} chars): {pprev}"
                 )
             result.table_grids.extend(grids)
-            result.prose_blocks.extend(prose)
+            result.prose_blocks.extend(placed_prose)
+            description = "\n\n".join(b.text for b in placed_prose if b.text.strip())
+            if description:
+                result.figure_records.append(FigureRecord(
+                    figure_id=region.figure_id or f"p{region.page + 1}-img{region.index + 1}",
+                    description=description,
+                    kind=region.kind.value,
+                    content_hash=region.content_hash,
+                    body_index=region.body_index,
+                    section_path=list(region.section_path),
+                    caption=region.caption,
+                    alt_text=region.alt_text,
+                    previous_text=region.previous_text,
+                    following_text=region.following_text,
+                    page=(
+                        region.page
+                        if region.source in ("embedded", "page_render")
+                        else None
+                    ),
+                    bbox=region.bbox,
+                    source=region.source,
+                    slide=(region.page if region.source == "pptx" else None),
+                ))
             result.figures_used += 1
         else:
             result.figures_skipped += 1
@@ -1326,6 +1738,7 @@ def enrich_pdf_with_figures(
         logger.info(f"figure extract: no image regions in {path.name}")
         return extracted
 
+    attach_pdf_context(regions, extracted)
     enrich = process_image_regions(
         regions,
         path_name=path.name,
@@ -1335,7 +1748,11 @@ def enrich_pdf_with_figures(
     if not enrich.table_grids and not enrich.prose_blocks:
         return extracted
 
-    merged_prose = merge_prose_by_page(extracted.prose_blocks, enrich.prose_blocks)
+    merged_prose = (
+        merge_pdf_prose_by_position(extracted, enrich.figure_records)
+        if enrich.figure_records
+        else merge_prose_by_page(extracted.prose_blocks, enrich.prose_blocks)
+    )
     existing_names = {g.sheet_name for g in extracted.table_grids}
     extra_grids = list(enrich.table_grids)
     for g in extra_grids:
@@ -1355,6 +1772,65 @@ def enrich_pdf_with_figures(
         prose_blocks=merged_prose,
         table_grids=list(extracted.table_grids) + extra_grids,
         method=method,
+        layout_blocks=list(extracted.layout_blocks),
+        figure_records=list(enrich.figure_records),
+    )
+
+
+def enrich_office_document_with_figures(
+    path: Path | str,
+    base_text: str,
+    *,
+    document_blocks=None,
+    progress_cb=None,
+) -> OfficeFigureResult:
+    """Return ordered Office prose, structured grids, and figure records.
+
+    DOCX and PPTX descriptions are rendered at their source anchors. Other Office
+    formats retain the figure appendix until they gain an ordered block parser.
+    """
+    if not settings.figure_extraction_enabled:
+        return OfficeFigureResult(enriched_text=base_text or "")
+
+    path = Path(path)
+    try:
+        regions = extract_image_regions_for_path(path)
+    except Exception as e:
+        logger.warning(f"figure extract: Office region scan failed for {path.name}: {e}")
+        return OfficeFigureResult(enriched_text=base_text or "")
+
+    if not regions:
+        logger.info(f"figure extract: no image regions in {path.name}")
+        return OfficeFigureResult(enriched_text=base_text or "")
+
+    enrich = process_image_regions(
+        regions, path_name=path.name, progress_cb=progress_cb,
+    )
+    figure_text = "\n\n".join(b.text for b in enrich.prose_blocks if b.text.strip())
+    body = (base_text or "").strip()
+    if path.suffix.lower() in (".docx", ".pptx") and enrich.figure_records:
+        try:
+            from src.ingestion.parser import parse_document, render_document_blocks
+
+            blocks = document_blocks
+            if blocks is None:
+                blocks = parse_document(path).blocks
+            by_id = {record.figure_id: record.description for record in enrich.figure_records}
+            enriched_text = render_document_blocks(blocks, by_id)
+        except Exception as e:
+            logger.warning(f"figure extract: ordered Office render failed: {e}")
+            enriched_text = body + ("\n\n## Embedded figures\n\n" + figure_text if body else figure_text)
+    elif figure_text and body:
+        enriched = body + "\n\n## Embedded figures\n\n" + figure_text
+        enriched_text = enriched
+    elif figure_text:
+        enriched_text = figure_text
+    else:
+        enriched_text = body
+    return OfficeFigureResult(
+        enriched_text=enriched_text,
+        table_grids=list(enrich.table_grids),
+        figures=list(enrich.figure_records),
     )
 
 
@@ -1362,40 +1838,17 @@ def enrich_text_with_figures(
     path: Path | str,
     base_text: str,
     *,
+    document_blocks=None,
     progress_cb=None,
 ) -> tuple[str, list[SheetGrid]]:
-    """Enrich Word/Excel/other Office text with figure prose + optional image tables.
-
-    Returns ``(enriched_text, table_grids)``. Figure blocks are appended after
-    body text (document order of images is preserved in the figure section).
-    Fail-open: returns ``(base_text, [])`` on errors / disabled / no images.
-    """
-    if not settings.figure_extraction_enabled:
-        return base_text or "", []
-
-    path = Path(path)
-    try:
-        regions = extract_image_regions_for_path(path)
-    except Exception as e:
-        logger.warning(f"figure extract: Office region scan failed for {path.name}: {e}")
-        return base_text or "", []
-
-    if not regions:
-        logger.info(f"figure extract: no image regions in {path.name}")
-        return base_text or "", []
-
-    enrich = process_image_regions(
-        regions, path_name=path.name, progress_cb=progress_cb,
+    """Compatibility wrapper returning the historical two-tuple."""
+    result = enrich_office_document_with_figures(
+        path,
+        base_text,
+        document_blocks=document_blocks,
+        progress_cb=progress_cb,
     )
-    figure_text = "\n\n".join(b.text for b in enrich.prose_blocks if b.text.strip())
-    body = (base_text or "").strip()
-    if figure_text and body:
-        enriched = body + "\n\n## Embedded figures\n\n" + figure_text
-    elif figure_text:
-        enriched = figure_text
-    else:
-        enriched = body
-    return enriched, list(enrich.table_grids)
+    return result.enriched_text, result.table_grids
 
 
 async def enrich_pdf_with_figures_async(
@@ -1416,10 +1869,27 @@ async def enrich_text_with_figures_async(
     path: Path | str,
     base_text: str,
     *,
+    document_blocks=None,
     progress_cb=None,
 ) -> tuple[str, list[SheetGrid]]:
     import asyncio
 
     return await asyncio.to_thread(
-        enrich_text_with_figures, path, base_text, progress_cb=progress_cb
+        enrich_text_with_figures, path, base_text,
+        document_blocks=document_blocks, progress_cb=progress_cb,
+    )
+
+
+async def enrich_office_document_with_figures_async(
+    path: Path | str,
+    base_text: str,
+    *,
+    document_blocks=None,
+    progress_cb=None,
+) -> OfficeFigureResult:
+    import asyncio
+
+    return await asyncio.to_thread(
+        enrich_office_document_with_figures, path, base_text,
+        document_blocks=document_blocks, progress_cb=progress_cb,
     )

@@ -14,6 +14,14 @@ class ChunkMetadata(BaseModel):
     page: int | None = None
     speaker: str | None = None
     utterance_type: str | None = None
+    content_type: str = "text"  # "text" | "figure" | "table"
+    figure_id: str | None = None
+    figure_kind: str | None = None
+    body_index: int | None = None
+    section_title: str | None = None
+    caption: str | None = None
+    source_locator: str | None = None
+    slide: int | None = None
 
 
 class RetrievedChunk(BaseModel):
@@ -31,3 +39,7 @@ class Citation(BaseModel):
     snippet: str
     relevance: float
     source_url: str = ""
+    figure_id: str | None = None
+    section_title: str | None = None
+    caption: str | None = None
+    slide: int | None = None

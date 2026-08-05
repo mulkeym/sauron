@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 class ProseBlock:
     text: str
     page: int
+    bbox: tuple[float, float, float, float] | None = None
+    font_size: float | None = None
+    content_type: str = "text"
+    figure_id: str = ""
 
 
 @dataclass
@@ -27,6 +31,10 @@ class ExtractedPdf:
     prose_blocks: list[ProseBlock] = field(default_factory=list)
     table_grids: list[SheetGrid] = field(default_factory=list)
     method: str = "digital"          # "digital" | "ocr" | "mixed"
+    # Positioned digital text lines used to place figures between surrounding
+    # prose. The public prose stream remains page-sized until enrichment.
+    layout_blocks: list[ProseBlock] = field(default_factory=list)
+    figure_records: list = field(default_factory=list)
 
 
 def normalize_grid(raw_rows: list[list], sheet_name: str) -> SheetGrid:
@@ -94,17 +102,61 @@ def _page_tables(page, page_no: int) -> list[SheetGrid]:
     return grids
 
 
-def _page_prose(page) -> str:
+def _page_layout_lines(page, page_no: int) -> list[ProseBlock]:
+    """Positioned text lines outside table regions, in page reading order."""
+    table_bboxes = [t.bbox for t in (page.find_tables() or [])]
+    lines: list[ProseBlock] = []
+    try:
+        raw_lines = page.extract_text_lines(return_chars=True) or []
+    except Exception:
+        raw_lines = []
+    for line in raw_lines:
+        text = (line.get("text") or "").strip()
+        if not text:
+            continue
+        x0 = float(line.get("x0", 0) or 0)
+        top = float(line.get("top", 0) or 0)
+        x1 = float(line.get("x1", x0) or x0)
+        bottom = float(line.get("bottom", top) or top)
+        inside_table = False
+        for (bx0, btop, bx1, bbot) in table_bboxes:
+            cx, cy = (x0 + x1) / 2, (top + bottom) / 2
+            if bx0 <= cx <= bx1 and btop <= cy <= bbot:
+                inside_table = True
+                break
+        if inside_table:
+            continue
+        chars = line.get("chars") or []
+        sizes = [float(c.get("size", 0) or 0) for c in chars if c.get("size")]
+        font_size = max(sizes) if sizes else None
+        lines.append(ProseBlock(
+            text=text, page=page_no, bbox=(x0, top, x1, bottom),
+            font_size=font_size,
+        ))
+    lines.sort(key=lambda b: (
+        b.bbox[1] if b.bbox else 0,
+        b.bbox[0] if b.bbox else 0,
+    ))
+    return lines
+
+
+def _page_prose(page, page_no: int = 0) -> str:
     """Page text with detected-table regions removed so prose isn't duplicated."""
+    lines = _page_layout_lines(page, page_no)
+    if lines:
+        return "\n".join(line.text for line in lines)
+    # Compatibility fallback for unusual PDFs where line extraction fails.
     table_bboxes = [t.bbox for t in (page.find_tables() or [])]
     if not table_bboxes:
         return page.extract_text() or ""
+
     def outside_tables(obj):
         x0, top = obj.get("x0", 0), obj.get("top", 0)
-        for (bx0, btop, bx1, bbot) in table_bboxes:
-            if bx0 <= x0 <= bx1 and btop <= top <= bbot:
-                return False
-        return True
+        return not any(
+            bx0 <= x0 <= bx1 and btop <= top <= bbot
+            for (bx0, btop, bx1, bbot) in table_bboxes
+        )
+
     return page.filter(outside_tables).extract_text() or ""
 
 
@@ -170,6 +222,7 @@ def extract_pdf(path: Path) -> ExtractedPdf:
     import pdfplumber
 
     prose: list[ProseBlock] = []
+    layout: list[ProseBlock] = []
     grids: list[SheetGrid] = []
     methods: set[str] = set()
     with pdfplumber.open(str(path)) as pdf:
@@ -178,7 +231,11 @@ def extract_pdf(path: Path) -> ExtractedPdf:
             if len(text.strip()) >= DIGITAL_MIN_CHARS:
                 methods.add("digital")
                 grids.extend(_page_tables(page, i))
-                body = _page_prose(page).strip()
+                page_layout = _page_layout_lines(page, i)
+                layout.extend(page_layout)
+                body = "\n".join(block.text for block in page_layout).strip()
+                if not body:
+                    body = _page_prose(page, i).strip()
                 if body:
                     prose.append(ProseBlock(text=body, page=i))
             else:
@@ -189,4 +246,7 @@ def extract_pdf(path: Path) -> ExtractedPdf:
 
     method = "mixed" if len(methods) > 1 else (methods.pop() if methods else "digital")
     stitched = stitch_tables(grids)
-    return ExtractedPdf(prose_blocks=prose, table_grids=stitched, method=method)
+    return ExtractedPdf(
+        prose_blocks=prose, table_grids=stitched, method=method,
+        layout_blocks=layout,
+    )

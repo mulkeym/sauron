@@ -42,3 +42,12 @@ def test_extract_scanned_page_parses_html_tables(monkeypatch):
     assert any("Monthly basic pay" in b.text for b in blocks)
     assert len(grids) == 1
     assert ["E-1", "2017"] in grids[0].rows
+
+
+def test_digital_pdf_exposes_positioned_text_lines():
+    sample = Path("test_fixtures/sample.pdf")
+    result = extract_pdf(sample)
+    assert result.layout_blocks
+    assert all(block.bbox is not None for block in result.layout_blocks)
+    assert all(block.page == 0 for block in result.layout_blocks)
+    assert any("Expense Reporting" in block.text for block in result.layout_blocks)

@@ -907,7 +907,10 @@ async def playground_start(question: str = Form(""), play_user: str = Form("mike
                 citations_html = ""
                 for i, c in enumerate(citations, 1):
                     page = f' &mdash; page {c.get("page", "")}' if c.get("page") else ''
-                    citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.get("filename", "")}</span>{page}<span class="score"> &mdash; relevance: {c.get("relevance", 0):.2f}</span><div class="snippet">{c.get("snippet", "")[:300]}</div></div>'
+                    figure = f' &mdash; figure {c.get("figure_id")}' if c.get("figure_id") else ''
+                    slide = f' &mdash; slide {c.get("slide")}' if c.get("slide") else ''
+                    section = f' &mdash; {c.get("section_title")}' if c.get("section_title") else ''
+                    citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.get("filename", "")}</span>{page}{slide}{figure}{section}<span class="score"> &mdash; relevance: {c.get("relevance", 0):.2f}</span><div class="snippet">{c.get("snippet", "")[:300]}</div></div>'
 
                 result_html = f"""<div class="trace-panel">
                 <div class="trace-header">
@@ -1249,11 +1252,14 @@ async def playground_start(question: str = Form(""), play_user: str = Form("mike
             citations_html = ""
             for i, c in enumerate(citations, 1):
                 page = f' &mdash; page {c.page}' if c.page else ''
+                figure = f' &mdash; figure {c.figure_id}' if c.figure_id else ''
+                slide = f' &mdash; slide {c.slide}' if c.slide else ''
+                section = f' &mdash; {c.section_title}' if c.section_title else ''
                 if c.source_url:
                     name_display = f'<a href="{c.source_url}" target="_blank" style="color:#3b82f6;">[{i}] {c.filename}</a>'
                 else:
                     name_display = f'[{i}] {c.filename}'
-                citations_html += f'<div class="citation-card"><span class="filename">{name_display}</span>{page}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
+                citations_html += f'<div class="citation-card"><span class="filename">{name_display}</span>{page}{slide}{figure}{section}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
 
             result_html = f"""{trace_html}
             <div class="result-card">
@@ -1270,7 +1276,9 @@ async def playground_start(question: str = Form(""), play_user: str = Form("mike
                 citation_dicts = [
                     {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
                      "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
-                     "relevance": c.relevance}
+                     "relevance": c.relevance, "figure_id": c.figure_id,
+                     "section_title": c.section_title, "caption": c.caption,
+                     "slide": c.slide}
                     for c in citations
                 ]
                 source_ids = list({c.doc_id for c in citations})
@@ -1507,6 +1515,9 @@ async def playground_query(question: str = Form(""), play_user: str = Form("mike
             <div class="citation-card">
                 <span class="filename">[{i}] {c.filename}</span>
                 {f'<span class="score"> &mdash; page {c.page}</span>' if c.page else ''}
+                {f'<span class="score"> &mdash; slide {c.slide}</span>' if c.slide else ''}
+                {f'<span class="score"> &mdash; figure {c.figure_id}</span>' if c.figure_id else ''}
+                {f'<span class="score"> &mdash; {c.section_title}</span>' if c.section_title else ''}
                 <span class="score"> &mdash; relevance: {c.relevance:.2f}</span>
                 <div class="snippet">{c.snippet[:300]}</div>
             </div>"""

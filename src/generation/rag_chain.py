@@ -42,6 +42,10 @@ def rag_query(question, user_groups, vector_store, top_k=10):
         source = f"[{i}] {chunk.metadata.filename}"
         if chunk.metadata.page is not None:
             source += f", page {chunk.metadata.page}"
+        if chunk.metadata.figure_id:
+            source += f", figure {chunk.metadata.figure_id}"
+        if chunk.metadata.slide is not None:
+            source += f", slide {chunk.metadata.slide}"
         context_parts.append(f"{source}:\n{chunk.text}")
     context = "\n\n".join(context_parts)
     user_prompt = USER_PROMPT_TEMPLATE.format(context=context, question=question)
@@ -55,6 +59,10 @@ def rag_query(question, user_groups, vector_store, top_k=10):
             page=c.metadata.page,
             snippet=c.text[:200],
             relevance=c.score,
+            figure_id=c.metadata.figure_id,
+            section_title=c.metadata.section_title,
+            caption=c.metadata.caption,
+            slide=c.metadata.slide,
         )
         for c in chunks
     ]
@@ -81,6 +89,9 @@ async def agent_query_streamed(
                 doc_type=c.get("doc_type", ""), chunk_index=c.get("chunk_index", 0),
                 page=c.get("page"), snippet=c.get("snippet", ""),
                 relevance=c.get("relevance", 0.0),
+                figure_id=c.get("figure_id"), section_title=c.get("section_title"),
+                caption=c.get("caption"),
+                slide=c.get("slide"),
             )
             for c in cached.get("citations", [])
         ]
@@ -101,7 +112,9 @@ async def agent_query_streamed(
             citation_dicts = [
                 {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
                  "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
-                 "relevance": c.relevance}
+                 "relevance": c.relevance, "figure_id": c.figure_id,
+                 "section_title": c.section_title, "caption": c.caption,
+                 "slide": c.slide}
                 for c in result.citations
             ]
             source_ids = list({c.doc_id for c in result.citations})

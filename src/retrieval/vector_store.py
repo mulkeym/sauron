@@ -85,6 +85,14 @@ class VectorStore:
             pa.field("page", pa.int32()),
             pa.field("speaker", pa.string()),
             pa.field("utterance_type", pa.string()),
+            pa.field("content_type", pa.string()),
+            pa.field("figure_id", pa.string()),
+            pa.field("figure_kind", pa.string()),
+            pa.field("body_index", pa.int32()),
+            pa.field("section_title", pa.string()),
+            pa.field("caption", pa.string()),
+            pa.field("source_locator", pa.string()),
+            pa.field("slide", pa.int32()),
         ])
 
     def _ensure_table(self):
@@ -93,8 +101,35 @@ class VectorStore:
         except Exception:
             table = self.db.create_table(self.table_name, schema=self._build_schema())
             logger.info(f"Created LanceDB table '{self.table_name}'")
+        self._ensure_figure_columns(table)
         self._ensure_indexes(table)
         return table
+
+    def _ensure_figure_columns(self, table):
+        """Add nullable figure provenance columns to pre-existing tables."""
+        try:
+            existing = set(table.schema.names)
+            expressions = {
+                "content_type": "'text'",
+                "figure_id": "CAST(NULL AS STRING)",
+                "figure_kind": "CAST(NULL AS STRING)",
+                "body_index": "CAST(NULL AS INT)",
+                "section_title": "CAST(NULL AS STRING)",
+                "caption": "CAST(NULL AS STRING)",
+                "source_locator": "CAST(NULL AS STRING)",
+                "slide": "CAST(NULL AS INT)",
+            }
+            missing = {name: expr for name, expr in expressions.items() if name not in existing}
+            if missing:
+                table.add_columns(missing)
+                logger.info(
+                    "Added figure provenance columns to LanceDB table '%s': %s",
+                    self.table_name, ", ".join(missing),
+                )
+        except Exception as e:
+            # Reads remain available even if an older LanceDB build cannot alter
+            # the table. upsert filters fields to the physical schema below.
+            logger.warning(f"Could not add figure provenance columns: {e}")
 
     def _ensure_indexes(self, table):
         """Create FTS and scalar indexes if not present."""
@@ -151,9 +186,18 @@ class VectorStore:
                 start_char=row.get("start_char", 0),
                 acl_groups=row["acl_groups"],
                 category=row.get("category", ""),
+                chunk_size_tier=row.get("chunk_size_tier", "medium"),
                 page=row.get("page"),
                 speaker=row.get("speaker"),
                 utterance_type=row.get("utterance_type"),
+                content_type=row.get("content_type") or "text",
+                figure_id=row.get("figure_id"),
+                figure_kind=row.get("figure_kind"),
+                body_index=row.get("body_index"),
+                section_title=row.get("section_title"),
+                caption=row.get("caption"),
+                source_locator=row.get("source_locator"),
+                slide=row.get("slide"),
             )
             # LanceDB returns _distance (lower=better) or _relevance_score
             score = row.get("_relevance_score", 0.0)
@@ -164,6 +208,7 @@ class VectorStore:
 
     def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:
         records = []
+        schema_names = set(self.table.schema.names)
         for text, vector, meta in zip(texts, vectors, metadatas):
             record = meta.model_dump()
             record["id"] = str(uuid.uuid4())
@@ -173,7 +218,7 @@ class VectorStore:
             record.setdefault("page", None)
             record.setdefault("speaker", None)
             record.setdefault("utterance_type", None)
-            records.append(record)
+            records.append({k: v for k, v in record.items() if k in schema_names})
         self.table.add(records)
 
     def search(self, vector: list[float], user_groups: list[str], top_k: int = 10, tier: str | None = None, doc_ids: list[str] | None = None) -> list[RetrievedChunk]:
@@ -291,6 +336,10 @@ class VectorStore:
         for c in chunks:
             key = (c.metadata.doc_id, c.metadata.chunk_index)
             existing.add(key)
+            # Dedicated figure chunks already carry their preceding/following
+            # paragraphs. Their synthetic index is not a body-text neighbor.
+            if c.metadata.content_type == "figure":
+                continue
             doc_chunk_map.setdefault(c.metadata.doc_id, set()).add(c.metadata.chunk_index)
 
         # Calculate needed neighbor indexes
@@ -323,6 +372,11 @@ class VectorStore:
                         start_char=row.get("start_char", 0), acl_groups=row["acl_groups"],
                         category=row.get("category", ""), page=row.get("page"),
                         speaker=row.get("speaker"), utterance_type=row.get("utterance_type"),
+                        content_type=row.get("content_type") or "text",
+                        figure_id=row.get("figure_id"), figure_kind=row.get("figure_kind"),
+                        body_index=row.get("body_index"), section_title=row.get("section_title"),
+                        caption=row.get("caption"), source_locator=row.get("source_locator"),
+                        slide=row.get("slide"),
                     )
                     new_chunks.append(RetrievedChunk(text=row["text"], score=0.4, metadata=meta))
             except Exception as e:

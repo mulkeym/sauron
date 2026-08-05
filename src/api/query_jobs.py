@@ -193,7 +193,9 @@ class QueryJobQueue:
                 citation_dicts = [
                     {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
                      "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
-                     "relevance": c.relevance}
+                     "relevance": c.relevance, "figure_id": c.figure_id,
+                     "section_title": c.section_title, "caption": c.caption,
+                     "slide": c.slide}
                     for c in result.citations
                 ]
                 self.complete(token, answer=result.answer, citations=citation_dicts,

@@ -21,7 +21,7 @@ async def query(request: QueryRequest, user: UserContext = Depends(require_auth)
     )
     return QueryResponse(
         answer=result.answer,
-        citations=[CitationResponse(doc_id=c.doc_id, filename=c.filename, doc_type=c.doc_type, chunk_index=c.chunk_index, page=c.page, snippet=c.snippet, relevance=c.relevance) for c in result.citations],
+        citations=[CitationResponse(doc_id=c.doc_id, filename=c.filename, doc_type=c.doc_type, chunk_index=c.chunk_index, page=c.page, snippet=c.snippet, relevance=c.relevance, figure_id=c.figure_id, section_title=c.section_title, caption=c.caption, slide=c.slide) for c in result.citations],
         cached=result.cached,
         cached_query=result.cached_query,
     )

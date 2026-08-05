@@ -154,7 +154,7 @@ The knowledge graph explorer offers two renderers selectable via a dropdown:
 Parse -> Categorize -> Generate Summary -> Chunk (4 tiers) -> Embed -> Store -> Extract Entities
 ```
 
-- **Parse**: PDF, DOCX, XLSX, CSV, Markdown, plain text, meeting transcripts
+- **Parse**: PDF, DOCX, PPTX, XLSX, CSV, Markdown, plain text, meeting transcripts
 - **Categorize**: LLM matches against existing categories or proposes new ones
 - **Extract Metadata**: LLM extracts structured metadata (entities, people, organizations, locations, dates, amounts, identifiers, topics, procedures, action items, key facts) and a summary in a single call
 - **Chunk**: 4 tiers stored in parallel, plus a dedicated summary embedding per document
@@ -218,28 +218,30 @@ Every document has an `acl_groups` field (e.g., `["finance", "executives"]`). Wh
 
 ACL groups can be set during upload or inherited from the document's category.
 
-### Embedded figures (images in PDFs, Word, Excel)
+### Embedded figures (images in PDFs, Word, PowerPoint, Excel)
 
 When `FIGURE_EXTRACTION_ENABLED=true` (default), ingest also extracts embedded images from:
 
 | Format | Image sources |
 |--------|----------------|
-| **PDF** | Embedded images + full-page render for text-sparse pages |
-| **Word (.docx)** | `word/media/*` (and relationship order when available) |
+| **PDF** | Embedded images with page bounds + full-page render for text-sparse pages |
+| **Word (.docx)** | Drawing relationships walked at their paragraph/table anchors |
 | **Excel (.xlsx/.xlsm)** | Sheet drawings + `xl/media/*` |
-| **PowerPoint (.pptx)** | `ppt/media/*` collector ready (parser/chunk path still basic) |
+| **PowerPoint (.pptx)** | Slide-positioned pictures with captions, neighboring text, speaker notes, tables, and chart data |
 
 For each region the pipeline:
 
-1. Runs **OCR** (Tesseract) and classifies: table / network / process / text / other  
+1. Runs **OCR** (Tesseract) and classifies: table / network / process / text / other
 2. Applies a strategy (vision + Phase-A OCR identifier merge when useful):
-   - **table** — markdown grid → DuckDB path  
-   - **network** / **process** — structured diagram description  
-   - **text_scan** — OCR only (linear prose)  
-3. Merges figure prose into the text stream **before** multi-tier chunking  
-4. Feeds the **same enriched text** to LightRAG (PDF/DOCX; Excel figures only when present)
+   - **table** — markdown grid → DuckDB path
+   - **network** / **process** — structured diagram description
+   - **text_scan** — OCR only (linear prose)
+3. For Word, PowerPoint, and digital PDFs, passes section/slide context, captions, and neighboring text to vision as disambiguating context
+4. Merges figure prose into the text stream **before** multi-tier chunking
+5. Stores a dedicated figure chunk with its locator and local context
+6. Feeds the **same enriched text** to LightRAG (PDF/DOCX/PPTX; Excel figures only when present)
 
-Word body text still comes from paragraphs; figures are appended under `## Embedded figures`. Excel cell tables stay on the DuckDB path; chart/screenshot images get figure strategies and optional KG on that figure text only.
+Word figure descriptions are inserted at the original drawing anchor in the derived indexing text; the uploaded `.docx` itself is not modified. PowerPoint descriptions are inserted at the picture's visual position on its slide; slide text, speaker notes, native tables, and chart categories/series remain searchable, while the uploaded `.pptx` is unchanged. Digital PDF figures are ordered against positioned text lines using their page bounding boxes. Scanned/full-page PDF renders retain page-level placement because no smaller reliable source anchor exists. Repeated image bytes are analyzed once but retain every occurrence and section/slide context. Figure-derived citations include page or slide, figure ID, section, and caption when available. Excel cell tables stay on the DuckDB path; chart/screenshot images get figure strategies and optional KG on that figure text only.
 
 Requires the `tesseract` binary and a multimodal-capable model on `VLLM_BASE_URL`. Failures are fail-open.
 

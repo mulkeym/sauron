@@ -189,6 +189,12 @@ def build_synthesis_context(state: AgentState) -> str:
         source = f"Source: {chunk.metadata.filename}"
         if chunk.metadata.page is not None:
             source += f", page {chunk.metadata.page}"
+        if chunk.metadata.figure_id:
+            source += f", figure {chunk.metadata.figure_id}"
+        if chunk.metadata.section_title:
+            source += f", section {chunk.metadata.section_title}"
+        if chunk.metadata.slide is not None:
+            source += f", slide {chunk.metadata.slide}"
         text = chunk.text
         # When map-reduce extracted concrete facts, demote KG to supplementary
         # so its hedging/uncertainty doesn't override the extracted data.
@@ -293,6 +299,10 @@ def build_citations(state: AgentState) -> list[Citation]:
             snippet=c.text[:200],
             relevance=c.score,
             source_url=url_map.get(c.metadata.doc_id, ""),
+            figure_id=c.metadata.figure_id,
+            section_title=c.metadata.section_title,
+            caption=c.metadata.caption,
+            slide=c.metadata.slide,
         )
         for c in seen_docs.values()
     ]

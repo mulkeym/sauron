@@ -65,6 +65,60 @@ def test_extract_image_regions_docx(tmp_path):
     assert regions[0].image_bytes[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_docx_parser_preserves_figure_anchor_and_context(tmp_path):
+    from docx import Document
+    from docx.shared import Inches
+    from src.ingestion.parser import parse_document
+
+    docx_path = tmp_path / "anchored.docx"
+    img_path = tmp_path / "anchor.png"
+    img_path.write_bytes(_png_bytes(500, 400))
+    doc = Document()
+    doc.add_heading("Network Architecture", level=1)
+    doc.add_paragraph("Traffic enters through the branch gateway.")
+    doc.add_picture(str(img_path), width=Inches(4))
+    doc.inline_shapes[0]._inline.docPr.set("descr", "Redundant controller topology")
+    doc.add_paragraph("Figure 4. Controller topology", style="Caption")
+    doc.add_paragraph("Controllers are deployed in separate zones.")
+    doc.save(str(docx_path))
+
+    parsed = parse_document(docx_path)
+    kinds = [block.block_type for block in parsed.blocks]
+    figure_at = kinds.index("figure")
+    assert kinds[figure_at - 1] == "paragraph"
+    assert kinds[figure_at + 1] == "paragraph"
+    placement = parsed.blocks[figure_at].figure
+    assert placement is not None
+    assert placement.figure_id == "fig-001"
+    assert placement.section_path == ["Network Architecture"]
+    assert placement.caption == "Figure 4. Controller topology"
+    assert placement.alt_text == "Redundant controller topology"
+    assert placement.previous_text == "Traffic enters through the branch gateway."
+    assert placement.following_text == "Controllers are deployed in separate zones."
+
+
+def test_repeated_docx_image_keeps_both_placements(tmp_path):
+    from docx import Document
+    from docx.shared import Inches
+    from src.ingestion.figure_extract import extract_image_regions_docx
+
+    docx_path = tmp_path / "repeated.docx"
+    img_path = tmp_path / "repeat.png"
+    img_path.write_bytes(_png_bytes(500, 400))
+    doc = Document()
+    doc.add_heading("Primary", level=1)
+    doc.add_picture(str(img_path), width=Inches(3))
+    doc.add_heading("Recovery", level=1)
+    doc.add_picture(str(img_path), width=Inches(3))
+    doc.save(str(docx_path))
+
+    regions = extract_image_regions_docx(docx_path)
+    assert [r.figure_id for r in regions] == ["fig-001", "fig-002"]
+    assert regions[0].content_hash == regions[1].content_hash
+    assert regions[0].section_path == ["Primary"]
+    assert regions[1].section_path == ["Recovery"]
+
+
 def test_extract_image_regions_xlsx(tmp_path):
     from src.ingestion.figure_extract import extract_image_regions_xlsx
 
@@ -78,8 +132,9 @@ def test_extract_image_regions_xlsx(tmp_path):
 
 def test_enrich_text_with_figures_docx(tmp_path, monkeypatch):
     from src.config import settings
-    from src.ingestion.figure_extract import enrich_text_with_figures, ImageKind, ProseBlock
-    from src.ingestion.tabular import SheetGrid
+    from src.ingestion.figure_extract import (
+        enrich_text_with_figures, FigureRecord, ProseBlock,
+    )
 
     monkeypatch.setattr(settings, "figure_extraction_enabled", True)
     docx_path = tmp_path / "net.docx"
@@ -92,8 +147,18 @@ def test_enrich_text_with_figures_docx(tmp_path, monkeypatch):
 
     def fake_process(regions, **kwargs):
         from src.ingestion.figure_extract import FigureEnrichmentResult
+        region = regions[0]
         return FigureEnrichmentResult(
             prose_blocks=[fake_prose],
+            figure_records=[FigureRecord(
+                figure_id=region.figure_id,
+                description=fake_prose.text,
+                kind="network",
+                body_index=region.body_index,
+                section_path=region.section_path,
+                previous_text=region.previous_text,
+                following_text=region.following_text,
+            )],
             table_grids=[],
             figures_seen=len(regions),
             figures_used=1,
@@ -103,9 +168,11 @@ def test_enrich_text_with_figures_docx(tmp_path, monkeypatch):
         text, grids = enrich_text_with_figures(
             docx_path, "Body paragraph about the network.",
         )
-    assert "Body paragraph" in text
-    assert "## Embedded figures" in text
+    assert "SD-WAN portal architecture" in text
+    assert "## Embedded figures" not in text
     assert "portal.example.com" in text
+    assert text.index("SD-WAN portal architecture") < text.index("portal.example.com")
+    assert text.index("portal.example.com") < text.index("See figure above")
     assert grids == []
 
 

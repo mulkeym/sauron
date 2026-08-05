@@ -210,3 +210,199 @@ async def test_ingest_plaintext_still_builds_knowledge_graph(tmp_path, monkeypat
     await pipeline.ingest_document(str(p), acl_groups=["g1"], uploaded_by="t",
                                    vector_store=_GateVS(), metadata_store=_GateMS(), category="cat")
     assert len(kg_calls) == 1   # KG still runs for non-spreadsheet
+
+
+@pytest.mark.asyncio
+async def test_docx_figure_is_inline_in_kg_and_has_dedicated_chunk(tmp_path, monkeypatch):
+    from docx import Document
+    from docx.shared import Inches
+    from PIL import Image
+    from src.ingestion import pipeline
+    from src.ingestion.figure_extract import (
+        FigureEnrichmentResult, FigureRecord, ProseBlock,
+    )
+
+    image_path = tmp_path / "topology.png"
+    Image.new("RGB", (600, 400), "navy").save(image_path)
+    docx_path = tmp_path / "manual.docx"
+    doc = Document()
+    doc.add_heading("Control Plane", level=1)
+    doc.add_paragraph("Traffic enters through BRANCH-01.")
+    doc.add_picture(str(image_path), width=Inches(4))
+    doc.add_paragraph("Controllers run in separate zones.")
+    doc.save(docx_path)
+
+    def _fake_process(regions, **kwargs):
+        region = regions[0]
+        description = (
+            f"[Figure {region.figure_id} — network]\n"
+            "Nodes:\n- CTRL-01\n- CTRL-02\n"
+            "Links:\n- CTRL-01 --sync--> CTRL-02\n[/Figure]"
+        )
+        return FigureEnrichmentResult(
+            prose_blocks=[ProseBlock(text=description, page=0)],
+            figure_records=[FigureRecord(
+                figure_id=region.figure_id, description=description, kind="network",
+                content_hash=region.content_hash, body_index=region.body_index,
+                section_path=region.section_path,
+                previous_text=region.previous_text, following_text=region.following_text,
+            )],
+            figures_seen=1, figures_used=1,
+        )
+
+    captured = []
+
+    class FigureVS:
+        def upsert(self, texts, vectors, metadatas):
+            captured.extend(zip(texts, metadatas))
+
+    kg_calls = []
+    _stub_pipeline(monkeypatch, pipeline, kg_calls)
+    monkeypatch.setattr("src.ingestion.figure_extract.process_image_regions", _fake_process)
+
+    result = await pipeline.ingest_document(
+        str(docx_path), acl_groups=["g1"], uploaded_by="t",
+        vector_store=FigureVS(), metadata_store=_GateMS(), category="cat",
+    )
+
+    figure_chunks = [(text, meta) for text, meta in captured if meta.content_type == "figure"]
+    assert len(figure_chunks) == 1
+    figure_text, figure_meta = figure_chunks[0]
+    assert figure_meta.figure_id == "fig-001"
+    assert figure_meta.section_title == "Control Plane"
+    assert "Context before: Traffic enters through BRANCH-01." in figure_text
+    assert result.chunk_count > 1
+
+    assert len(kg_calls) == 1
+    kg_text = kg_calls[0][0][0]
+    assert kg_text.index("BRANCH-01") < kg_text.index("CTRL-01")
+    assert kg_text.index("CTRL-02") < kg_text.index("Controllers run")
+
+
+@pytest.mark.asyncio
+async def test_pdf_figure_has_page_chunk_and_ordered_kg(monkeypatch):
+    from src.ingestion import pipeline
+    from src.ingestion.figure_extract import FigureRecord
+    from src.ingestion.pdf_extract import ExtractedPdf, ProseBlock
+
+    record = FigureRecord(
+        figure_id="p1-fig-001",
+        description="[Figure p1-fig-001 — network]\n- EDGE-01 --> CORE-01\n[/Figure]",
+        kind="network", page=0, bbox=(80, 120, 500, 300),
+        source="embedded", section_path=["Network Architecture"],
+        previous_text="Traffic enters through EDGE-01.",
+        following_text="CORE-01 forwards traffic to the service tier.",
+    )
+    base = ExtractedPdf(
+        prose_blocks=[ProseBlock("flat page text", page=0)], method="digital",
+    )
+    enriched = ExtractedPdf(
+        prose_blocks=[
+            ProseBlock("Traffic enters through EDGE-01.", page=0),
+            ProseBlock(record.description, page=0, content_type="figure",
+                       figure_id=record.figure_id),
+            ProseBlock("CORE-01 forwards traffic to the service tier.", page=0),
+        ],
+        method="mixed", figure_records=[record],
+    )
+    monkeypatch.setattr(pipeline, "extract_pdf", lambda path: base)
+    monkeypatch.setattr(
+        "src.ingestion.figure_extract.enrich_pdf_with_figures",
+        lambda path, extracted: enriched,
+    )
+
+    captured = []
+
+    class FigureVS:
+        def upsert(self, texts, vectors, metadatas):
+            captured.extend(zip(texts, metadatas))
+
+    kg_calls = []
+    _stub_pipeline(monkeypatch, pipeline, kg_calls)
+    result = await pipeline.ingest_document(
+        str(FIXTURES / "sample.pdf"), acl_groups=["g1"], uploaded_by="t",
+        vector_store=FigureVS(), metadata_store=_GateMS(), category="cat",
+    )
+
+    figure_chunks = [(text, meta) for text, meta in captured if meta.content_type == "figure"]
+    assert len(figure_chunks) == 1
+    _, meta = figure_chunks[0]
+    assert meta.figure_id == "p1-fig-001"
+    assert meta.page == 1
+    assert meta.section_title == "Network Architecture"
+    assert "page 1" in meta.source_locator
+    assert result.chunk_count > 1
+
+    kg_text = kg_calls[0][0][0]
+    assert kg_text.index("Traffic enters") < kg_text.index("EDGE-01 --> CORE-01")
+    assert kg_text.index("EDGE-01 --> CORE-01") < kg_text.index("forwards traffic")
+
+
+@pytest.mark.asyncio
+async def test_pptx_figure_has_slide_chunk_and_ordered_kg(tmp_path, monkeypatch):
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+    from src.ingestion import pipeline
+    from src.ingestion.figure_extract import (
+        FigureEnrichmentResult, FigureRecord, ProseBlock,
+    )
+
+    image_path = tmp_path / "topology.png"
+    Image.new("RGB", (600, 400), "navy").save(image_path)
+    pptx_path = tmp_path / "manual.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "Control Plane"
+    before = slide.shapes.add_textbox(Inches(0.5), Inches(1), Inches(6), Inches(0.5))
+    before.text = "Traffic enters through EDGE-01."
+    slide.shapes.add_picture(str(image_path), Inches(1), Inches(2), width=Inches(4))
+    after = slide.shapes.add_textbox(Inches(0.5), Inches(5), Inches(7), Inches(0.5))
+    after.text = "CORE-01 forwards traffic to the service tier."
+    presentation.save(pptx_path)
+
+    def fake_process(regions, **kwargs):
+        region = regions[0]
+        description = (
+            f"[Figure {region.figure_id} — network]\n"
+            "- EDGE-01 --> CORE-01\n[/Figure]"
+        )
+        return FigureEnrichmentResult(
+            prose_blocks=[ProseBlock(description, page=region.page)],
+            figure_records=[FigureRecord(
+                figure_id=region.figure_id, description=description, kind="network",
+                content_hash=region.content_hash, body_index=region.body_index,
+                section_path=region.section_path, previous_text=region.previous_text,
+                following_text=region.following_text, source="pptx", slide=region.page,
+            )],
+            figures_seen=1, figures_used=1,
+        )
+
+    captured = []
+
+    class FigureVS:
+        def upsert(self, texts, vectors, metadatas):
+            captured.extend(zip(texts, metadatas))
+
+    kg_calls = []
+    _stub_pipeline(monkeypatch, pipeline, kg_calls)
+    monkeypatch.setattr("src.ingestion.figure_extract.process_image_regions", fake_process)
+
+    result = await pipeline.ingest_document(
+        str(pptx_path), acl_groups=["g1"], uploaded_by="t",
+        vector_store=FigureVS(), metadata_store=_GateMS(), category="cat",
+    )
+
+    figure_chunks = [(text, meta) for text, meta in captured if meta.content_type == "figure"]
+    assert len(figure_chunks) == 1
+    figure_text, meta = figure_chunks[0]
+    assert meta.figure_id == "s1-fig-001"
+    assert meta.slide == 1
+    assert meta.section_title == "Control Plane"
+    assert "slide 1" in meta.source_locator
+    assert "Context before: Traffic enters through EDGE-01." in figure_text
+    assert result.chunk_count > 1
+
+    kg_text = kg_calls[0][0][0]
+    assert kg_text.index("Traffic enters") < kg_text.index("EDGE-01 --> CORE-01")
+    assert kg_text.index("EDGE-01 --> CORE-01") < kg_text.index("forwards traffic")

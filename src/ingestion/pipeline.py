@@ -101,8 +101,10 @@ async def ingest_document(
     is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
     is_pdf = _is_structured_pdf(parsed.doc_type)
     is_docx = parsed.doc_type == "docx"
+    is_pptx = parsed.doc_type == "pptx"
     text_sheets = None
     enriched_prose = None
+    figure_records = []
     from src.config import settings as _settings
 
     if is_spreadsheet:
@@ -117,16 +119,20 @@ async def ingest_document(
         text_sheets = sheets_needing_text(grids, classifications, ingested)
         if _settings.figure_extraction_enabled and Path(file_path).suffix.lower() in (".xlsx", ".xlsm"):
             try:
-                from src.ingestion.figure_extract import enrich_text_with_figures
-                fig_text, fig_grids = enrich_text_with_figures(Path(file_path), "")
-                if fig_grids:
+                from src.ingestion.figure_extract import enrich_office_document_with_figures
+                office_figures = enrich_office_document_with_figures(Path(file_path), "")
+                if office_figures.table_grids:
                     await ingest_grids(
-                        fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                        office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
                         acl_groups, category, vector_store, metadata_store,
                         dataset_id=dataset_id,
                     )
-                if fig_text.strip():
-                    enriched_prose = ((parsed.text or "") + "\n\n" + fig_text).strip()
+                figure_records = office_figures.figures
+                if office_figures.enriched_text.strip():
+                    enriched_prose = (
+                        (parsed.text or "") + "\n\n## Embedded figures\n\n"
+                        + office_figures.enriched_text
+                    ).strip()
             except Exception as fig_err:
                 logger.warning(f"Spreadsheet figure extract failed: {fig_err}")
     elif is_pdf:
@@ -141,6 +147,7 @@ async def ingest_document(
                 dataset_id=dataset_id,
             )
             enriched_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
+            figure_records = extracted.figure_records
             logger.info(f"PDF structured extract [{parsed.filename}]: "
                         f"{len(extracted.table_grids)} table(s), method={extracted.method}, "
                         f"prose_blocks={len(extracted.prose_blocks)}")
@@ -148,20 +155,22 @@ async def ingest_document(
             logger.warning(f"PDF structured extract failed for {parsed.filename}, "
                            f"falling back to flat text: {e}")
             is_pdf = False   # fall back to parsed.text chunking below
-    elif is_docx and _settings.figure_extraction_enabled:
+    elif (is_docx or is_pptx) and _settings.figure_extraction_enabled:
         try:
-            from src.ingestion.figure_extract import enrich_text_with_figures
-            enriched_prose, fig_grids = enrich_text_with_figures(
-                Path(file_path), parsed.text or "",
+            from src.ingestion.figure_extract import enrich_office_document_with_figures
+            office_figures = enrich_office_document_with_figures(
+                Path(file_path), parsed.text or "", document_blocks=parsed.blocks,
             )
-            if fig_grids:
+            enriched_prose = office_figures.enriched_text
+            figure_records = office_figures.figures
+            if office_figures.table_grids:
                 await ingest_grids(
-                    fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                    office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
                     acl_groups, category, vector_store, metadata_store,
                     dataset_id=dataset_id,
                 )
         except Exception as e:
-            logger.warning(f"Word figure extract failed for {parsed.filename}: {e}")
+            logger.warning(f"Office figure extract failed for {parsed.filename}: {e}")
             enriched_prose = parsed.text
 
     if enriched_prose and len(enriched_prose) > len(parsed.text or "") + 200:
@@ -200,7 +209,7 @@ async def ingest_document(
                         tier_chunks.append(
                             Chunk(text=c.text, index=base_i + j, start_char=c.start_char)
                         )
-        elif is_pdf or is_docx or enriched_prose:
+        elif is_pdf or is_docx or is_pptx or enriched_prose:
             tier_chunks = chunk_text(chunk_source or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
         else:
             tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
@@ -224,6 +233,39 @@ async def ingest_document(
         if tier_name == "medium":
             total_chunks = len(tier_chunks)  # report medium tier count
             chunks = tier_chunks  # use medium tier for entity extraction
+
+    if figure_records:
+        figure_texts = [
+            f"{doc_context}\n\n{record.retrieval_text()}"
+            for record in figure_records
+        ]
+        figure_metas = [
+            ChunkMetadata(
+                doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
+                chunk_index=total_chunks + i, start_char=0,
+                acl_groups=acl_groups, category=category,
+                chunk_size_tier="medium", content_type="figure",
+                figure_id=record.figure_id, figure_kind=record.kind,
+                page=record.page + 1 if record.page is not None else None,
+                slide=record.slide + 1 if record.slide is not None else None,
+                body_index=record.body_index,
+                section_title=record.section_path[-1] if record.section_path else None,
+                caption=record.caption or None,
+                source_locator=(
+                    f"Figure {record.figure_id}"
+                    + (f", page {record.page + 1}" if record.page is not None else "")
+                    + (f", slide {record.slide + 1}" if record.slide is not None else "")
+                    + (f", {' > '.join(record.section_path)}" if record.section_path else "")
+                ),
+            )
+            for i, record in enumerate(figure_records)
+        ]
+        figure_vectors = embed_texts(figure_texts) if figure_texts else []
+        if figure_vectors:
+            vector_store.upsert(
+                texts=figure_texts, vectors=figure_vectors, metadatas=figure_metas,
+            )
+            total_chunks += len(figure_records)
     await metadata_store.add_document(
         doc_id=doc_id,
         filename=parsed.filename,
@@ -241,8 +283,8 @@ async def ingest_document(
             await metadata_store.add_category(
                 name=category, description="", acl_groups=acl_groups, routing_keywords=[],
             )
-    # Knowledge graph: full text for PDF/DOCX; figure-only for Excel with images;
-    # skip pure spreadsheet cell dumps.
+    # Knowledge graph: full text for PDF/DOCX/PPTX; figure-only for Excel with
+    # images; skip pure spreadsheet cell dumps.
     spreadsheet_figure_kg = ""
     if is_spreadsheet and enriched_prose and "## Embedded figures" in enriched_prose:
         spreadsheet_figure_kg = enriched_prose.split("## Embedded figures", 1)[-1].strip()

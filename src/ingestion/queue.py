@@ -299,8 +299,10 @@ class IngestQueue:
         is_spreadsheet = parsed.doc_type in SPREADSHEET_DOC_TYPES
         is_pdf = _is_structured_pdf(parsed.doc_type)
         is_docx = parsed.doc_type == "docx"
+        is_pptx = parsed.doc_type == "pptx"
         text_sheets = None
-        enriched_prose = None  # PDF/DOCX figure-enriched text for chunk + KG
+        enriched_prose = None  # PDF/DOCX/PPTX figure-enriched text for chunk + KG
+        figure_records = []
         from src.config import settings as _settings
 
         def _fig_progress(msg: str):
@@ -317,20 +319,24 @@ class IngestQueue:
             # Embedded chart/screenshot images in .xlsx → figure strategies + optional grids
             if _settings.figure_extraction_enabled and Path(file_path).suffix.lower() in (".xlsx", ".xlsm"):
                 try:
-                    from src.ingestion.figure_extract import enrich_text_with_figures_async
+                    from src.ingestion.figure_extract import enrich_office_document_with_figures_async
                     self.update_step(job.job_id, IngestStep.STORING, "Extracting figures from spreadsheet…")
-                    fig_text, fig_grids = await enrich_text_with_figures_async(
+                    office_figures = await enrich_office_document_with_figures_async(
                         Path(file_path), "", progress_cb=_fig_progress,
                     )
-                    if fig_grids:
+                    if office_figures.table_grids:
                         await ingest_grids(
-                            fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                            office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
                             job.acl_groups, category, vector_store, metadata_store,
                             dataset_id=job.dataset_id,
                         )
-                    if fig_text.strip():
+                    figure_records = office_figures.figures
+                    if office_figures.enriched_text.strip():
                         # Attach figure prose as extra narrative tier via enriched path
-                        enriched_prose = ((parsed.text or "") + "\n\n" + fig_text).strip()
+                        enriched_prose = (
+                            (parsed.text or "") + "\n\n## Embedded figures\n\n"
+                            + office_figures.enriched_text
+                        ).strip()
                 except Exception as fig_err:
                     logger.warning(f"Spreadsheet figure extract failed: {fig_err}")
         elif is_pdf:
@@ -349,25 +355,30 @@ class IngestQueue:
                     dataset_id=job.dataset_id,
                 )
                 enriched_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
+                figure_records = extracted.figure_records
             except Exception as e:
                 logger.warning(f"PDF structured extract failed for {parsed.filename}, "
                                f"falling back to flat text: {e}")
                 is_pdf = False
-        elif is_docx and _settings.figure_extraction_enabled:
+        elif (is_docx or is_pptx) and _settings.figure_extraction_enabled:
             try:
-                from src.ingestion.figure_extract import enrich_text_with_figures_async
-                self.update_step(job.job_id, IngestStep.STORING, "Extracting figures from Word document…")
-                enriched_prose, fig_grids = await enrich_text_with_figures_async(
-                    Path(file_path), parsed.text or "", progress_cb=_fig_progress,
+                from src.ingestion.figure_extract import enrich_office_document_with_figures_async
+                office_name = "PowerPoint" if is_pptx else "Word document"
+                self.update_step(job.job_id, IngestStep.STORING, f"Extracting figures from {office_name}…")
+                office_figures = await enrich_office_document_with_figures_async(
+                    Path(file_path), parsed.text or "", document_blocks=parsed.blocks,
+                    progress_cb=_fig_progress,
                 )
-                if fig_grids:
+                enriched_prose = office_figures.enriched_text
+                figure_records = office_figures.figures
+                if office_figures.table_grids:
                     await ingest_grids(
-                        fig_grids, doc_id, parsed.filename, parsed.doc_type,
+                        office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
                         job.acl_groups, category, vector_store, metadata_store,
                         dataset_id=job.dataset_id,
                     )
             except Exception as e:
-                logger.warning(f"Word figure extract failed for {parsed.filename}: {e}")
+                logger.warning(f"Office figure extract failed for {parsed.filename}: {e}")
                 enriched_prose = parsed.text
 
         # Re-summarize when figures substantially grew the text
@@ -410,7 +421,7 @@ class IngestQueue:
                             tier_chunks.append(
                                 Chunk(text=c.text, index=base_i + j, start_char=c.start_char)
                             )
-            elif is_pdf or is_docx or enriched_prose:
+            elif is_pdf or is_docx or is_pptx or enriched_prose:
                 tier_chunks = chunk_text(chunk_source_text or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
             else:
                 tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
@@ -437,6 +448,50 @@ class IngestQueue:
                 total_chunks = len(tier_chunks)
                 chunks = tier_chunks  # use medium tier for entity extraction
                 job.chunk_count = total_chunks  # show count in UI immediately
+
+        # Preserve one complete, context-rich record per figure in the same tier
+        # used by normal lookup. The inline copy supports surrounding-text queries;
+        # this atomic copy supports questions answered entirely by the diagram.
+        if figure_records:
+            self.update_step(
+                job.job_id, IngestStep.EMBEDDING,
+                f"Embedding {len(figure_records)} dedicated figure chunks",
+            )
+            figure_texts = [
+                f"{doc_context}\n\n{record.retrieval_text()}"
+                for record in figure_records
+            ]
+            figure_metas = [
+                ChunkMetadata(
+                    doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
+                    chunk_index=total_chunks + i, start_char=0,
+                    acl_groups=job.acl_groups, category=category,
+                    chunk_size_tier="medium", content_type="figure",
+                    figure_id=record.figure_id, figure_kind=record.kind,
+                    page=record.page + 1 if record.page is not None else None,
+                    slide=record.slide + 1 if record.slide is not None else None,
+                    body_index=record.body_index,
+                    section_title=record.section_path[-1] if record.section_path else None,
+                    caption=record.caption or None,
+                    source_locator=(
+                        f"Figure {record.figure_id}"
+                        + (f", page {record.page + 1}" if record.page is not None else "")
+                        + (f", slide {record.slide + 1}" if record.slide is not None else "")
+                        + (f", {' > '.join(record.section_path)}" if record.section_path else "")
+                    ),
+                )
+                for i, record in enumerate(figure_records)
+            ]
+            figure_vectors = await asyncio.to_thread(
+                embed_texts, figure_texts, "passage", TIER_BATCH_SIZES["medium"],
+            )
+            if figure_vectors:
+                await asyncio.to_thread(
+                    vector_store.upsert,
+                    texts=figure_texts, vectors=figure_vectors, metadatas=figure_metas,
+                )
+                total_chunks += len(figure_records)
+                job.chunk_count = total_chunks
 
         # Embed the summary as a dedicated "summary" tier for fast document discovery
         if doc_summary:

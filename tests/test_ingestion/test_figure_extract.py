@@ -122,6 +122,52 @@ def test_classify_portal_diagram_not_text_scan():
     assert kind in (ImageKind.PROCESS, ImageKind.NETWORK), f"got {kind}"
 
 
+def test_process_prompt_includes_word_context():
+    from src.ingestion.figure_extract import strategy_process
+
+    region = ImageRegion(
+        page=0, index=0, image_bytes=b"png", width=800, height=600,
+        figure_id="fig-004", section_path=["Architecture", "Control Plane"],
+        caption="Figure 4. Controller topology",
+        alt_text="Redundant topology",
+        previous_text="The controller accepts branch registrations.",
+        following_text="Controllers run in separate zones.",
+    )
+    response = "[Figure p.1 — process]\nComponents:\n- CTRL-01\n[/Figure]"
+    with patch("src.ingestion.figure_extract._vision", return_value=response) as vision:
+        _, prose = strategy_process(region)
+    prompt = vision.call_args.args[1]
+    assert "Architecture > Control Plane" in prompt
+    assert "Figure 4. Controller topology" in prompt
+    assert "The controller accepts branch registrations" in prompt
+    assert prose
+
+
+def test_repeated_image_analysis_is_reused_but_both_placements_survive(monkeypatch):
+    from src.ingestion.figure_extract import process_image_regions
+
+    monkeypatch.setattr(settings, "figure_ocr_first", False)
+    regions = [
+        ImageRegion(
+            page=0, index=i, image_bytes=b"same", width=800, height=600,
+            content_hash="same-hash", figure_id=f"fig-{i + 1:03d}",
+            section_path=[section],
+        )
+        for i, section in enumerate(("Primary", "Recovery"))
+    ]
+    prose = [ProseBlock(
+        text="[Figure p.1 — network]\nNodes:\n- CTRL-01\n[/Figure]", page=0,
+    )]
+    with patch("src.ingestion.figure_extract.classify_region", return_value=ImageKind.NETWORK), \
+         patch("src.ingestion.figure_extract.run_strategy", return_value=([], prose)) as strategy:
+        result = process_image_regions(regions)
+
+    assert strategy.call_count == 1
+    assert [r.figure_id for r in result.figure_records] == ["fig-001", "fig-002"]
+    assert "Section: Primary" in result.figure_records[0].description
+    assert "Section: Recovery" in result.figure_records[1].description
+
+
 def test_merge_ocr_into_vision_appends_missing_high_value():
     from src.ingestion.figure_extract import merge_ocr_into_vision
     vision = "[Figure p.22 — process]\nLayout:\n- center portal\n[/Figure]"
@@ -238,6 +284,114 @@ def test_merge_prose_by_page_interleaves():
     # page 0 prose before/with page 0 figure
     assert merged[0].page == 0
     assert any(b.text == "fig page1" for b in merged)
+
+
+def test_pdf_context_and_positioned_merge():
+    from src.ingestion.figure_extract import (
+        FigureRecord, attach_pdf_context, merge_pdf_prose_by_position,
+    )
+
+    layout = [
+        ProseBlock("Network Architecture", page=0, bbox=(50, 20, 300, 38), font_size=18),
+        ProseBlock("Traffic enters through BRANCH-01.", page=0, bbox=(50, 60, 400, 75), font_size=10),
+        ProseBlock("Figure 2. Redundant control plane", page=0, bbox=(50, 95, 320, 110), font_size=10),
+        ProseBlock("CTRL-01", page=0, bbox=(120, 180, 190, 195), font_size=9),
+        ProseBlock("Controllers run in separate zones.", page=0, bbox=(50, 330, 400, 345), font_size=10),
+    ]
+    extracted = ExtractedPdf(
+        prose_blocks=[ProseBlock("original page text", page=0)],
+        layout_blocks=layout,
+    )
+    region = ImageRegion(
+        page=0, index=0, image_bytes=b"png", width=600, height=400,
+        source="embedded", content_hash="abc", figure_id="p1-fig-001",
+        bbox=(80, 120, 500, 300),
+    )
+    attach_pdf_context([region], extracted)
+    assert region.caption == "Figure 2. Redundant control plane"
+    assert region.section_path == ["Network Architecture"]
+    assert "BRANCH-01" in region.previous_text
+    assert "Controllers run" in region.following_text
+
+    record = FigureRecord(
+        figure_id=region.figure_id,
+        description="[Figure p1-fig-001 — network]\n- CTRL-01 --> CTRL-02\n[/Figure]",
+        kind="network", page=0, bbox=region.bbox, source="embedded",
+    )
+    merged = merge_pdf_prose_by_position(extracted, [record])
+    text = "\n\n".join(block.text for block in merged)
+    assert text.index("BRANCH-01") < text.index("[Figure p1-fig-001")
+    assert text.index("[Figure p1-fig-001") < text.index("Controllers run")
+    # A digital text label inside the raster bounds is represented by vision,
+    # not duplicated as a separate prose line.
+    assert text.count("CTRL-01") == 1
+
+
+def test_full_page_pdf_figure_precedes_page_ocr_text():
+    from src.ingestion.figure_extract import FigureRecord, merge_pdf_prose_by_position
+
+    extracted = ExtractedPdf(
+        prose_blocks=[ProseBlock("OCR text from scanned page", page=0)],
+        method="ocr",
+    )
+    record = FigureRecord(
+        figure_id="p1-fig-001", description="Full-page visual description",
+        kind="process", page=0, bbox=(0, 0, 612, 792), source="page_render",
+    )
+    merged = merge_pdf_prose_by_position(extracted, [record])
+    assert [b.text for b in merged] == [
+        "Full-page visual description", "OCR text from scanned page",
+    ]
+
+
+def test_pdfium_image_bounds_convert_to_top_left_coordinates(monkeypatch):
+    import pypdfium2
+    from pypdfium2.raw import FPDF_PAGEOBJ_IMAGE
+    from src.ingestion.figure_extract import extract_image_regions
+
+    class Bitmap:
+        def to_pil(self):
+            return Image.new("RGB", (600, 400), "navy")
+        def close(self):
+            pass
+
+    class Obj:
+        type = FPDF_PAGEOBJ_IMAGE
+        def get_px_size(self):
+            return 600, 400
+        def get_bitmap(self, render=True):
+            return Bitmap()
+        def get_bounds(self):
+            # PDF coordinates: left, bottom, right, top.
+            return 72, 300, 540, 600
+
+    class TextPage:
+        def get_text_bounded(self):
+            return "enough digital text to avoid rendering the complete PDF page as an image"
+        def close(self):
+            pass
+
+    class Page:
+        def get_size(self):
+            return 612, 792
+        def get_objects(self):
+            return [Obj()]
+        def get_textpage(self):
+            return TextPage()
+
+    class Pdf:
+        def __len__(self):
+            return 1
+        def __getitem__(self, index):
+            return Page()
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", lambda path: Pdf())
+    regions = extract_image_regions("positioned.pdf")
+    assert len(regions) == 1
+    assert regions[0].bbox == (72.0, 192.0, 540.0, 492.0)
+    assert regions[0].figure_id == "p1-fig-001"
 
 
 def test_strategy_table_uses_vision_and_builds_grid():

@@ -56,6 +56,10 @@ class CitationResponse(BaseModel):
     page: int | None = None
     snippet: str
     relevance: float
+    figure_id: str | None = None
+    section_title: str | None = None
+    caption: str | None = None
+    slide: int | None = None
 
 class QueryResponse(BaseModel):
     answer: str
