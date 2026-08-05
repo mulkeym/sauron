@@ -522,6 +522,12 @@ application key server-side, and test with two users in different groups before
 production. Full setup and Run:AI/Knative notes are in
 [`docs/MCP_OPENAPI_SETUP.md`](docs/MCP_OPENAPI_SETUP.md).
 
+For a Docker deployment, use `openwebui.sh` to start the OpenWebUI container.
+OpenWebUI v0.11 and newer can use
+`scripts/configure_openwebui_sauron_mcp.sh` to configure the native MCP
+connection. The setup guide documents the required environment file and script
+options.
+
 ## Security: dependency installs
 
 For secure environments, install with security floors and a frozen lock:

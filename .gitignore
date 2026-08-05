@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.openwebui.env
 data/*
 !data/.gitkeep
 *.db

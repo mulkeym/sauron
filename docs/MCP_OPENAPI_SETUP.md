@@ -75,7 +75,7 @@ ASGI application is mounted during process startup.
 
 ## 2. Configure OpenWebUI identity forwarding
 
-Set these environment variables on OpenWebUI and restart it:
+Set these environment variables on OpenWebUI:
 
 ```bash
 ENABLE_FORWARD_USER_INFO_HEADERS=true
@@ -92,7 +92,70 @@ The default forwarded header name is `X-OpenWebUI-User-Jwt`. If OpenWebUI's
 proxy must be configured to preserve that name; the current Sauron integration
 expects the default header.
 
+### Start the OpenWebUI Docker container
+
+The repository includes `openwebui.sh` for a single-container deployment. The
+script uses the `open-webui` Docker volume to keep the OpenWebUI database.
+
+1. Create `.openwebui.env` in the repository root:
+
+   ```dotenv
+   ENABLE_FORWARD_USER_INFO_HEADERS=true
+   FORWARD_USER_INFO_HEADER_JWT_SECRET=<same-shared-random-secret>
+   WEBUI_SECRET_KEY=<persistent-openwebui-secret>
+   ```
+
+2. Restrict access to the file:
+
+   ```bash
+   chmod 600 .openwebui.env
+   ```
+
+3. Start or replace the `open-webui` container:
+
+   ```bash
+   ./openwebui.sh
+   ```
+
+The script removes the current `open-webui` container before it creates the
+new container. It does not remove the `open-webui` Docker volume.
+
+Set `OPENWEBUI_ENV_FILE` to use an environment file at a different path:
+
+```bash
+OPENWEBUI_ENV_FILE=/secure/path/openwebui.env ./openwebui.sh
+```
+
 ## 3. Add Sauron as an OpenWebUI tool server
+
+### Automated Docker setup (Open WebUI v0.11+)
+
+Some Open WebUI builds show only the browser-direct OpenAPI integration screen.
+Their backend can still support native MCP. For a Docker deployment, the setup
+script updates the stored admin-proxied connection. It preserves other tool
+servers and creates a timestamped database backup.
+
+```bash
+export SAURON_API_KEY='<dedicated-sauron-application-key>'
+scripts/configure_openwebui_sauron_mcp.sh \
+  --container open-webui \
+  --url http://192.168.1.181:8880/mcp
+```
+
+To also create matching Open WebUI groups and assign one user:
+
+```bash
+scripts/configure_openwebui_sauron_mcp.sh \
+  --container open-webui \
+  --url http://192.168.1.181:8880/mcp \
+  --user user@example.com \
+  --groups engineering,finance,contracts
+```
+
+Pass the API key through `SAURON_API_KEY`, or use the hidden prompt. Do not put
+the key on the command line. Complete the identity configuration in section 2
+before you run the setup script. You can run the script again to update the
+Sauron connection. The script does not change other connections.
 
 In **Admin Settings -> External Tools**, add a server with:
 
