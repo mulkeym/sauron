@@ -78,6 +78,8 @@ secrets:
   adminUsername: "admin"
   adminPassword: "REPLACE-WITH-STRONG-PASSWORD"
   vllmApiKey: ""
+  # Must match OpenWebUI FORWARD_USER_INFO_HEADER_JWT_SECRET.
+  mcpOpenwebuiJwtSecret: "REPLACE-WITH-SHARED-OPENWEBUI-IDENTITY-SECRET"
 
 api:
   resources:

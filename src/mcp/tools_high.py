@@ -115,14 +115,17 @@ def summarize_documents(
         category=category, user_groups=user_groups, metadata_store=metadata_store,
     )
     if not docs:
-        # If no category filter, list all
+        # If no category matched, list only documents visible to this caller.
         import asyncio
+        filter_groups = None if "ALL" in user_groups else user_groups
         try:
-            all_docs = asyncio.run(metadata_store.list_documents(None))
+            all_docs = asyncio.run(metadata_store.list_documents(filter_groups))
         except RuntimeError:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                all_docs = pool.submit(asyncio.run, metadata_store.list_documents(None)).result()
+                all_docs = pool.submit(
+                    asyncio.run, metadata_store.list_documents(filter_groups)
+                ).result()
         docs = [{"doc_id": d.doc_id, "filename": d.filename, "doc_type": d.doc_type, "category": d.category or "uncategorized"} for d in all_docs]
 
     summaries = []

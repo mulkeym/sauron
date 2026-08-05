@@ -44,11 +44,23 @@ class Settings(BaseSettings):
     # Database Registry (for text-to-SQL)
     registered_databases: str = ""  # comma-separated list of "name=url" pairs
 
-    # MCP Server
+    # MCP Server (native Streamable HTTP, mounted in the API process)
     mcp_server_name: str = "sauron"
+    mcp_enabled: bool = True
+    mcp_path: str = "/mcp"
+    mcp_stateless_http: bool = True
+    # When OpenWebUI forwarding is enabled, it signs user identity with this
+    # shared secret and sends it in X-OpenWebUI-User-Jwt. Keep the secret out of
+    # data/settings.json; configure it as an environment/Kubernetes secret.
+    mcp_openwebui_jwt_secret: str = ""
+    mcp_openwebui_groups_header: str = "X-Sauron-User-Groups"
+    # "ALL" is Sauron's superuser ACL. Never grant it from a forwarded group
+    # name unless an operator explicitly opts in.
+    mcp_openwebui_allow_all_group: bool = False
+    # Deprecated compatibility fields for older settings.json/.env files. The
+    # production MCP endpoint no longer listens on separate ports.
     mcp_port: int = 8090
-    mcp_alt_port: int = 8091  # Alternative HTTP port for network access
-
+    mcp_alt_port: int = 8091
     # Concurrency
     max_parallel_ingestion: int = 3  # concurrent file ingestion jobs
     max_parallel_async_query: int = 3  # concurrent async query worker slots

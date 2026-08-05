@@ -4,7 +4,6 @@ fastapi[standard]>=0.136.0
 starlette>=1.3.1
 python-multipart>=0.0.31
 fastmcp>=3.0.0
-mcpo>=0.0.15
 langgraph>=0.3.0
 langgraph-checkpoint>=4.1.1
 langgraph-sdk>=0.3.15

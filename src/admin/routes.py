@@ -2474,7 +2474,6 @@ _SETTINGS_FIELDS = {
     "vllm_base_url": str, "vllm_model_name": str, "vllm_api_key": str,
     "ssl_verify": bool,
     "embedding_mode": str, "embedding_api_url": str, "embedding_model_name": str,
-    "mcp_port": int, "mcp_alt_port": int,
     "entity_merge_auto_threshold": float, "entity_merge_review_threshold": float,
     "max_parallel_ingestion": int, "llm_concurrency": int,
     "llm_max_context": int, "llm_max_output_tokens": int, "metadata_max_doc_length": int,

@@ -39,14 +39,6 @@ spec:
                 name: {{ $fullName }}-api
                 port:
                   number: {{ $.Values.service.api.port }}
-                {{- else if eq $svc "mcp" }}
-                name: {{ $fullName }}-mcp
-                port:
-                  number: {{ $.Values.service.mcp.port }}
-                {{- else if eq $svc "mcpo" }}
-                name: {{ $fullName }}-mcpo
-                port:
-                  number: {{ $.Values.service.mcpo.port }}
                 {{- else }}
                 name: {{ $fullName }}-{{ $svc }}
                 port:

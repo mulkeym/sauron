@@ -1,6 +1,6 @@
 # SAURON Helm Chart
 
-Deploy [SAURON](https://github.com/mulkeym/sauron) (API + Admin UI, MCP server, MCP OpenAPI proxy) to Kubernetes / Run:ai.
+Deploy [SAURON](https://github.com/mulkeym/sauron) (API + Admin UI + native MCP) to Kubernetes / Run:ai.
 
 This chart is designed for **self-hosted, air-gapped** clusters that pull images from **on-prem Harbor**.
 
@@ -29,11 +29,9 @@ helm upgrade --install sauron ./sauron/charts/sauron \
 
 | Component | Port | Description |
 |-----------|------|-------------|
-| **api** | 8080 | FastAPI REST API + Admin UI (`/admin`, `/api`) |
-| **mcp** | 8090 | MCP server (SSE) |
-| **mcpo** | 8091 | MCP → OpenAPI proxy for OpenWebUI / REST clients |
+| **api** | 8080 | FastAPI REST API, Admin UI (`/admin`), and native MCP (`/mcp`) |
 
-All three run as **containers in a single pod** sharing one PVC at `/app/data` (same model as `docker-compose.yml`). That keeps SQLite / LanceDB / DuckDB consistent without requiring ReadWriteMany storage.
+One container serves all interfaces and mounts one PVC at `/app/data`. This keeps SQLite / LanceDB / DuckDB consistent without requiring ReadWriteMany storage.
 
 Deployment strategy is `Recreate` so the RWO volume is never attached to two pods.
 
@@ -117,12 +115,14 @@ helm upgrade --install sauron ./charts/sauron \
 2. Prefer an externally managed Secret:
 
    ```bash
+   SAURON_MCP_SHARED_SECRET="$(openssl rand -hex 32)"
    kubectl create namespace sauron
    kubectl -n sauron create secret generic sauron-app-secrets \
      --from-literal=JWT_SECRET_KEY="$(openssl rand -hex 32)" \
      --from-literal=API_KEYS="app-key-1" \
      --from-literal=ADMIN_USERNAME=admin \
      --from-literal=ADMIN_PASSWORD='strong-password' \
+     --from-literal=MCP_OPENWEBUI_JWT_SECRET="$SAURON_MCP_SHARED_SECRET" \
      --from-literal=VLLM_API_KEY=''
 
    kubectl -n sauron create secret docker-registry harbor-pull-secret \
@@ -153,9 +153,10 @@ helm upgrade --install sauron ./charts/sauron \
 | `imagePullSecrets` / `imagePullSecretsCreate` | Harbor auth |
 | `config.vllmBaseUrl` | OpenAI-compatible LLM base URL |
 | `config.embeddingMode` | `local` (default, offline) or `api` |
+| `config.mcpEnabled` / `mcpPath` / `mcpStatelessHttp` | Native MCP mount configuration |
 | `persistence.*` | PVC for LanceDB + SQLite + DuckDB |
-| `secrets.*` / `secrets.existingSecret` | JWT, API keys, admin password |
-| `api` / `mcp` / `mcpo`.enabled | Toggle components |
+| `secrets.*` / `secrets.existingSecret` | JWT, API keys, admin password, OpenWebUI identity secret |
+| `api.enabled` / `config.mcpEnabled` | Toggle the API container or its mounted MCP endpoint |
 | `ingress.*` | Optional external access |
 
 See `values.yaml` for the full schema and `values-airgapped.yaml` for a Harbor-oriented example.
@@ -176,6 +177,56 @@ kubectl exec -n sauron deploy/sauron -c api -- curl -sf http://localhost:8080/ap
 - SAURON itself does **not** require GPUs when `embeddingMode=local` (CPU embeddings). GPU nodes are for your **vLLM / inference** workloads, which you point at via `config.vllmBaseUrl`.
 - Give the API container enough memory (2–16Gi) if using local embeddings.
 - Use your platform’s project/namespace isolation as usual; this chart only needs a namespace, a PVC, and pull access to Harbor.
+- Route `/mcp` through the same service/port as `/api`; no second container or path backend is required.
+
+## OpenWebUI native MCP
+
+Use OpenWebUI 0.9.6 or newer. Configure the OpenWebUI deployment with:
+
+```bash
+kubectl -n <openwebui-namespace> create secret generic openwebui-mcp-identity \
+  --from-literal=shared-secret="$SAURON_MCP_SHARED_SECRET"
+```
+
+In production, source the same value from your enterprise secret manager rather
+than carrying it between namespaces manually.
+
+```yaml
+env:
+  - name: ENABLE_FORWARD_USER_INFO_HEADERS
+    value: "true"
+  - name: FORWARD_USER_INFO_HEADER_JWT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: openwebui-mcp-identity
+        key: shared-secret
+  - name: WEBUI_SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: openwebui-secrets
+        key: webui-secret-key
+```
+
+`FORWARD_USER_INFO_HEADER_JWT_SECRET` must contain exactly the same value as
+Sauron's `MCP_OPENWEBUI_JWT_SECRET`. If Sauron uses
+`secrets.existingSecret`, that Secret must include the latter key.
+
+In OpenWebUI, create an External Tool with type **MCP (Streamable HTTP)** and
+URL `https://<sauron-host>/mcp`. Set Authentication to **None** and add:
+
+```json
+{
+  "X-API-Key": "<dedicated-sauron-application-key>",
+  "X-Sauron-User-Groups": "{{USER_GROUPS}}"
+}
+```
+
+OpenWebUI sends the signed identity in `X-OpenWebUI-User-Jwt`; Sauron validates
+it and applies the forwarded group names to every MCP tool/resource call. Keep
+the application key exclusive to OpenWebUI and ensure group names match Sauron
+document ACLs exactly. See
+[`../../docs/MCP_OPENAPI_SETUP.md`](../../docs/MCP_OPENAPI_SETUP.md) for the
+complete trust model and verification procedure.
 
 ## Packaging (optional Harbor OCI chart)
 
@@ -183,9 +234,9 @@ If your platform prefers an OCI Helm chart in Harbor rather than a Git URL:
 
 ```bash
 helm package ./charts/sauron
-helm push sauron-0.1.0.tgz oci://harbor.example.local/helm-charts
+helm push sauron-0.2.0.tgz oci://harbor.example.local/helm-charts
 # Install:
-helm upgrade --install sauron oci://harbor.example.local/helm-charts/sauron --version 0.1.0
+helm upgrade --install sauron oci://harbor.example.local/helm-charts/sauron --version 0.2.0
 ```
 
 ## Uninstall

@@ -1,165 +1,190 @@
-# MCP Server with OpenAPI (mcpo) Setup
+# Native MCP integration with OpenWebUI
 
-This document explains how to run the RAG Knowledge Service MCP server as an OpenAPI endpoint, suitable for integration with **OpenWebUI** and other clients that expect standard HTTP/OpenAPI interfaces.
+Sauron exposes a native MCP Streamable HTTP endpoint from the same FastAPI
+process and port as its REST API and Admin UI:
 
-## Overview
+```text
+https://sauron.example.internal/mcp
+```
 
-The MCP server can be exposed in two ways:
+`mcpo`, a second MCP container, and ports 8090/8091 are not required. Native
+MCP first appeared in OpenWebUI 0.6.31. This production configuration
+requires OpenWebUI 0.9.6 or newer because that release fixed custom-header
+template expansion for MCP connections; Sauron relies on `{{USER_GROUPS}}`.
 
-1. **SSE (Server-Sent Events)** — Direct FastMCP server on port 8090
-   - Best for: Direct FastMCP browser clients
-   - Protocol: Custom SSE/FastMCP protocol
-   - URL: `http://localhost:8090/sse`
+## Request and trust flow
 
-2. **OpenAPI via mcpo** — MCP-to-OpenAPI proxy on port 8091 (recommended for OpenWebUI)
-   - Best for: OpenWebUI, standard HTTP clients, REST APIs
-   - Protocol: Standard OpenAPI/REST
-   - URL: `http://localhost:8091`
+```text
+OpenWebUI user
+   -> OpenWebUI MCP client
+      -> Run:AI / Knative HTTPS route
+         -> Sauron :8080/mcp
+            -> application API-key validation
+            -> signed OpenWebUI identity validation
+            -> Sauron ACL filtering using forwarded OpenWebUI group names
+```
 
-## Quick Start
+Every MCP request must contain both:
 
-### 1. Install mcpo
+1. A dedicated Sauron application key in `X-API-Key`.
+2. User identity. Production OpenWebUI deployments use the short-lived,
+   HS256-signed `X-OpenWebUI-User-Jwt` header.
+
+Sauron verifies the OpenWebUI token's HS256 signature, `iss=open-webui`, `sub`,
+`iat`, and `exp` claims. A normal OpenWebUI login/session token sent as
+`Authorization: Bearer` is not accepted: that header is reserved for JWTs
+issued by Sauron for direct clients.
+
+OpenWebUI's signed identity JWT does not contain group claims. The MCP
+connection therefore sends the current user's group names in
+`X-Sauron-User-Groups`. Sauron trusts that header only after validating the
+dedicated application key and signed user identity. Keep the application key
+exclusive to OpenWebUI and restrict `/mcp` to trusted network paths.
+
+Sauron's `ALL` group grants unrestricted document access. It is stripped from
+OpenWebUI-forwarded groups by default. Do not enable
+`MCP_OPENWEBUI_ALLOW_ALL_GROUP` unless that behavior is explicitly required.
+
+## 1. Configure Sauron
+
+Set these environment variables on the Sauron container. Use either a
+DB-backed application key created in **Settings -> Security**, or use
+`API_KEYS` only as a bootstrap/legacy allowlist:
 
 ```bash
-source .venv/bin/activate
-pip install mcpo
+MCP_ENABLED=true
+MCP_PATH=/mcp
+MCP_STATELESS_HTTP=true
+# Bootstrap alternative to a DB-backed application key:
+API_KEYS=<dedicated-sauron-application-key>
+MCP_OPENWEBUI_JWT_SECRET=<shared-random-secret>
+MCP_OPENWEBUI_GROUPS_HEADER=X-Sauron-User-Groups
+MCP_OPENWEBUI_ALLOW_ALL_GROUP=false
 ```
 
-### 2. Start the MCP Server with mcpo
+Use a secret of at least 32 random bytes. In Kubernetes, put
+`API_KEYS` and `MCP_OPENWEBUI_JWT_SECRET` in a Secret, not a ConfigMap or Helm
+values file committed to source control.
+
+The same Sauron application-key management used by the REST API applies here.
+A DB-backed, dedicated OpenWebUI application key is preferred because it can be
+revoked and its use is recorded.
+
+Changing `MCP_ENABLED` or `MCP_PATH` requires a Sauron restart because the MCP
+ASGI application is mounted during process startup.
+
+## 2. Configure OpenWebUI identity forwarding
+
+Set these environment variables on OpenWebUI and restart it:
 
 ```bash
-source .venv/bin/activate
-mcpo --port 8091 -- python -m src.mcp.run_stdio
+ENABLE_FORWARD_USER_INFO_HEADERS=true
+FORWARD_USER_INFO_HEADER_JWT_SECRET=<same-shared-random-secret>
+WEBUI_SECRET_KEY=<persistent-openwebui-secret>
 ```
 
-This will:
-- Start your MCP server in stdio mode (standard MCP protocol)
-- Wrap it with mcpo to expose OpenAPI endpoints
-- Listen on `http://0.0.0.0:8091`
+`FORWARD_USER_INFO_HEADER_JWT_SECRET` must exactly match Sauron's
+`MCP_OPENWEBUI_JWT_SECRET`. Keep `WEBUI_SECRET_KEY` persistent across restarts
+and common to all OpenWebUI replicas.
 
-### 3. Verify it's working
+The default forwarded header name is `X-OpenWebUI-User-Jwt`. If OpenWebUI's
+`FORWARD_USER_INFO_HEADER_JWT` setting is customized, Sauron and any intervening
+proxy must be configured to preserve that name; the current Sauron integration
+expects the default header.
+
+## 3. Add Sauron as an OpenWebUI tool server
+
+In **Admin Settings -> External Tools**, add a server with:
+
+| Setting | Value |
+|---|---|
+| Type | MCP (Streamable HTTP) |
+| URL | `https://<sauron-host>/mcp` |
+| Authentication | None |
+| Access Control | Only approved OpenWebUI groups/users |
+
+Set the connection's custom Headers JSON to:
+
+```json
+{
+  "X-API-Key": "<dedicated-sauron-application-key>",
+  "X-Sauron-User-Groups": "{{USER_GROUPS}}"
+}
+```
+
+Authentication is set to `None` because the application key is carried in the
+custom header and OpenWebUI forwards the signed identity JWT separately.
+
+OpenWebUI group names must exactly match the ACL group names assigned to Sauron
+documents. A user with no matching groups receives no document results.
+
+## 4. Run:AI, Knative, and proxy settings
+
+Only container port 8080 needs to be published. The existing route for the Admin
+UI and REST API also carries `/mcp`; no path split or second service is needed.
+
+MCP is configured as stateless HTTP so initialization and tool calls can be
+served safely without session affinity. Sauron currently uses JSON responses,
+which avoids SSE buffering requirements, but research calls can remain open for
+several minutes. Set the Knative/ingress request and upstream read timeouts above
+the longest allowed Sauron query duration (normally at least 600 seconds).
+
+If the platform publishes Sauron beneath a URL prefix, confirm that it preserves
+or rewrites `/mcp` consistently. `MCP_PATH` controls the path inside Sauron.
+
+## 5. Verification
+
+First verify the shared application route remains healthy:
 
 ```bash
-# Check if running
-lsof -i :8091
-
-# View OpenAPI docs
-curl http://localhost:8091/openapi.json | jq .
-
-# Or open in browser: http://localhost:8091/docs
+curl -fsS https://<sauron-host>/api/health
 ```
 
-## OpenWebUI Integration
+Then use OpenWebUI's **Verify Connection** action. Sauron should log an MCP
+initialize request, and OpenWebUI should discover tools such as
+`tool_ask`, `tool_search_documents`, and `tool_list_documents`.
 
-### Configuration
+Test with two users in different groups. Each user should see only documents
+whose Sauron ACL intersects their forwarded OpenWebUI groups. This cross-group
+negative test is required before production release.
 
-1. Open **OpenWebUI** settings
-2. Go to **Settings** → **MCP Servers** (or **Admin** → **Settings** → **MCP Servers**)
-3. Select **OpenAPI** mode
-4. Enter URL: `http://<your-server-ip>:8091` (e.g., `http://10.10.10.115:8091`)
-5. Click **Connect**
+Expected outcomes:
 
-The server should discover all available tools:
-- `tool_ask` — Ask questions about documents
-- `tool_search_documents` — Search knowledge base
-- `tool_lookup_document` — Read full documents
-- `tool_search_knowledge_graph` — Search entities and relationships
-- `tool_summarize_topic` — Summarize topics across documents
-- `tool_compare` — Compare two items/policies
-- And more...
-
-### Browser Access
-
-View the interactive OpenAPI documentation at:
-```
-http://<your-server-ip>:8091/docs
-```
-
-## MCP Server Runners
-
-### `src/mcp/run.py` — SSE Transport (Original)
-
-Runs the MCP server with SSE (Server-Sent Events) transport on port 8090.
-
-```bash
-python -m src.mcp.run
-```
-
-**Use case:** FastMCP browser clients, direct SSE consumers
-**Endpoint:** `http://localhost:8090/sse`
-
-### `src/mcp/run_stdio.py` — Stdio Transport (Standard MCP)
-
-Runs the MCP server with stdio transport (standard MCP protocol).
-
-```bash
-python -m src.mcp.run_stdio
-```
-
-**Use case:** Direct stdio spawning (Claude Code, mcpo, etc.)
-**Endpoint:** Communicates via stdin/stdout
-**When to use:** Wrap with mcpo for OpenAPI, or use directly in subprocess mode
-
-### `src/mcp/run_http.py` — HTTP Transport (Alternative)
-
-Alias for SSE transport with configurable port.
-
-```bash
-python -m src.mcp.run_http
-```
-
-## Comparison
-
-| Feature | SSE (8090) | OpenAPI via mcpo (8091) |
-|---------|-----------|------------------------|
-| Protocol | FastMCP/SSE | Standard OpenAPI/REST |
-| Best for | FastMCP browser UI | OpenWebUI, REST clients |
-| Port | 8090 | 8091 |
-| Auth | Header-based | REST auth (via mcpo) |
-| Interactive docs | `/sse` endpoint | `/docs` Swagger UI |
-| Setup complexity | Low | Medium (requires mcpo) |
-
-## Configuration
-
-Edit `.env` or `src/config.py` to customize:
-
-```python
-# MCP Server
-mcp_port: int = 8090              # SSE server port
-mcp_alt_port: int = 8091          # Alternative HTTP port
-mcp_server_name: str = "rag-knowledge-service"
-```
+| Test | Expected result |
+|---|---|
+| Missing/invalid `X-API-Key` | HTTP 403 |
+| Missing user identity | HTTP 401 |
+| Invalid/expired OpenWebUI identity JWT | HTTP 401 |
+| Valid identity with no matching groups | Tool succeeds with no protected documents |
+| OpenWebUI group named `ALL` | Removed unless `MCP_OPENWEBUI_ALLOW_ALL_GROUP=true` |
 
 ## Troubleshooting
 
-### mcpo fails to start: "No module named src.mcp.run_stdio"
+- **OpenWebUI cannot verify the connection:** confirm it is 0.9.6+, the server
+  type is **MCP (Streamable HTTP)**, and the URL ends in `/mcp`.
+- **401 from Sauron:** enable `ENABLE_FORWARD_USER_INFO_HEADERS`, confirm the
+  two forwarding secrets match exactly, and restart OpenWebUI.
+- **403 from Sauron:** verify the dedicated application key is active and is
+  sent as `X-API-Key` rather than as a bearer token.
+- **Tools appear but return no documents:** ensure `{{USER_GROUPS}}` is present
+  in the custom header and OpenWebUI group names exactly match Sauron ACL names.
+- **Long calls end at the proxy:** increase the Knative/ingress request and
+  upstream read timeout to at least the longest permitted Sauron query.
 
-Make sure you're in the project directory and have the venv activated:
+## Direct Sauron MCP clients
 
-```bash
-cd /path/to/rag
-source .venv/bin/activate
-mcpo --port 8091 -- python -m src.mcp.run_stdio
+Non-OpenWebUI clients may use Sauron's existing signed user JWT instead:
+
+```text
+X-API-Key: <sauron-application-key>
+Authorization: Bearer <sauron-user-jwt>
 ```
 
-### OpenWebUI shows "Connection Failed"
+The user groups embedded in the Sauron JWT are used for ACL filtering. The
+legacy stdio and SSE runners are not part of the production deployment because
+they cannot carry this HTTP request identity safely.
 
-1. Check mcpo is running: `lsof -i :8091`
-2. Test the endpoint: `curl http://localhost:8091/openapi.json`
-3. Verify firewall/network allows port 8091
-4. Check mcpo logs for errors
+## Upstream references
 
-### IPv4 Issues
-
-All LLM and embedding calls are forced to IPv4 to avoid VPN timeout issues. This is configured in:
-- `src/generation/llm_client.py`
-- `src/ingestion/embedder.py`
-- `src/admin/routes.py`
-
-If you get connection timeouts, ensure your remote vLLM server is accessible via IPv4 (use `curl -4 http://...` to test).
-
-## References
-
-- [mcpo GitHub](https://github.com/open-webui/mcpo)
-- [OpenWebUI MCP Docs](https://docs.openwebui.com/features/extensibility/mcp/)
-- [Model Context Protocol](https://modelcontextprotocol.io)
+- [OpenWebUI native MCP configuration](https://docs.openwebui.com/features/extensibility/mcp/)
+- [OpenWebUI identity-forwarding environment settings](https://docs.openwebui.com/reference/env-configuration/)

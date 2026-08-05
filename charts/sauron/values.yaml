@@ -37,8 +37,7 @@ imagePullSecretsCreate:
 ## ---------------------------------------------------------------------------
 ## Workload
 ## ---------------------------------------------------------------------------
-# All components share one pod + PVC (matches docker-compose shared volume;
-# required for SQLite/LanceDB file stores without RWX storage).
+# The API, Admin UI, and native MCP endpoint share one process and port.
 replicaCount: 1
 
 podAnnotations: {}
@@ -52,7 +51,7 @@ securityContext: {}
   # runAsUser: 1000
   # readOnlyRootFilesystem: false
 
-## API + Admin UI (uvicorn on 8080)
+## API + Admin UI + native MCP Streamable HTTP (uvicorn on 8080)
 api:
   enabled: true
   containerPort: 8080
@@ -81,46 +80,6 @@ api:
     timeoutSeconds: 5
     failureThreshold: 6
 
-## MCP server (SSE transport)
-mcp:
-  enabled: true
-  containerPort: 8090
-  resources:
-    requests:
-      cpu: "250m"
-      memory: 512Mi
-    limits:
-      cpu: "2"
-      memory: 4Gi
-  livenessProbe:
-    httpGet:
-      path: /
-      port: mcp
-    initialDelaySeconds: 40
-    periodSeconds: 30
-    timeoutSeconds: 5
-    failureThreshold: 3
-
-## MCP-to-OpenAPI proxy (mcpo) for OpenWebUI / REST clients
-mcpo:
-  enabled: true
-  containerPort: 8091
-  resources:
-    requests:
-      cpu: "100m"
-      memory: 256Mi
-    limits:
-      cpu: "1"
-      memory: 2Gi
-  livenessProbe:
-    httpGet:
-      path: /openapi.json
-      port: mcpo
-    initialDelaySeconds: 40
-    periodSeconds: 30
-    timeoutSeconds: 5
-    failureThreshold: 3
-
 ## Node scheduling (Run:ai / GPU nodes usually not required for SAURON itself;
 ## LLM inference is external via vLLM/OpenAI-compatible endpoint)
 nodeSelector: {}
@@ -139,12 +98,6 @@ service:
   api:
     port: 8080
     annotations: {}
-  mcp:
-    port: 8090
-    annotations: {}
-  mcpo:
-    port: 8091
-    annotations: {}
 
 ## ---------------------------------------------------------------------------
 ## Ingress (optional)
@@ -162,10 +115,6 @@ ingress:
         - path: /
           pathType: Prefix
           service: api
-        # Optional: expose MCP on a path prefix or separate host
-        # - path: /mcp
-        #   pathType: Prefix
-        #   service: mcp
   tls: []
     # - secretName: sauron-tls
     #   hosts:
@@ -202,6 +151,13 @@ config:
   lancedbTableName: "chunks"
   databaseUrl: "sqlite+aiosqlite:///./data/metadata.db"
 
+  # Native MCP is served by the API container at /mcp on port 8080.
+  mcpEnabled: "true"
+  mcpPath: "/mcp"
+  mcpStatelessHttp: "true"
+  mcpOpenwebuiGroupsHeader: "X-Sauron-User-Groups"
+  mcpOpenwebuiAllowAllGroup: "false"
+
   # TLS verification for outbound model API calls (LLM + embeddings).
   # Set "false" for private CAs / self-signed endpoints. Can also be toggled
   # at runtime in Admin → Settings → Models (persists on the PVC settings.json).
@@ -224,12 +180,14 @@ secrets:
   # If set, use this Secret name and do not create one from chart values.
   existingSecret: ""
   # Keys expected in existingSecret (override if your secret uses different names):
-  #   JWT_SECRET_KEY, API_KEYS, ADMIN_USERNAME, ADMIN_PASSWORD, VLLM_API_KEY
+  #   JWT_SECRET_KEY, API_KEYS, ADMIN_USERNAME, ADMIN_PASSWORD, VLLM_API_KEY,
+  #   MCP_OPENWEBUI_JWT_SECRET
   jwtSecretKey: "change-me-in-production"
   apiKeys: "dev-key-1"
   adminUsername: "admin"
   adminPassword: "password123"
   vllmApiKey: ""
+  mcpOpenwebuiJwtSecret: ""
   # Additional key/value pairs stored in the chart-managed Secret
   extra: {}
 

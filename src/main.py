@@ -4,7 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from src.api.routes_auth import router as auth_router
-from src.api.routes_ingest import router as ingest_router, get_metadata_store
+from src.api.routes_ingest import (
+    router as ingest_router,
+    get_metadata_store,
+    get_schema_registry,
+    get_vector_store,
+)
 from src.api.routes_query import router as query_router
 from src.admin.routes import router as admin_router
 from src.api.routes_openai_compat import router as openai_compat_router
@@ -98,7 +103,29 @@ async def lifespan(app: FastAPI):
     yield
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="SAURON", description="Structured Agentic Unified Retrieval Over Networks", version="0.1.0", lifespan=lifespan)
+    mcp_http_app = None
+    app_lifespan = lifespan
+    if settings.mcp_enabled:
+        from fastmcp.utilities.lifespan import combine_lifespans
+        from src.mcp.agent_registry import AgentRegistry
+        from src.mcp.http import create_mcp_http_app
+        from src.mcp.server import create_mcp_server
+
+        mcp_server = create_mcp_server(
+            vector_store=get_vector_store(),
+            schema_registry=get_schema_registry(),
+            metadata_store=get_metadata_store(),
+            agent_registry=AgentRegistry(),
+        )
+        mcp_http_app = create_mcp_http_app(mcp_server)
+        app_lifespan = combine_lifespans(lifespan, mcp_http_app.lifespan)
+
+    app = FastAPI(
+        title="SAURON",
+        description="Structured Agentic Unified Retrieval Over Networks",
+        version="0.1.0",
+        lifespan=app_lifespan,
+    )
 
     # Allow browser demos (e.g. Vite on :5173) to call the API cross-origin.
     # Without this, preflight OPTIONS fails with 405 and the browser reports "Failed to fetch".
@@ -130,6 +157,12 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     if ADMIN_STATIC.exists():
         app.mount("/admin/static", StaticFiles(directory=str(ADMIN_STATIC)), name="admin-static")
+    if mcp_http_app is not None:
+        # Mount last so explicit API/admin routes retain precedence. The child
+        # app owns settings.mcp_path (normally /mcp), allowing it to share the
+        # existing Uvicorn/Run:AI port without a second container process.
+        app.mount("/", mcp_http_app, name="mcp")
+        app.state.mcp_http_app = mcp_http_app
     return app
 
 app = create_app()

@@ -2,9 +2,9 @@ apiVersion: v2
 name: sauron
 description: |
   SAURON (Structured Agentic Unified Retrieval Over Networks) — self-hosted
-  agentic RAG with Admin UI, REST API, MCP server, and OpenAPI proxy.
+  agentic RAG with Admin UI, REST API, and native Streamable HTTP MCP.
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.0.0"
 keywords:
   - rag

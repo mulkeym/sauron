@@ -4,12 +4,7 @@ Components:
 {{- if .Values.api.enabled }}
   - API + Admin UI  → service {{ include "sauron.fullname" . }}-api:{{ .Values.service.api.port }}
 {{- end }}
-{{- if .Values.mcp.enabled }}
-  - MCP (SSE)       → service {{ include "sauron.fullname" . }}-mcp:{{ .Values.service.mcp.port }}
-{{- end }}
-{{- if .Values.mcpo.enabled }}
-  - MCP OpenAPI     → service {{ include "sauron.fullname" . }}-mcpo:{{ .Values.service.mcpo.port }}
-{{- end }}
+  - Native MCP      → service {{ include "sauron.fullname" . }}-api:{{ .Values.service.api.port }}{{ .Values.config.mcpPath }}
 
 Image: {{ include "sauron.image" . }}
 
@@ -38,3 +33,4 @@ IMPORTANT (air-gapped / Harbor):
   3. Configure imagePullSecrets (or imagePullSecretsCreate) for Harbor auth.
   4. Point config.vllmBaseUrl at your internal OpenAI-compatible LLM endpoint.
   5. Rotate secrets.jwtSecretKey, secrets.apiKeys, and secrets.adminPassword.
+  6. Set secrets.mcpOpenwebuiJwtSecret to OpenWebUI's FORWARD_USER_INFO_HEADER_JWT_SECRET.

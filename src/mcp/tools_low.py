@@ -166,16 +166,20 @@ def list_documents_in_category(
     ]
 
 
-async def search_knowledge_graph(query, metadata_store=None, entity_type=None):
-    from src.knowledge.graph_rag import get_graph_data, get_knowledge_graph
+async def search_knowledge_graph(
+    query,
+    user_groups: list[str],
+    metadata_store=None,
+    entity_type=None,
+):
+    """Search KG-derived context while enforcing source-document ACLs."""
+    from src.knowledge.graph_rag import query_graph
     try:
-        # Try to get a subgraph for the entity
-        kg = await get_knowledge_graph(query, max_depth=2)
-        if kg:
-            return {"query": query, "knowledge_graph": kg}
-        # Fallback to data query
-        data = await get_graph_data(query, mode="local")
-        return {"query": query, "data": data}
+        result = await query_graph(query, mode="local", user_groups=user_groups)
+        result["query"] = query
+        if entity_type:
+            result["entity_type"] = entity_type
+        return result
     except Exception as e:
         return {"query": query, "error": str(e)}
 

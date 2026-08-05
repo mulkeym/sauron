@@ -14,10 +14,14 @@ data:
   LANCEDB_PATH: {{ .Values.config.lancedbPath | quote }}
   LANCEDB_TABLE_NAME: {{ .Values.config.lancedbTableName | quote }}
   DATABASE_URL: {{ .Values.config.databaseUrl | quote }}
+  MCP_ENABLED: {{ .Values.config.mcpEnabled | quote }}
+  MCP_PATH: {{ .Values.config.mcpPath | quote }}
+  MCP_STATELESS_HTTP: {{ .Values.config.mcpStatelessHttp | quote }}
+  MCP_OPENWEBUI_GROUPS_HEADER: {{ .Values.config.mcpOpenwebuiGroupsHeader | quote }}
+  MCP_OPENWEBUI_ALLOW_ALL_GROUP: {{ .Values.config.mcpOpenwebuiAllowAllGroup | quote }}
   SSL_VERIFY: {{ .Values.config.sslVerify | quote }}
   HF_HUB_OFFLINE: {{ .Values.config.hfHubOffline | quote }}
   TRANSFORMERS_OFFLINE: {{ .Values.config.transformersOffline | quote }}
-  MCP_PORT: {{ .Values.mcp.containerPort | quote }}
   {{- range $key, $value := .Values.config.extraEnv }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}

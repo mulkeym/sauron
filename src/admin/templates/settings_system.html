@@ -4,17 +4,17 @@
 <h1>System</h1>
 <form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
 <div class="settings-section">
-    <h3>MCP Servers</h3>
+    <h3>Native MCP</h3>
     <div class="form-row">
         <div class="form-group">
-            <label for="mcp_port">MCP Server Port (SSE)</label>
-            <input type="number" id="mcp_port" name="mcp_port" value="{{ settings.mcp_port }}" placeholder="8090" style="max-width:100px;">
-            <span style="font-size:0.8rem; color:#6b7280;">Direct MCP clients (SSE transport)</span>
+            <label>Endpoint</label>
+            <input type="text" value="{{ settings.mcp_path }} (API port)" disabled>
+            <span style="font-size:0.8rem; color:#6b7280;">Streamable HTTP; shares the API process and port.</span>
         </div>
         <div class="form-group">
-            <label for="mcp_alt_port">MCPO Proxy Port (HTTP)</label>
-            <input type="number" id="mcp_alt_port" name="mcp_alt_port" value="{{ settings.mcp_alt_port }}" placeholder="8091" style="max-width:100px;">
-            <span style="font-size:0.8rem; color:#6b7280;">OpenAPI proxy for REST clients (OpenWebUI, etc.)</span>
+            <label>Status / OpenWebUI identity</label>
+            <input type="text" value="{{ 'Enabled' if settings.mcp_enabled else 'Disabled' }} / {{ 'Configured' if settings.mcp_openwebui_jwt_secret else 'Not configured' }}" disabled>
+            <span style="font-size:0.8rem; color:#6b7280;">Configure MCP and its identity secret through deployment environment variables.</span>
         </div>
     </div>
     <div class="form-row">

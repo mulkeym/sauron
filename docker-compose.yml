@@ -1,4 +1,4 @@
-# Shared build for all services (one image, MITM/air-gap friendly args from .env).
+# Shared build configuration (MITM/air-gap friendly args from .env).
 # Place certs/Trusted_Root_CAs.pem (inspection CA) before: docker compose build
 x-sauron-build: &sauron-build
   context: .
@@ -31,7 +31,7 @@ x-sauron-build: &sauron-build
     HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN:-}}
 
 services:
-  # SAURON API + Admin UI
+  # SAURON API + Admin UI + native MCP Streamable HTTP endpoint
   api:
     image: sauron:local
     build: *sauron-build
@@ -50,6 +50,12 @@ services:
       - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - API_KEYS=${API_KEYS:-dev-key-1}
+      - MCP_ENABLED=${MCP_ENABLED:-true}
+      - MCP_PATH=${MCP_PATH:-/mcp}
+      - MCP_STATELESS_HTTP=${MCP_STATELESS_HTTP:-true}
+      - MCP_OPENWEBUI_JWT_SECRET=${MCP_OPENWEBUI_JWT_SECRET:-}
+      - MCP_OPENWEBUI_GROUPS_HEADER=${MCP_OPENWEBUI_GROUPS_HEADER:-X-Sauron-User-Groups}
+      - MCP_OPENWEBUI_ALLOW_ALL_GROUP=${MCP_OPENWEBUI_ALLOW_ALL_GROUP:-false}
       - SSL_VERIFY=${SSL_VERIFY:-true}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
       - HTTP_PROXY=${HTTP_PROXY:-}
@@ -57,82 +63,6 @@ services:
       - NO_PROXY=${NO_PROXY:-}
     volumes:
       - app_data:/app/data
-    restart: unless-stopped
-
-  # MCP Server (SSE transport for direct MCP clients)
-  mcp:
-    image: sauron:local
-    build: *sauron-build
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: ["python", "-m", "src.mcp.run"]
-    ports:
-      - "8890:8090"
-    environment:
-      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
-      - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
-      - VLLM_REQUEST_TIMEOUT=${VLLM_REQUEST_TIMEOUT:-300}
-      - EMBEDDING_MODE=${EMBEDDING_MODE:-local}
-      - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:8000/v1}
-      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-nomic-ai/nomic-embed-text-v1}
-      - LANCEDB_PATH=/app/data/lancedb
-      - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
-      - API_KEYS=${API_KEYS:-dev-key-1}
-      - SSL_VERIFY=${SSL_VERIFY:-true}
-      - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
-      - MCP_PORT=8090
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
-    volumes:
-      - app_data:/app/data
-    # Override the image's healthcheck (which targets the api on :8080). The MCP
-    # server listens on :8090 with SSE transport and has no /api/health route, so
-    # probe liveness instead: any HTTP response (even 404) proves it's serving.
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8090/ || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-  # MCP-to-OpenAPI proxy (for OpenWebUI and REST clients)
-  mcpo:
-    image: sauron:local
-    build: *sauron-build
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    entrypoint: ["mcpo", "--port", "8091", "--", "python", "-m", "src.mcp.run_stdio"]
-    ports:
-      - "8891:8091"
-    environment:
-      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8000/v1}
-      - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-google/gemma-4-31b-it}
-      - VLLM_REQUEST_TIMEOUT=${VLLM_REQUEST_TIMEOUT:-300}
-      - EMBEDDING_MODE=${EMBEDDING_MODE:-local}
-      - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:8000/v1}
-      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-nomic-ai/nomic-embed-text-v1}
-      - LANCEDB_PATH=/app/data/lancedb
-      - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
-      - API_KEYS=${API_KEYS:-dev-key-1}
-      - SSL_VERIFY=${SSL_VERIFY:-true}
-      - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
-    volumes:
-      - app_data:/app/data
-    # Override the image's healthcheck (which targets the api on :8080). mcpo
-    # serves the OpenAPI proxy on :8091; its /openapi.json returns 200.
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fs -o /dev/null http://localhost:8091/openapi.json || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
     restart: unless-stopped
 
 volumes:

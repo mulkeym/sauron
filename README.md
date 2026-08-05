@@ -15,7 +15,7 @@ SAURON is a self-hosted agentic RAG (Retrieval-Augmented Generation) system with
 - **Document-Level RBAC** -- ACL group filtering enforced at the search layer, per-dataset isolation
 - **Web Crawler** -- Multi-page crawling with Playwright fallback for bot-protected sites, auto-downloads PDFs/DOCX/PPTX
 - **Dataset Workspaces** -- Organize documents, connectors, and queries by project with filtering across the UI
-- **MCP Server** -- Model Context Protocol tools for OpenWebUI, Claude Code, and other AI agents
+- **Native MCP Server** -- Streamable HTTP tools for OpenWebUI and other MCP clients at `/mcp`
 - **Admin Dashboard** -- Document management, ingestion queue, playground, knowledge graph explorer, web connector management
 - **Streaming Answers** -- SSE-based token streaming in the playground
 - **OpenAI-Compatible API** -- Drop-in `/v1/chat/completions` endpoint with citations
@@ -32,8 +32,8 @@ SAURON is a self-hosted agentic RAG (Retrieval-Augmented Generation) system with
               +-------------------+-------------------+
               |                   |                   |
      +--------v-------+  +-------v--------+  +-------v--------+
-     |   Admin UI     |  |   REST API     |  |   MCP Server   |
-     |   :8080/admin  |  |   :8080/api    |  |   :8090 / 8091 |
+     |   Admin UI     |  |   REST API     |  |  Native MCP    |
+     |   :8080/admin  |  |   :8080/api    |  |   :8080/mcp    |
      +--------+-------+  +-------+--------+  +-------+--------+
               |                   |                   |
               +-------------------+-------------------+
@@ -214,7 +214,8 @@ Every document has an `acl_groups` field (e.g., `["finance", "executives"]`). Wh
 - Their groups are checked against each document's ACL
 - `"ALL"` bypasses filtering (admin access)
 - Filtering happens at the database level (LanceDB `array_has_any`)
-- MCP tools default to `["ALL"]` (configure per-user in production)
+- MCP tools use the authenticated caller's groups; they never default to `["ALL"]`
+- OpenWebUI-forwarded `ALL` membership is removed unless an operator explicitly enables it
 
 ACL groups can be set during upload or inherited from the document's category.
 
@@ -324,10 +325,38 @@ SAURON exposes tools via the Model Context Protocol for integration with OpenWeb
 | `tool_search_knowledge_graph` | Find entity relationships |
 | `tool_search_meetings` | Search meeting transcripts by speaker/topic |
 
-Three transport modes:
-- **SSE** (port 8090) -- direct MCP clients
-- **OpenAPI via mcpo** (port 8091) -- OpenWebUI and REST clients
-- **stdio** -- subprocess mode (Claude Code, mcpo)
+Sauron uses native **Streamable HTTP** for MCP at `/mcp` on port 8080. See
+[`docs/MCP_OPENAPI_SETUP.md`](docs/MCP_OPENAPI_SETUP.md) for the authenticated
+OpenWebUI configuration.
+
+The MCP endpoint runs inside the existing FastAPI/Uvicorn process:
+
+| Interface | Path | Container port |
+|-----------|------|----------------|
+| Admin UI | `/admin` | 8080 |
+| REST API | `/api`, `/api/v1` | 8080 |
+| OpenAI-compatible API | `/v1` | 8080 |
+| Native MCP | `/mcp` | 8080 |
+
+No `mcpo` process, MCP sidecar, second service, or ports 8090/8091 are needed.
+MCP is configured as stateless Streamable HTTP so it can operate behind the
+existing Run:AI/Knative HTTPS route without session affinity.
+
+### MCP authentication and ACLs
+
+Every MCP request requires a valid Sauron application key in `X-API-Key` and
+one supported user identity:
+
+| Client | User identity | ACL source |
+|--------|---------------|------------|
+| OpenWebUI | Signed `X-OpenWebUI-User-Jwt` | `X-Sauron-User-Groups` |
+| Direct Sauron client | `Authorization: Bearer <sauron-jwt>` | Signed `groups` claim |
+
+OpenWebUI's normal login/session bearer token is not a Sauron JWT and must not
+be sent as `Authorization: Bearer` to Sauron. Enable OpenWebUI's signed
+user-information forwarding instead. The application key identifies the
+trusted OpenWebUI backend; the forwarded user identity and groups determine
+which documents that individual call may retrieve.
 
 ## Admin Dashboard
 
@@ -364,8 +393,7 @@ cp .env.example .env
 # Run
 uvicorn src.main:app --host 0.0.0.0 --port 8080
 
-# MCP server (separate terminal)
-mcpo --port 8091 -- python -m src.mcp.run_stdio
+# Native MCP is mounted automatically at http://localhost:8080/mcp
 ```
 
 ### Docker
@@ -446,18 +474,53 @@ docker pull ghcr.io/mulkeym/sauron:latest
 Kubernetes / Run:ai: use the Helm chart under [`charts/sauron`](charts/sauron) (defaults to the GHCR image).
 
 Services:
-- **API + Admin UI**: http://localhost:8080
-- **MCP (SSE)**: http://localhost:8090
-- **MCP (OpenAPI)**: http://localhost:8091
-- **OpenWebUI**: http://localhost:3000
+- **API + Admin UI + native MCP**: http://localhost:8080 (`/mcp` for MCP)
 
 ### OpenWebUI Integration
 
-1. Start SAURON with `docker compose up -d`
-2. Open OpenWebUI at http://localhost:3000
-3. Go to Settings -> MCP Servers -> OpenAPI
-4. Enter URL: `http://mcpo:8091`
-5. Click Connect -- tools are auto-discovered
+Use OpenWebUI 0.9.6 or newer and configure these environment variables on the
+OpenWebUI deployment:
+
+```bash
+ENABLE_FORWARD_USER_INFO_HEADERS=true
+FORWARD_USER_INFO_HEADER_JWT_SECRET=<shared-random-secret>
+WEBUI_SECRET_KEY=<persistent-openwebui-secret>
+```
+
+Configure the same identity secret on Sauron:
+
+```bash
+MCP_ENABLED=true
+MCP_PATH=/mcp
+MCP_STATELESS_HTTP=true
+MCP_OPENWEBUI_JWT_SECRET=<same-shared-random-secret>
+MCP_OPENWEBUI_GROUPS_HEADER=X-Sauron-User-Groups
+MCP_OPENWEBUI_ALLOW_ALL_GROUP=false
+```
+
+Restart both deployments after changing environment variables. Then create an
+OpenWebUI server under **Admin Settings -> External Tools**:
+
+| Setting | Value |
+|---------|-------|
+| Type | MCP (Streamable HTTP) |
+| URL | `https://<sauron-host>/mcp` |
+| Authentication | None |
+
+Add these custom headers to that connection:
+
+```json
+{
+  "X-API-Key": "<dedicated-sauron-application-key>",
+  "X-Sauron-User-Groups": "{{USER_GROUPS}}"
+}
+```
+
+OpenWebUI group names must exactly match Sauron document ACL group names. Grant
+the tool connection only to approved OpenWebUI users/groups, keep the
+application key server-side, and test with two users in different groups before
+production. Full setup and Run:AI/Knative notes are in
+[`docs/MCP_OPENAPI_SETUP.md`](docs/MCP_OPENAPI_SETUP.md).
 
 ## Security: dependency installs
 

@@ -8,10 +8,10 @@ SAURON supports **multiple service clients** (demo front-ends, OpenWebUI, MCP ga
 |---------|------|
 | **Application** | Named client (`sdwan-demo-chat`, `openwebui`, …) |
 | **API key** | Service secret for that client (`X-API-Key` header) |
-| **JWT** | User identity + ACL **groups** (document access) |
+| **User identity** | Sauron JWT, or verified OpenWebUI forwarded-identity JWT |
 
 Keys answer: *“Is this a trusted backend?”*  
-JWT groups answer: *“Which documents may this request see?”*
+User groups answer: *“Which documents may this request see?”*
 
 ## Admin UI
 
@@ -36,6 +36,38 @@ Prefer moving each real client to its own application and revoking unused legacy
 3. Demo backend mints JWTs per persona and calls `/api/v1/query` or `/api/v1/query/async`  
 
 The **browser must not** hold Sauron API keys when deploying multi-user front-ends.
+
+## OpenWebUI native MCP application
+
+Create a dedicated application such as `openwebui-mcp` and generate a key for
+the OpenWebUI External Tools connection. OpenWebUI sends that key only from its
+backend:
+
+```json
+{
+  "X-API-Key": "<openwebui-mcp-application-key>",
+  "X-Sauron-User-Groups": "{{USER_GROUPS}}"
+}
+```
+
+The application key proves the request came from the trusted OpenWebUI service;
+it does not grant document access by itself. Sauron also requires OpenWebUI's
+short-lived, HS256-signed identity in `X-OpenWebUI-User-Jwt`. Enable it with:
+
+```text
+OpenWebUI: ENABLE_FORWARD_USER_INFO_HEADERS=true
+OpenWebUI: FORWARD_USER_INFO_HEADER_JWT_SECRET=<shared-secret>
+OpenWebUI: WEBUI_SECRET_KEY=<persistent-openwebui-secret>
+Sauron:    MCP_OPENWEBUI_JWT_SECRET=<same-shared-secret>
+```
+
+OpenWebUI's ordinary session/login token is not accepted as a Sauron bearer
+token. Its forwarded identity JWT supplies the verified user; the templated
+`X-Sauron-User-Groups` header supplies the ACL group names. Because that group
+header is trusted at the application boundary, keep the application key
+exclusive to OpenWebUI and restrict `/mcp` to trusted network paths.
+
+See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md) for the complete configuration.
 
 ## Validation order
 
