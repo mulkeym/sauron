@@ -1,7 +1,7 @@
 # Dashboard Recent Queries
 
 **Date:** 2026-08-16
-**Status:** Design approved, pending spec review
+**Status:** Approved
 
 ## Problem
 
