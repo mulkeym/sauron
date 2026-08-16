@@ -1,7 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timedelta, timezone
 
-import jwt
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -10,7 +8,6 @@ from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
 from src.mcp.http import add_mcp_http_route, create_mcp_http_app
 from src.mcp.server import create_mcp_server
-from src.config import settings
 
 
 def _app(metadata_store=None):
@@ -95,28 +92,12 @@ def test_tool_call_uses_authenticated_groups_not_all():
     metadata_store.list_documents.assert_awaited_once_with(["finance", "engineering"])
 
 
-def test_openwebui_signed_identity_and_forwarded_groups(monkeypatch):
-    secret = "openwebui-test-secret-at-least-32-bytes"
-    monkeypatch.setattr(settings, "mcp_openwebui_jwt_secret", secret)
-    now = datetime.now(timezone.utc)
-    identity = jwt.encode(
-        {
-            "sub": "owui-user-1",
-            "email": "user@example.test",
-            "name": "Test User",
-            "role": "user",
-            "iss": "open-webui",
-            "iat": now,
-            "exp": now + timedelta(minutes=5),
-        },
-        secret,
-        algorithm="HS256",
-    )
+def test_openwebui_header_identity_and_forwarded_groups():
     metadata_store = AsyncMock()
     metadata_store.list_documents.return_value = []
     headers = {
         "X-API-Key": "test-key-1",
-        "X-OpenWebUI-User-Jwt": identity,
+        "X-Sauron-Username": "user@example.test",
         "X-Sauron-User-Groups": "clinical,finance",
         "Accept": "application/json, text/event-stream",
     }
@@ -128,6 +109,27 @@ def test_openwebui_signed_identity_and_forwarded_groups(monkeypatch):
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
     metadata_store.list_documents.assert_awaited_once_with(["clinical", "finance"])
+
+
+def test_openwebui_initialize_without_jwt():
+    payload = _request(
+        "initialize",
+        {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "pytest", "version": "1"},
+        },
+    )
+    headers = {
+        "X-API-Key": "test-key-1",
+        "X-Sauron-Username": "user@example.test",
+        "X-Sauron-User-Groups": "finance",
+        "Accept": "application/json, text/event-stream",
+    }
+    with TestClient(_app()) as client:
+        response = client.post("/mcp", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["result"]["serverInfo"]["name"] == "sauron"
 
 
 def test_sync_tool_retains_authenticated_request_context():

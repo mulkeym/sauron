@@ -217,14 +217,14 @@ URL `https://<sauron-host>/mcp`. Set Authentication to **None** and add:
 ```json
 {
   "X-API-Key": "<dedicated-sauron-application-key>",
+  "X-Sauron-Username": "{{USER_EMAIL}}",
   "X-Sauron-User-Groups": "{{USER_GROUPS}}"
 }
 ```
 
-OpenWebUI sends the signed identity in `X-OpenWebUI-User-Jwt`; Sauron validates
-it and applies the forwarded group names to every MCP tool/resource call. Keep
-the application key exclusive to OpenWebUI and ensure group names match Sauron
-document ACLs exactly. See
+OpenWebUI identity is the templated username and groups headers after the
+application key validates. Keep the application key exclusive to OpenWebUI
+and ensure group names match Sauron document ACLs exactly. See
 [`../../docs/MCP_OPENAPI_SETUP.md`](../../docs/MCP_OPENAPI_SETUP.md) for the
 complete trust model and verification procedure.
 

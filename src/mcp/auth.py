@@ -57,54 +57,60 @@ def _decode_openwebui_identity(token: str) -> dict:
         raise MCPAuthenticationError("Invalid OpenWebUI identity token") from exc
 
 
+def _forwarded_groups(headers: dict) -> list[str]:
+    groups_header = settings.mcp_openwebui_groups_header.lower()
+    groups = _parse_groups(headers.get(groups_header, ""))
+    if not settings.mcp_openwebui_allow_all_group:
+        groups = [group for group in groups if group != "ALL"]
+    return groups
+
+
 def extract_mcp_context(headers: dict) -> MCPContext:
     """Resolve the application and user identity for one MCP HTTP request.
 
-    Two user-token formats are accepted:
-    * Sauron's own Bearer JWT, used by direct Sauron clients.
-    * OpenWebUI's signed X-OpenWebUI-User-Jwt forwarding token. OpenWebUI group
-      names arrive in a separately configured templated header because its
-      forwarded JWT intentionally does not contain group claims.
+    A valid Sauron application API key is always required. Then:
 
-    A valid Sauron application API key is required in both cases. This means
-    forwarded OpenWebUI group headers are trusted only from a client that also
-    possesses the dedicated application credential.
+    1. ``Authorization: Bearer`` that verifies as a Sauron JWT (direct clients).
+       An invalid Bearer is an error; it does not fall through to headers.
+    2. Trusted identity headers from OpenWebUI (or another key-holding client):
+       username from ``mcp_openwebui_username_header``, groups from
+       ``mcp_openwebui_groups_header``.
+
+    OpenWebUI's ``X-OpenWebUI-User-Jwt`` is ignored until an IdP is wired.
+    Forwarded group headers are trusted only from a client that also possesses
+    the dedicated application credential.
     """
     headers = _normalise_headers(headers)
     api_key = headers.get("x-api-key", "")
     if not api_key or not validate_api_key(api_key):
         raise MCPAuthenticationError("Invalid or missing API key", status_code=403)
 
-    openwebui_token = headers.get("x-openwebui-user-jwt", "")
-    if openwebui_token:
-        payload = _decode_openwebui_identity(openwebui_token)
-        groups_header = settings.mcp_openwebui_groups_header.lower()
-        groups = _parse_groups(headers.get(groups_header, ""))
-        if not settings.mcp_openwebui_allow_all_group:
-            groups = [group for group in groups if group != "ALL"]
-        username = payload.get("email") or payload.get("name") or payload["sub"]
+    auth_header = headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.removeprefix("Bearer ")
+        try:
+            user = decode_token(token)
+        except ValueError as exc:
+            raise MCPAuthenticationError(str(exc)) from exc
         return MCPContext(
-            username=str(username),
-            groups=groups,
+            username=user.username,
+            groups=list(user.groups),
             api_key=api_key,
-            agent_id=str(payload["sub"]),
-            identity_source="openwebui-jwt",
+            identity_source="sauron-jwt",
         )
 
-    auth_header = headers.get("authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise MCPAuthenticationError("Missing Bearer token")
-    token = auth_header.removeprefix("Bearer ")
-    try:
-        user = decode_token(token)
-    except ValueError as exc:
-        raise MCPAuthenticationError(str(exc)) from exc
-    return MCPContext(
-        username=user.username,
-        groups=list(user.groups),
-        api_key=api_key,
-        identity_source="sauron-jwt",
-    )
+    username_header = settings.mcp_openwebui_username_header.lower()
+    username = (headers.get(username_header, "") or "").strip()
+    if username:
+        return MCPContext(
+            username=username,
+            groups=_forwarded_groups(headers),
+            api_key=api_key,
+            agent_id=username,
+            identity_source="openwebui-headers",
+        )
+
+    raise MCPAuthenticationError("Missing user identity")
 
 
 def mcp_llm_session_kwargs() -> dict:

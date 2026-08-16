@@ -349,7 +349,7 @@ one supported user identity:
 
 | Client | User identity | ACL source |
 |--------|---------------|------------|
-| OpenWebUI | Signed `X-OpenWebUI-User-Jwt` | `X-Sauron-User-Groups` |
+| OpenWebUI | `X-API-Key` + `X-Sauron-Username` (`{{USER_EMAIL}}`) | `X-Sauron-User-Groups` |
 | Direct Sauron client | `Authorization: Bearer <sauron-jwt>` | Signed `groups` claim |
 
 OpenWebUI's normal login/session bearer token is not a Sauron JWT and must not
