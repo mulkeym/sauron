@@ -8,10 +8,10 @@ SAURON supports **multiple service clients** (demo front-ends, OpenWebUI, MCP ga
 |---------|------|
 | **Application** | Named client (`sdwan-demo-chat`, `openwebui`, …) |
 | **API key** | Service secret for that client (`X-API-Key` header) |
-| **User identity** | Sauron JWT, or verified OpenWebUI forwarded-identity JWT |
+| **User identity** | Trusted headers from OpenWebUI, or a Sauron JWT for direct clients |
 
-Keys answer: *“Is this a trusted backend?”*  
-User groups answer: *“Which documents may this request see?”*
+Keys answer: *“Is this a trusted backend?”* (OAuth confidential client)  
+User identity answers: *“Which person, which documents?”* (OAuth access token)
 
 ## Admin UI
 
@@ -70,17 +70,18 @@ backend:
 }
 ```
 
-The application key proves the request came from the trusted OpenWebUI service;
-it does not grant document access by itself. OpenWebUI's signed
-`X-OpenWebUI-User-Jwt` is **paused** until an IdP is wired. Identity is the
-templated username and groups headers. Anyone with the application key can
-assert any user/groups, so keep the key exclusive to OpenWebUI and restrict
-`/mcp` to trusted network paths.
+The application key proves the request came from the trusted OpenWebUI service
+(the confidential client). It does not grant document access. Until an OAuth
+IdP is wired, OpenWebUI is the authorization server: it expands
+`{{USER_EMAIL}}` and `{{USER_GROUPS}}` on each call. Sauron ignores
+`X-OpenWebUI-User-Jwt`. Anyone with the application key can assert any
+user/groups, so treat the key like a client secret.
 
-Direct (non-OpenWebUI) MCP clients still send `Authorization: Bearer` with a
-Sauron JWT from `POST /api/v1/auth/token`.
+Direct MCP clients mint a lab JWT from `POST /api/v1/auth/token` and send
+`Authorization: Bearer`. That mint is not production identity.
 
-See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md) for the complete configuration.
+See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md) for the full OAuth-shaped
+flow, OpenWebUI setup, and the planned IdP path.
 
 ## Validation order
 

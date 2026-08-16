@@ -344,19 +344,19 @@ existing Run:AI/Knative HTTPS route without session affinity.
 
 ### MCP authentication and ACLs
 
-Every MCP request requires a valid Sauron application key in `X-API-Key` and
-one supported user identity:
+Every MCP request is OAuth-shaped: a **client** credential plus a **user**
+credential. The application key (`X-API-Key`) is the confidential client.
+User identity is either OpenWebUI's templated headers (OpenWebUI is the
+authorization server today) or a Sauron JWT for scripts. An IdP access token
+will replace the user credential later. Details:
+[docs/MCP_OPENAPI_SETUP.md](docs/MCP_OPENAPI_SETUP.md#authentication-for-mcp-clients-oauth-shaped).
 
 | Client | User identity | ACL source |
 |--------|---------------|------------|
-| OpenWebUI | `X-API-Key` + `X-Sauron-Username` (`{{USER_EMAIL}}`) | `X-Sauron-User-Groups` |
+| OpenWebUI | `X-Sauron-Username` (`{{USER_EMAIL}}`) | `X-Sauron-User-Groups` |
 | Direct Sauron client | `Authorization: Bearer <sauron-jwt>` | Signed `groups` claim |
 
-OpenWebUI's normal login/session bearer token is not a Sauron JWT and must not
-be sent as `Authorization: Bearer` to Sauron. Enable OpenWebUI's signed
-user-information forwarding instead. The application key identifies the
-trusted OpenWebUI backend; the forwarded user identity and groups determine
-which documents that individual call may retrieve.
+OpenWebUI's login/session token must not be sent as `Authorization: Bearer`.
 
 ## Admin Dashboard
 
