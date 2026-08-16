@@ -9,4 +9,42 @@
     <div class="stat-card"><div class="stat-value">{{ vector_count }}</div><div class="stat-label">Vector Chunks</div></div>
     <div class="stat-card"><div class="stat-value">{{ entity_count }}</div><div class="stat-label">Graph Entities</div></div>
 </div>
+
+<div class="settings-section" style="margin-top:1.5rem;">
+    <h2>Recent queries</h2>
+    {% if activity_error %}
+    <p>Unable to load recent queries.</p>
+    {% elif not activity %}
+    <p>No queries recorded yet.</p>
+    {% else %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Type</th>
+                <th>Strategy</th>
+                <th>User</th>
+                <th>Groups</th>
+                <th>Question</th>
+                <th>Time</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in activity %}
+            <tr>
+                <td>{{ row.when }}</td>
+                <td>{{ row.type }}</td>
+                <td>{{ row.strategy }}</td>
+                <td>{{ row.username }}</td>
+                <td>{{ row.groups }}</td>
+                <td>{{ row.question }}</td>
+                <td>{{ row.duration }}</td>
+                <td>{% if row.status == "error" %}<span class="status-err">error</span>{% elif row.status == "cache" %}cache{% else %}ok{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
 {% endblock %}

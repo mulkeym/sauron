@@ -126,10 +126,20 @@ async def dashboard(request: Request):
     except Exception:
         pass
 
+    activity = []
+    activity_error = False
+    try:
+        from src.audit.activity import format_activity_row
+        rows = await store.list_recent_query_activity(10)
+        activity = [format_activity_row(r) for r in rows]
+    except Exception:
+        activity_error = True
+
     return templates.TemplateResponse(request, "dashboard.html", {
         "doc_count": len(docs), "category_count": len(categories),
         "pending_proposals": len(proposals), "entity_count": entity_count,
         "vector_count": vector_count,
+        "activity": activity, "activity_error": activity_error,
     })
 
 @router.get("/documents", response_class=HTMLResponse)

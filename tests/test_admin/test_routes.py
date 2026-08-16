@@ -7,16 +7,60 @@ def client():
     from src.main import create_app
     return TestClient(create_app())
 
+def _dashboard_store(activity=None, activity_exc=None):
+    store = AsyncMock()
+    store.list_documents.return_value = [MagicMock() for _ in range(5)]
+    store.list_categories.return_value = [MagicMock() for _ in range(3)]
+    store.list_proposals.return_value = [MagicMock(), MagicMock()]
+    if activity_exc is not None:
+        store.list_recent_query_activity.side_effect = activity_exc
+    else:
+        store.list_recent_query_activity.return_value = activity if activity is not None else []
+    return store
+
+
 def test_dashboard_loads(client):
-    with patch("src.admin.routes.get_metadata_store") as mock_get:
-        store = AsyncMock()
-        store.list_documents.return_value = [MagicMock() for _ in range(5)]
-        store.list_categories.return_value = [MagicMock() for _ in range(3)]
-        store.list_proposals.return_value = [MagicMock(), MagicMock()]
-        mock_get.return_value = store
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store", return_value=_dashboard_store()):
         resp = client.get("/admin/")
     assert resp.status_code == 200
     assert "Dashboard" in resp.text
+    assert "Recent queries" in resp.text
+    assert "No queries recorded yet." in resp.text
+
+
+def test_dashboard_shows_activity_row(client):
+    from datetime import datetime, timezone
+    row = MagicMock()
+    row.created_at = datetime(2026, 8, 16, 14, 5, tzinfo=timezone.utc)
+    row.source = "mcp"
+    row.tool = "ask"
+    row.strategy = "lookup"
+    row.username = "mike"
+    row.user_groups = ["finance"]
+    row.query_text = "What is the PTO policy?"
+    row.duration_seconds = 3.2
+    row.status = "ok"
+    row.cache_hit = False
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store", return_value=_dashboard_store([row])):
+        resp = client.get("/admin/")
+    assert resp.status_code == 200
+    assert "MCP · ask" in resp.text
+    assert "mike" in resp.text
+    assert "What is the PTO policy?" in resp.text
+    assert "lookup" in resp.text
+    assert "ok" in resp.text
+
+
+def test_dashboard_activity_read_failure_keeps_stat_cards(client):
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store", return_value=_dashboard_store(activity_exc=RuntimeError("db"))):
+        resp = client.get("/admin/")
+    assert resp.status_code == 200
+    assert "Documents" in resp.text
+    assert "Unable to load recent queries." in resp.text
+    assert "No queries recorded yet." not in resp.text
 
 def test_documents_page(client):
     with patch("src.admin.routes.get_metadata_store") as mock_get:
