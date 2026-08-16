@@ -162,3 +162,33 @@ def test_knowledge_graph_filtered_by_app_and_persona(client):
     # Intersection: only "Acme Corp" is in both sets
     assert len(data["entities"]) == 1
     assert data["entities"][0]["name"] == "Acme Corp"
+
+
+def test_playground_query_records_activity(client):
+    from src.generation.rag_chain import RAGResponse
+    from src.agent.graph import AgentTrace
+    rec = AsyncMock()
+    result = RAGResponse(answer="hi", citations=[], query_type="lookup")
+    trace = AgentTrace(query_type="lookup", total_time=1.2)
+    store = AsyncMock()
+    store.resolve_play_user_groups.return_value = ["finance"]
+    with patch("src.admin.routes._is_authenticated", return_value=True), \
+         patch("src.admin.routes.get_metadata_store", return_value=store), \
+         patch("src.admin.routes.get_vector_store", return_value=MagicMock()), \
+         patch("src.admin.routes.get_schema_registry", return_value=MagicMock()), \
+         patch("src.agent.graph.run_agent_with_trace", new_callable=AsyncMock, return_value=(result, trace)), \
+         patch("src.audit.activity.record_query_activity", rec):
+        resp = client.post(
+            "/admin/api/playground/query",
+            data={"question": "What is PTO?", "play_user": "mike"},
+        )
+    assert resp.status_code == 200
+    rec.assert_awaited()
+    kwargs = rec.await_args.kwargs
+    assert kwargs["source"] == "playground"
+    assert kwargs["tool"] == "playground"
+    assert kwargs["username"] == "mike"
+    assert kwargs["user_groups"] == ["finance"]
+    assert kwargs["query_text"] == "What is PTO?"
+    assert kwargs["strategy"] == "lookup"
+    assert kwargs["status"] == "ok"

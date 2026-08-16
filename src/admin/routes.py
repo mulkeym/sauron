@@ -885,6 +885,13 @@ async def playground_start(request: Request, question: str = Form(""), play_user
 
     async def run_query():
         from src.generation.llm_client import llm_session
+        from src.audit.activity import query_activity_span
+        span_cm = query_activity_span(
+            source="playground", tool="playground",
+            username=play_user, user_groups=user_groups,
+            query_text=question,
+        )
+        span = await span_cm.__aenter__()
         _session_cm = llm_session(session_id=_llm_sid, agent_id=_llm_aid)
         _session_cm.__enter__()
         try:
@@ -978,6 +985,8 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 </div>"""
 
                 _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+                span.cache_hit = True
+                span.strategy = "cache"
                 # Log cache hit metric
                 try:
                     from src.retrieval.metrics import QueryMetricsCollector
@@ -1289,6 +1298,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             </div>"""
 
             _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
+            span.strategy = query_type or ""
 
             # Cache the result for future queries
             try:
@@ -1421,8 +1431,11 @@ async def playground_start(request: Request, question: str = Form(""), play_user
         except Exception as e:
             import traceback
             _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": f"{e}\n{traceback.format_exc()}"}
+            span.status = "error"
+            span.error = str(e)[:200]
         finally:
             _session_cm.__exit__(None, None, None)
+            await span_cm.__aexit__(None, None, None)
 
     asyncio.create_task(run_query())
     return JSONResponse({"query_id": query_id})
@@ -1499,63 +1512,73 @@ async def playground_query(question: str = Form(""), play_user: str = Form("mike
     store = get_metadata_store()
     user_groups = await store.resolve_play_user_groups(play_user)
 
-    try:
-        from src.agent.graph import run_agent_with_trace
-        result, trace = await run_agent_with_trace(
-            question=question,
-            user_groups=user_groups,
-            vector_store=get_vector_store(),
-            schema_registry=get_schema_registry(),
-            metadata_store=get_metadata_store(),
-        )
+    from src.audit.activity import query_activity_span
 
-        # Build trace timeline
-        step_labels = {
-            "classify": "Classify Query",
-            "retrieve": "Retrieve Documents",
-            "enrich": "Knowledge Graph",
-            "synthesize": "Generate Answer",
-        }
-        steps_html = ""
-        for s in trace.steps:
-            label = step_labels.get(s["step"], s["step"])
-            status_icon = "&#9989;" if s["status"] == "done" else "&#x1F504;"
-            steps_html += f'<div class="trace-step"><span>{status_icon} {label}</span><span class="trace-time">{s["time"]}s</span></div>'
+    async with query_activity_span(
+        source="playground", tool="playground",
+        username=play_user, user_groups=user_groups,
+        query_text=question,
+    ) as span:
+        try:
+            from src.agent.graph import run_agent_with_trace
+            result, trace = await run_agent_with_trace(
+                question=question,
+                user_groups=user_groups,
+                vector_store=get_vector_store(),
+                schema_registry=get_schema_registry(),
+                metadata_store=get_metadata_store(),
+            )
+            span.strategy = trace.query_type or result.query_type or ""
 
-        trace_html = f"""
-        <div class="trace-panel">
-            <div class="trace-header">
-                <span>Query Type: <strong>{trace.query_type or 'lookup'}</strong></span>
-                <span>Chunks: <strong>{trace.chunks_retrieved}</strong></span>
-                <span>Total: <strong>{trace.total_time}s</strong></span>
-            </div>
-            <div class="trace-steps">{steps_html}</div>
-        </div>"""
+            # Build trace timeline
+            step_labels = {
+                "classify": "Classify Query",
+                "retrieve": "Retrieve Documents",
+                "enrich": "Knowledge Graph",
+                "synthesize": "Generate Answer",
+            }
+            steps_html = ""
+            for s in trace.steps:
+                label = step_labels.get(s["step"], s["step"])
+                status_icon = "&#9989;" if s["status"] == "done" else "&#x1F504;"
+                steps_html += f'<div class="trace-step"><span>{status_icon} {label}</span><span class="trace-time">{s["time"]}s</span></div>'
 
-        citations_html = ""
-        for i, c in enumerate(result.citations, 1):
-            citations_html += f"""
-            <div class="citation-card">
-                <span class="filename">[{i}] {c.filename}</span>
-                {f'<span class="score"> &mdash; page {c.page}</span>' if c.page else ''}
-                {f'<span class="score"> &mdash; slide {c.slide}</span>' if c.slide else ''}
-                {f'<span class="score"> &mdash; figure {c.figure_id}</span>' if c.figure_id else ''}
-                {f'<span class="score"> &mdash; {c.section_title}</span>' if c.section_title else ''}
-                <span class="score"> &mdash; relevance: {c.relevance:.2f}</span>
-                <div class="snippet">{c.snippet[:300]}</div>
+            trace_html = f"""
+            <div class="trace-panel">
+                <div class="trace-header">
+                    <span>Query Type: <strong>{trace.query_type or 'lookup'}</strong></span>
+                    <span>Chunks: <strong>{trace.chunks_retrieved}</strong></span>
+                    <span>Total: <strong>{trace.total_time}s</strong></span>
+                </div>
+                <div class="trace-steps">{steps_html}</div>
             </div>"""
 
-        return HTMLResponse(f"""
-        {trace_html}
-        <div class="result-card">
-            <div class="result-meta">Groups: {', '.join(user_groups)}</div>
-            <div class="result-answer">{result.answer}</div>
-            <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(result.citations)})</h3>
-            {citations_html or '<p>No citations.</p>'}
-        </div>""")
-    except Exception as e:
-        import traceback
-        return HTMLResponse(f'<div class="status-err">Error: {e}<br><pre style="font-size:0.75rem;">{traceback.format_exc()}</pre></div>')
+            citations_html = ""
+            for i, c in enumerate(result.citations, 1):
+                citations_html += f"""
+                <div class="citation-card">
+                    <span class="filename">[{i}] {c.filename}</span>
+                    {f'<span class="score"> &mdash; page {c.page}</span>' if c.page else ''}
+                    {f'<span class="score"> &mdash; slide {c.slide}</span>' if c.slide else ''}
+                    {f'<span class="score"> &mdash; figure {c.figure_id}</span>' if c.figure_id else ''}
+                    {f'<span class="score"> &mdash; {c.section_title}</span>' if c.section_title else ''}
+                    <span class="score"> &mdash; relevance: {c.relevance:.2f}</span>
+                    <div class="snippet">{c.snippet[:300]}</div>
+                </div>"""
+
+            return HTMLResponse(f"""
+            {trace_html}
+            <div class="result-card">
+                <div class="result-meta">Groups: {', '.join(user_groups)}</div>
+                <div class="result-answer">{result.answer}</div>
+                <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(result.citations)})</h3>
+                {citations_html or '<p>No citations.</p>'}
+            </div>""")
+        except Exception as e:
+            span.status = "error"
+            span.error = str(e)[:200]
+            import traceback
+            return HTMLResponse(f'<div class="status-err">Error: {e}<br><pre style="font-size:0.75rem;">{traceback.format_exc()}</pre></div>')
 
 
 @router.post("/api/documents/upload")
