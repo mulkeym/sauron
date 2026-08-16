@@ -47,3 +47,13 @@ async def test_agent_query_delegates_with_no_callback():
             out = await agent_query("q", ["finance"], MagicMock(), MagicMock(), None)
     assert out.answer == "Z"
     assert run.await_args.kwargs["step_callback"] is None
+
+
+@pytest.mark.asyncio
+async def test_streamed_cache_hit_sets_query_type_cache():
+    cached = {"answer": "cached!", "citations": [], "cached_query": "old q"}
+    decision = MagicMock(accepted=True, cached=cached, query_vector=None)
+    with patch("src.generation.rag_chain.judged_cache_lookup", new_callable=AsyncMock, return_value=decision):
+        out = await agent_query_streamed("q", ["finance"], MagicMock(), MagicMock(), None)
+    assert out.cached is True
+    assert out.query_type == "cache"

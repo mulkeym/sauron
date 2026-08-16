@@ -17,6 +17,12 @@ from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 
 
+def _query_type_str(value) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _skip_enrich(state) -> bool:
     """True when knowledge-graph enrichment should be skipped: explicitly via
     skip_graph, or for METADATA (catalog) queries where graph context is noise."""
@@ -305,6 +311,7 @@ async def run_agent(question: str, user_groups: list[str], vector_store: VectorS
     return RAGResponse(
         answer=result.get("answer", "I could not find any relevant information."),
         citations=result.get("citations", []),
+        query_type=_query_type_str(result.get("query_type")),
     )
 
 
@@ -347,6 +354,7 @@ async def run_agent_streamed(
     return RAGResponse(
         answer=final_state.get("answer", "I could not find any relevant information."),
         citations=final_state.get("citations", []),
+        query_type=_query_type_str(final_state.get("query_type")),
     )
 
 
@@ -409,5 +417,6 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
     response = RAGResponse(
         answer=result.get("answer", "I could not find any relevant information."),
         citations=result.get("citations", []),
+        query_type=_query_type_str(result.get("query_type") or trace.query_type),
     )
     return response, trace
