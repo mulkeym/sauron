@@ -1,12 +1,111 @@
 import json
 import logging
 import re
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import requests
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+_llm_session_id: ContextVar[str | None] = ContextVar("llm_session_id", default=None)
+_llm_agent_id: ContextVar[str | None] = ContextVar("llm_agent_id", default=None)
+
+_SESSION_HEADER_PRECEDENCE = (
+    "x-switchyard-session-id",
+    "x-session-id",
+    "session-id",
+    "x-openwebui-chat-id",
+)
+_AGENT_HEADER_PRECEDENCE = (
+    "x-switchyard-agent-id",
+    "x-openwebui-user-id",
+)
+
+
+def _header_map(headers) -> dict[str, str]:
+    if not headers:
+        return {}
+    try:
+        items = headers.items()
+    except Exception:
+        return {}
+    out = {}
+    for key, value in items:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            out[str(key).lower()] = text
+    return out
+
+
+def resolve_llm_identity(*, headers=None, agent_id: str | None = None,
+                         session_id: str | None = None) -> tuple[str, str | None]:
+    """Resolve Switchyard session + agent ids from inbound headers and caller identity."""
+    h = _header_map(headers)
+    sid = (session_id or "").strip() or None
+    if not sid:
+        for key in _SESSION_HEADER_PRECEDENCE:
+            if h.get(key):
+                sid = h[key]
+                break
+    if not sid:
+        sid = str(uuid.uuid4())
+    aid = None
+    for key in _AGENT_HEADER_PRECEDENCE:
+        if h.get(key):
+            aid = h[key]
+            break
+    if not aid:
+        aid = (agent_id or "").strip() or None
+    return sid, aid
+
+
+@contextmanager
+def llm_session(*, headers=None, agent_id: str | None = None, session_id: str | None = None):
+    """Bind session/agent ids for every LLM HTTP call in this task (and to_thread)."""
+    sid, aid = resolve_llm_identity(
+        headers=headers, agent_id=agent_id, session_id=session_id,
+    )
+    t_session = _llm_session_id.set(sid)
+    t_agent = _llm_agent_id.set(aid)
+    try:
+        yield sid
+    finally:
+        # Starlette iterates sync StreamingResponse generators with one
+        # next() per thread, each in a fresh copy_context(). reset() then
+        # raises ValueError; the bind is already gone with that copy.
+        for token, var in ((t_session, _llm_session_id), (t_agent, _llm_agent_id)):
+            try:
+                var.reset(token)
+            except ValueError:
+                pass
+
+
+def outbound_llm_headers() -> dict[str, str]:
+    """Headers to attach on a bound LLM call. Empty when no session is active."""
+    sid = _llm_session_id.get()
+    if not sid:
+        return {}
+    headers = {
+        "x-switchyard-session-id": sid,
+        "x-switchyard-request-id": str(uuid.uuid4()),
+    }
+    aid = _llm_agent_id.get()
+    if aid:
+        headers["x-switchyard-agent-id"] = aid
+    return headers
+
+
+def _request_headers() -> dict[str, str]:
+    headers = outbound_llm_headers()
+    if settings.vllm_api_key:
+        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+    return headers
 
 
 class LLMError(RuntimeError):
@@ -78,9 +177,7 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
 
     payload = _build_payload(messages, model, temperature, max_tokens, thinking=thinking)
 
-    headers = {}
-    if settings.vllm_api_key:
-        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+    headers = _request_headers()
 
     try:
         resp = requests.post(
@@ -151,8 +248,14 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
     return content
 
 
-def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048):
-    """Stream tokens from the LLM. Yields content strings as they arrive."""
+def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048,
+                    session_id: str | None = None, agent_id: str | None = None):
+    """Stream tokens from the LLM. Yields content strings as they arrive.
+
+    ``session_id`` / ``agent_id`` attach Switchyard headers for this POST
+    without a ContextVar bind, so SSE threadpool iteration cannot trip
+    'Token was created in a different Context' on generator cleanup.
+    """
     payload = _build_payload(
         [
             {"role": "system", "content": system_prompt},
@@ -161,9 +264,17 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
         settings.vllm_model_name, temperature, max_tokens, stream=True,
     )
 
-    headers = {}
-    if settings.vllm_api_key:
-        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+    if session_id:
+        headers = {
+            "x-switchyard-session-id": session_id,
+            "x-switchyard-request-id": str(uuid.uuid4()),
+        }
+        if agent_id:
+            headers["x-switchyard-agent-id"] = agent_id
+        if settings.vllm_api_key:
+            headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+    else:
+        headers = _request_headers()
 
     resp = requests.post(
         f'{settings.vllm_base_url}/chat/completions',
@@ -184,8 +295,11 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
             break
         try:
             chunk = json.loads(data)
-            delta = chunk.get("choices", [{}])[0].get("delta", {})
-            content = delta.get("content", "")
+            # Switchyard / OpenAI emit a final usage chunk with choices=[].
+            # dict.get("choices", [{}]) still returns [] when the key is present.
+            choices = chunk.get("choices") or [{}]
+            delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+            content = delta.get("content") or ""
             if content:
                 buffer += content
                 # Strip thinking blocks in real-time
@@ -275,9 +389,7 @@ def generate_vision(
     )
     payload = _build_payload(messages, model, temperature, max_tokens, thinking=False)
 
-    headers = {}
-    if settings.vllm_api_key:
-        headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
+    headers = _request_headers()
 
     req_timeout = timeout if timeout is not None else settings.vllm_request_timeout
     try:

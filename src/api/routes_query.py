@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from src.api.models import (
     CitationResponse, QueryRequest, QueryResponse,
     AsyncQuerySubmitResponse, AsyncQueryStatusResponse,
@@ -7,17 +7,19 @@ from src.api.routes_ingest import get_vector_store, get_schema_registry, get_met
 from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.generation.rag_chain import agent_query
+from src.generation.llm_client import resolve_llm_identity
 from src.api.query_jobs import query_queue, QueueFullError
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 
 @router.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest, user: UserContext = Depends(require_auth)):
+async def query(payload: QueryRequest, http: Request, user: UserContext = Depends(require_auth)):
     result = await agent_query(
-        question=request.question, user_groups=user.groups,
+        question=payload.question, user_groups=user.groups,
         vector_store=get_vector_store(), schema_registry=get_schema_registry(),
         metadata_store=get_metadata_store(),
-        skip_cache=request.skip_cache,
+        skip_cache=payload.skip_cache,
+        session_headers=http.headers, agent_id=user.username,
     )
     return QueryResponse(
         answer=result.answer,
@@ -28,15 +30,20 @@ async def query(request: QueryRequest, user: UserContext = Depends(require_auth)
 
 
 @router.post("/query/async", response_model=AsyncQuerySubmitResponse)
-async def query_async(request: QueryRequest, user: UserContext = Depends(require_auth)):
+async def query_async(payload: QueryRequest, http: Request, user: UserContext = Depends(require_auth)):
     """Submit a question for async processing. Returns a token to poll for status/result."""
     await query_queue.start_worker(get_vector_store(), get_schema_registry(), get_metadata_store())
+    session_id, agent_id = resolve_llm_identity(
+        headers=http.headers, agent_id=user.username,
+    )
     try:
         token = query_queue.enqueue(
-            question=request.question,
+            question=payload.question,
             username=user.username,
             groups=user.groups,
-            skip_cache=request.skip_cache,
+            skip_cache=payload.skip_cache,
+            session_id=session_id,
+            agent_id=agent_id,
         )
     except QueueFullError:
         raise HTTPException(status_code=503, detail="Query queue is full; please retry shortly")

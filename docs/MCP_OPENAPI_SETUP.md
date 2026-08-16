@@ -175,6 +175,12 @@ Set the connection's custom Headers JSON to:
 }
 ```
 
+Optional: if the OpenWebUI build can template a chat or session id, add
+`X-Session-Id` or `X-OpenWebUI-Chat-Id` so Sauron reuses that id on every
+upstream LLM call for the answer (Switchyard live view / stats). Without it,
+Sauron mints one UUID per question. `X-OpenWebUI-User-Id` (or the signed JWT
+`sub`) is used as `x-switchyard-agent-id`.
+
 Authentication is set to `None` because the application key is carried in the
 custom header and OpenWebUI forwards the signed identity JWT separately.
 

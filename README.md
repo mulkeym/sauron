@@ -671,6 +671,32 @@ SAURON supports reasoning/thinking models (Gemma, Qwen, etc.) that use extended 
 - Strips `<think>` blocks from responses
 - All internal LLM calls use `max_tokens >= 1024` to leave room for reasoning
 - Reasoning artifacts are stripped from final answers
+- Streaming clients ignore empty `choices: []` usage chunks (Switchyard / OpenAI)
+
+## LLM session headers (Switchyard)
+
+When `VLLM_BASE_URL` points at a router such as Switchyard, one user question
+still produces many LLM HTTP calls (cache judge, classify, SQL, MAP,
+synthesize, LightRAG query). Sauron groups those calls under one session:
+
+| Outbound header | Meaning |
+|-----------------|---------|
+| `x-switchyard-session-id` | Inbound session if the client sent one, else a UUID for this question |
+| `x-switchyard-request-id` | New UUID on every LLM HTTP call |
+| `x-switchyard-agent-id` | OpenWebUI user id, API username, or playground persona |
+
+Inbound session is taken from the first non-empty of
+`x-switchyard-session-id`, `x-session-id`, `session-id`,
+`x-openwebui-chat-id`. Agent id prefers `x-switchyard-agent-id`, then
+`x-openwebui-user-id`, then the authenticated identity.
+
+This applies to the playground, `POST /api/v1/query`, async query, OpenAI-compat
+`/v1/chat/completions`, and MCP `ask` / `summarize_topic` / `compare`. Ingest
+and KG extract do not send session headers.
+
+If the Switchyard route has `session_affinity = true`, the first easy call
+(classify) can pin later steps to the cheap model. Leave affinity **off** on
+the Sauron route to judge each step independently.
 
 ## Tech Stack
 

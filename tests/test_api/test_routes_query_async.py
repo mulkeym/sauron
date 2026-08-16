@@ -38,6 +38,25 @@ def test_submit_returns_token_and_queued(client, auth_headers):
     job = query_queue.get_job(data["token"])
     assert job.username == "mike"
     assert job.question == "slow q?"
+    assert job.agent_id == "mike"
+    assert job.session_id
+
+
+def test_submit_reuses_inbound_session_header(client, auth_headers):
+    headers = {**auth_headers, "X-Session-Id": "owui-chat-42"}
+    with patch("src.api.routes_query.query_queue.start_worker", new_callable=AsyncMock):
+        with patch("src.api.routes_query.get_vector_store", return_value=MagicMock()):
+            with patch("src.api.routes_query.get_schema_registry", return_value=MagicMock()):
+                with patch("src.api.routes_query.get_metadata_store", return_value=MagicMock()):
+                    resp = client.post(
+                        "/api/v1/query/async",
+                        json={"question": "about sdwan?"},
+                        headers=headers,
+                    )
+    assert resp.status_code == 200
+    job = query_queue.get_job(resp.json()["token"])
+    assert job.session_id == "owui-chat-42"
+    assert job.agent_id == "mike"
 
 
 def test_submit_requires_auth(client):

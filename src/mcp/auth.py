@@ -107,6 +107,20 @@ def extract_mcp_context(headers: dict) -> MCPContext:
     )
 
 
+def mcp_llm_session_kwargs() -> dict:
+    """Session headers + agent id from the current MCP HTTP request, if any."""
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        ctx = current_mcp_context()
+        req = get_http_request()
+        return {
+            "session_headers": getattr(req, "headers", None),
+            "agent_id": ctx.agent_id or ctx.username,
+        }
+    except Exception:
+        return {}
+
+
 def current_mcp_context() -> MCPContext:
     """Return identity stored by MCPAuthenticationMiddleware for this call."""
     from fastmcp.server.dependencies import get_http_request

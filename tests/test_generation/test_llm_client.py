@@ -232,3 +232,29 @@ def test_generate_forwards_thinking(monkeypatch):
     out = llm.generate("sys", "usr", thinking=True)
     assert out == "SELECT 1"
     assert seen["thinking"] is True
+
+
+def test_generate_stream_skips_empty_choices_usage_chunk(monkeypatch):
+    """Switchyard (and OpenAI-style stream_options.include_usage) emit a final
+    usage chunk with choices=[]. Indexing [0] must not crash the playground."""
+    lines = [
+        'data: {"choices":[{"delta":{"role":"assistant","content":null}}]}',
+        'data: {"choices":[{"delta":{"content":"SD-WAN "}}]}',
+        'data: {"choices":[{"delta":{"content":"overview"}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"total_tokens":12}}',
+        "data: [DONE]",
+    ]
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self, decode_unicode=True):
+            return iter(lines)
+
+    monkeypatch.setattr(
+        "src.generation.llm_client.requests.post", lambda *a, **k: FakeResp()
+    )
+    tokens = list(llm_client.generate_stream("sys", "tell me about sdwan"))
+    assert "".join(tokens) == "SD-WAN overview"

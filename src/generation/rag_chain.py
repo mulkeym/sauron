@@ -72,6 +72,20 @@ def rag_query(question, user_groups, vector_store, top_k=10):
 async def agent_query_streamed(
     question: str, user_groups: list[str], vector_store, schema_registry,
     metadata_store=None, step_callback=None, skip_cache: bool = False,
+    session_headers=None, agent_id: str | None = None, session_id: str | None = None,
+) -> RAGResponse:
+    from src.generation.llm_client import llm_session
+    with llm_session(headers=session_headers, agent_id=agent_id, session_id=session_id):
+        return await _agent_query_streamed_bound(
+            question=question, user_groups=user_groups, vector_store=vector_store,
+            schema_registry=schema_registry, metadata_store=metadata_store,
+            step_callback=step_callback, skip_cache=skip_cache,
+        )
+
+
+async def _agent_query_streamed_bound(
+    question: str, user_groups: list[str], vector_store, schema_registry,
+    metadata_store=None, step_callback=None, skip_cache: bool = False,
 ) -> RAGResponse:
     # Surface the cache lookup as the first observable step. It runs before the
     # graph, so it is not a graph node — emit it explicitly (the spec's data flow
@@ -132,9 +146,11 @@ async def agent_query_streamed(
 async def agent_query(
     question: str, user_groups: list[str], vector_store, schema_registry,
     metadata_store=None, skip_cache: bool = False,
+    session_headers=None, agent_id: str | None = None, session_id: str | None = None,
 ) -> RAGResponse:
     return await agent_query_streamed(
         question=question, user_groups=user_groups, vector_store=vector_store,
         schema_registry=schema_registry, metadata_store=metadata_store,
         step_callback=None, skip_cache=skip_cache,
+        session_headers=session_headers, agent_id=agent_id, session_id=session_id,
     )

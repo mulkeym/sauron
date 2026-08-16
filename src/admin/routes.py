@@ -793,7 +793,7 @@ def _format_classify_detail(output: dict) -> str:
 
 
 @router.post("/api/playground/start")
-async def playground_start(question: str = Form(""), play_user: str = Form("mike"), mode: str = Form("full"), app_id: int = Form(0), skip_cache: str = Form("false")):
+async def playground_start(request: Request, question: str = Form(""), play_user: str = Form("mike"), mode: str = Form("full"), app_id: int = Form(0), skip_cache: str = Form("false")):
     import uuid, asyncio
     from fastapi.responses import JSONResponse
 
@@ -867,7 +867,16 @@ async def playground_start(question: str = Form(""), play_user: str = Form("mike
             return "<strong>Generating answer...</strong>"
         return ""
 
+    inbound_headers = request.headers
+    from src.generation.llm_client import resolve_llm_identity
+    _llm_sid, _llm_aid = resolve_llm_identity(headers=inbound_headers, agent_id=play_user)
+    _playground_jobs[query_id]["llm_session_id"] = _llm_sid
+    _playground_jobs[query_id]["llm_agent_id"] = _llm_aid
+
     async def run_query():
+        from src.generation.llm_client import llm_session
+        _session_cm = llm_session(session_id=_llm_sid, agent_id=_llm_aid)
+        _session_cm.__enter__()
         try:
             import time, html as html_mod
             import asyncio as _asyncio
@@ -1402,6 +1411,8 @@ async def playground_start(question: str = Form(""), play_user: str = Form("mike
         except Exception as e:
             import traceback
             _playground_jobs[query_id] = {"step": "error", "result_html": "", "error": f"{e}\n{traceback.format_exc()}"}
+        finally:
+            _session_cm.__exit__(None, None, None)
 
     asyncio.create_task(run_query())
     return JSONResponse({"query_id": query_id})
@@ -1452,6 +1463,8 @@ async def playground_stream(query_id: str):
                     question=context_data["question"],
                 ),
                 max_tokens=_cfg.llm_max_output_tokens,
+                session_id=job.get("llm_session_id"),
+                agent_id=job.get("llm_agent_id"),
             ):
                 full_text += token
                 yield f"data: {json.dumps({'token': token})}\n\n"

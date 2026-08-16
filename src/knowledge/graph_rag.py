@@ -55,6 +55,11 @@ async def _llm_func(
     This adapter has better prompt construction and format enforcement
     than a raw HTTP call, resulting in more reliable entity extraction.
     """
+    from src.generation.llm_client import outbound_llm_headers
+    extra_headers = dict(kwargs.get("extra_headers") or {})
+    extra_headers.update(outbound_llm_headers())
+    if extra_headers:
+        kwargs["extra_headers"] = extra_headers
     result = await openai_complete_if_cache(
         model=settings.vllm_model_name,
         prompt=prompt,

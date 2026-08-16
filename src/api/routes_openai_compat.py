@@ -7,7 +7,7 @@ OpenAI-compatible client can query the knowledge base as a drop-in replacement.
 import time
 import uuid
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from src.api.routes_ingest import get_vector_store, get_schema_registry
@@ -49,18 +49,21 @@ async def list_models():
 
 @router.post("/chat/completions")
 async def chat_completions(
-    request: ChatCompletionRequest,
+    payload: ChatCompletionRequest,
+    http: Request,
     authorization: str = Header(default=""),
     x_api_key: str = Header(default="", alias="X-API-Key"),
 ):
     # Auth: try JWT first, fall back to API key only (for simple clients)
     user_groups = ["ALL"]
+    agent_id = None
     if authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ")
         # Check if it's a JWT or just an API key used as bearer token
         try:
             user = decode_token(token)
             user_groups = user.groups
+            agent_id = user.username
         except ValueError:
             # Might be an API key passed as bearer token (common with OpenAI clients)
             if not validate_api_key(token):
@@ -73,7 +76,7 @@ async def chat_completions(
 
     # Extract the last user message as the question
     question = ""
-    for msg in reversed(request.messages):
+    for msg in reversed(payload.messages):
         if msg.role == "user":
             question = msg.content
             break
@@ -87,6 +90,8 @@ async def chat_completions(
         user_groups=user_groups,
         vector_store=get_vector_store(),
         schema_registry=get_schema_registry(),
+        session_headers=http.headers,
+        agent_id=agent_id,
     )
 
     # Format citations as part of the response
@@ -103,7 +108,7 @@ async def chat_completions(
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": request.model,
+        "model": payload.model,
         "choices": [
             {
                 "index": 0,

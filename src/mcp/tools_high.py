@@ -1,6 +1,7 @@
 from __future__ import annotations
 from src.generation.llm_client import generate
 from src.generation.rag_chain import agent_query
+from src.mcp.auth import mcp_llm_session_kwargs
 from src.mcp.tools_low import list_documents_in_category, lookup_document
 
 
@@ -24,6 +25,7 @@ async def ask(
         vector_store=vector_store,
         schema_registry=schema_registry,
         metadata_store=metadata_store,
+        **mcp_llm_session_kwargs(),
     )
 
     citations = [
@@ -68,6 +70,7 @@ async def summarize_topic(
         vector_store=vector_store,
         schema_registry=schema_registry,
         metadata_store=metadata_store,
+        **mcp_llm_session_kwargs(),
     )
 
     sources = [
@@ -94,6 +97,7 @@ async def compare(
         vector_store=vector_store,
         schema_registry=schema_registry,
         metadata_store=metadata_store,
+        **mcp_llm_session_kwargs(),
     )
 
     sources = [

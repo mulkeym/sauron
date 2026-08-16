@@ -37,6 +37,25 @@ Prefer moving each real client to its own application and revoking unused legacy
 
 The **browser must not** hold Sauron API keys when deploying multi-user front-ends.
 
+## LLM session headers (Switchyard)
+
+Answer-pipeline LLM calls that Sauron makes upstream (classify, SQL, MAP,
+synthesize, LightRAG query) share one Switchyard session. Clients may pass a
+conversation id so follow-up questions stay grouped:
+
+| Inbound header | Used as |
+|----------------|---------|
+| `x-switchyard-session-id` | Session id (highest precedence) |
+| `x-session-id` | Session id |
+| `session-id` | Session id |
+| `x-openwebui-chat-id` | Session id |
+| `x-switchyard-agent-id` | Stable user/agent id |
+| `x-openwebui-user-id` | Agent id if the Switchyard header is absent |
+
+If none of the session headers are set, Sauron mints a UUID for that question
+only. Demo chat and OpenWebUI should forward their chat/session id when they
+have one. See the [session-headers design](superpowers/specs/2026-08-15-llm-session-headers-design.md).
+
 ## OpenWebUI native MCP application
 
 Create a dedicated application such as `openwebui-mcp` and generate a key for

@@ -55,3 +55,22 @@ def test_query_passes_skip_cache(client, auth_headers):
     assert resp.status_code == 200
     mock_aq.assert_awaited_once()
     assert mock_aq.await_args.kwargs.get("skip_cache") is True
+    assert mock_aq.await_args.kwargs.get("agent_id") == "mike"
+    assert mock_aq.await_args.kwargs.get("session_headers") is not None
+
+
+def test_query_forwards_inbound_session_header(client, auth_headers):
+    mock_response = RAGResponse(answer="ok", citations=[])
+    headers = {**auth_headers, "X-OpenWebUI-Chat-Id": "chat-7"}
+    with patch("src.api.routes_query.agent_query", new_callable=AsyncMock, return_value=mock_response) as mock_aq:
+        with patch("src.api.routes_query.get_vector_store", return_value=MagicMock()):
+            with patch("src.api.routes_query.get_schema_registry", return_value=MagicMock()):
+                with patch("src.api.routes_query.get_metadata_store", return_value=MagicMock()):
+                    resp = client.post(
+                        "/api/v1/query",
+                        json={"question": "tell me about sdwan"},
+                        headers=headers,
+                    )
+    assert resp.status_code == 200
+    forwarded = mock_aq.await_args.kwargs["session_headers"]
+    assert forwarded.get("x-openwebui-chat-id") == "chat-7" or forwarded.get("X-OpenWebUI-Chat-Id") == "chat-7"

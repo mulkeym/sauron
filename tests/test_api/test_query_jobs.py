@@ -15,6 +15,41 @@ def test_enqueue_returns_token_and_queued_job():
     assert job.step == "queued"
 
 
+def test_enqueue_stores_session_identity():
+    q = QueryJobQueue()
+    token = q.enqueue(
+        question="q", username="mike", groups=["finance"],
+        session_id="owui-chat", agent_id="user-1",
+    )
+    job = q.get_job(token)
+    assert job.session_id == "owui-chat"
+    assert job.agent_id == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_worker_forwards_session_identity_to_agent_query():
+    q = QueryJobQueue()
+    from src.generation.rag_chain import RAGResponse
+    seen = {}
+
+    async def fake_streamed(*args, **kwargs):
+        seen.update(kwargs)
+        return RAGResponse(answer="ok", citations=[])
+
+    with patch("src.api.query_jobs.agent_query_streamed", side_effect=fake_streamed):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        token = q.enqueue(
+            question="q", username="m", groups=[],
+            session_id="chat-1", agent_id="alice",
+        )
+        for _ in range(50):
+            if q.get_job(token).status == QueryStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.02)
+    assert seen.get("session_id") == "chat-1"
+    assert seen.get("agent_id") == "alice"
+
+
 def test_get_nonexistent_token():
     q = QueryJobQueue()
     assert q.get_job("nope") is None
