@@ -1,3 +1,5 @@
+import asyncio
+
 from fastmcp import FastMCP
 from src.db.metadata import MetadataStore
 from src.db.schema_registry import SchemaRegistry
@@ -74,12 +76,9 @@ def create_mcp_server(
     async def tool_search_documents(query: str, doc_type: str = "", top_k: int = 10) -> list[dict]:
         """Low-level search returning raw text snippets. For ANSWERING questions, use tool_ask instead — it provides better results with knowledge graph enrichment and cited answers. Only use this tool when you need raw document snippets for your own analysis, or to find doc_ids for tool_lookup_document."""
         async def _run():
-            return search_documents(
-                query=query,
-                user_groups=user_groups(),
-                vector_store=vector_store,
-                doc_type=doc_type or None,
-                top_k=top_k,
+            return await asyncio.to_thread(
+                search_documents, query=query, user_groups=user_groups(),
+                vector_store=vector_store, doc_type=doc_type or None, top_k=top_k,
             )
         return await run_logged_mcp_tool(tool="search_documents", query_text=query, fn=_run)
 
@@ -102,9 +101,8 @@ def create_mcp_server(
     async def tool_lookup_document(doc_id: str) -> dict:
         """Read the full content of a document. Accepts either a doc_id (UUID) or a filename. Use this when the user asks to read, view, summarize, or display a specific file. You can pass the filename directly (e.g., 'sample.pdf') or a doc_id from tool_list_documents."""
         async def _run():
-            return lookup_document(
-                doc_id=doc_id,
-                user_groups=user_groups(),
+            return await asyncio.to_thread(
+                lookup_document, doc_id=doc_id, user_groups=user_groups(),
                 vector_store=vector_store,
             )
         return await run_logged_mcp_tool(tool="lookup_document", query_text=doc_id, fn=_run)
@@ -114,12 +112,10 @@ def create_mcp_server(
         """Search meeting transcripts. Filter by speaker name, topic, or utterance type (question, statement, action_item). Use this to find what someone said in meetings or to find specific discussions."""
         q = " / ".join(p for p in (topic, speaker, type_filter) if p)
         async def _run():
-            return search_meetings(
-                user_groups=user_groups(),
-                vector_store=vector_store,
-                topic=topic or None,
-                speaker=speaker or None,
-                type_filter=type_filter or None,
+            return await asyncio.to_thread(
+                search_meetings, user_groups=user_groups(),
+                vector_store=vector_store, topic=topic or None,
+                speaker=speaker or None, type_filter=type_filter or None,
             )
         return await run_logged_mcp_tool(tool="search_meetings", query_text=q, fn=_run)
 
@@ -127,17 +123,18 @@ def create_mcp_server(
     async def tool_list_sources() -> list[dict]:
         """List all available document categories and their document counts. Shows what knowledge sources exist in the system (e.g., finance_policies, it_runbooks, meeting_notes)."""
         async def _run():
-            return list_sources(user_groups=user_groups(), metadata_store=metadata_store)
+            return await asyncio.to_thread(
+                list_sources, user_groups=user_groups(), metadata_store=metadata_store,
+            )
         return await run_logged_mcp_tool(tool="list_sources", query_text="", fn=_run)
 
     @mcp.tool()
     async def tool_summarize_documents(category: str = "") -> dict:
         """Read and summarize every document in a category. Returns a list of filenames with a 2-3 sentence summary of each. Use this when the user asks to summarize multiple documents, summarize a category, or wants an overview of what's in a group of files. For a single file, use tool_lookup_document instead."""
         async def _run():
-            return summarize_documents(
-                category=category or "uncategorized",
-                user_groups=user_groups(),
-                vector_store=vector_store,
+            return await asyncio.to_thread(
+                summarize_documents, category=category or "uncategorized",
+                user_groups=user_groups(), vector_store=vector_store,
                 metadata_store=metadata_store,
             )
         return await run_logged_mcp_tool(
