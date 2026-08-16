@@ -7,6 +7,7 @@ from src.db.models import (
     Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention,
     EntityMergeProposal, Relationship, AclGroup, Persona, Dataset, WebConnector,
     RegisteredSchema, SchemaHintRecord, ApiApplication, ApiKeyRecord,
+    QueryActivity,
 )
 from src.db.schema_registry import TableSchema, ColumnSchema
 from src.db.hint_store import SchemaHint
@@ -695,6 +696,47 @@ class MetadataStore:
             rel = Relationship(source_entity_id=source_entity_id, target_entity_id=target_entity_id, relationship_type=relationship_type, doc_id=doc_id, context_snippet=context_snippet[:200])
             session.add(rel)
             await session.commit()
+
+    async def add_query_activity(
+        self,
+        *,
+        source: str,
+        tool: str,
+        username: str = "",
+        user_groups: list | None = None,
+        query_text: str = "",
+        strategy: str = "",
+        duration_seconds: float = 0.0,
+        status: str = "ok",
+        cache_hit: bool = False,
+        error: str = "",
+    ):
+        record = QueryActivity(
+            source=source,
+            tool=tool,
+            username=username or "",
+            user_groups=list(user_groups or []),
+            query_text=(query_text or "")[:500],
+            strategy=strategy or "",
+            duration_seconds=duration_seconds,
+            status=status or "ok",
+            cache_hit=bool(cache_hit),
+            error=(error or "")[:200],
+        )
+        async with self.session_factory() as session:
+            session.add(record)
+            await session.commit()
+            await session.refresh(record)
+        return record
+
+    async def list_recent_query_activity(self, limit: int = 10):
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(QueryActivity)
+                .order_by(QueryActivity.created_at.desc(), QueryActivity.id.desc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
 
     async def search_entities(self, query, entity_type=None):
         async with self.session_factory() as session:

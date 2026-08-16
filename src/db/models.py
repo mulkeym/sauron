@@ -204,6 +204,25 @@ class QueryMetrics(Base):
     )
 
 
+class QueryActivity(Base):
+    __tablename__ = "query_activity"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    tool: Mapped[str] = mapped_column(String, nullable=False)
+    username: Mapped[str] = mapped_column(String, default="")
+    user_groups: Mapped[list] = mapped_column(JSON, default=list)
+    query_text: Mapped[str] = mapped_column(String, default="")
+    strategy: Mapped[str] = mapped_column(String, default="")
+    duration_seconds: Mapped[float] = mapped_column(default=0.0)
+    status: Mapped[str] = mapped_column(String, default="ok")
+    cache_hit: Mapped[bool] = mapped_column(default=False)
+    error: Mapped[str] = mapped_column(String, default="")
+
+
 class QueryFeedback(Base):
     __tablename__ = "query_feedback"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
