@@ -13,49 +13,54 @@ requires OpenWebUI 0.9.6 or newer because that release fixed custom-header
 template expansion for MCP connections; Sauron relies on `{{USER_GROUPS}}`
 and `{{USER_EMAIL}}`.
 
-## Authentication for MCP clients (OAuth-shaped)
+## How OpenWebUI authenticates to Sauron MCP
 
-Sauron treats every MCP call the way an OAuth resource server treats an API
-call: **a confidential client** plus **a resource owner**. Those are two
-different credentials. Neither one is the admin UI cookie.
+OpenWebUI is the MCP **client**. Sauron never sees the user's OpenWebUI
+password or login cookie. OpenWebUI is the source of truth for *who is
+chatting* until a corporate IdP is connected.
 
-| OAuth idea | Sauron MCP today | After an IdP |
-|---|---|---|
-| Confidential client (`client_id` + `client_secret`) | Application API key in `X-API-Key` | Same key (or a client credential from the IdP) |
-| Authorization server | OpenWebUI local user/group store | Entra / Okta / Keycloak / … |
-| Access token (who is the user, what groups) | Trusted headers from OpenWebUI, or a Sauron-minted JWT for scripts | Bearer access token issued by the IdP |
-| Resource server | Sauron `/mcp` | Same |
+There are two pieces on every call:
 
-The API key answers *“is this OpenWebUI (or another registered app)?”*  
-The user credential answers *“which person, and which ACL groups?”*
-
-Document access is **never** granted by the API key alone. Tools filter on
-the user groups from the second credential.
-
-### What happens on each `POST /mcp`
+1. **Application key** (`X-API-Key`) — proves the caller is your OpenWebUI
+   server (create this in Sauron **Settings → Security**).
+2. **Logged-in OpenWebUI user** — OpenWebUI fills username and groups from
+   that session. You do **not** request a Sauron JWT per user.
 
 ```text
-1. Validate X-API-Key          → 403 if missing or unknown
-2. Identify the user:
-     a. Authorization: Bearer <Sauron JWT>   (scripts / direct clients)
-     b. else X-Sauron-Username + X-Sauron-User-Groups
-        (OpenWebUI; trusted because step 1 succeeded)
-     c. else 401 Missing user identity
-3. Strip group ALL unless MCP_OPENWEBUI_ALLOW_ALL_GROUP=true
-4. Run the MCP method with that username + groups
+User logs into OpenWebUI  (local account)
+        │
+        ▼
+User asks a question that uses a Sauron tool
+        │
+        ▼
+OpenWebUI backend (not the browser) POSTs /mcp
+        │  X-API-Key: <openwebui's Sauron app key>
+        │  X-Sauron-Username: alice@corp   ← {{USER_EMAIL}}
+        │  X-Sauron-User-Groups: finance,executives  ← {{USER_GROUPS}}
+        ▼
+Sauron checks the API key, then trusts those headers
+        │
+        ▼
+Tools run as alice@corp with ACL groups finance + executives
 ```
 
-An invalid or expired **Sauron** Bearer token is 401. It does **not** fall
-through to the username header.
+### What you configure once in OpenWebUI
 
-`X-OpenWebUI-User-Jwt` is **paused** until the IdP work lands. OpenWebUI may
-still send it; Sauron ignores it.
+**Container env** (so templates expand):
 
-### OpenWebUI (current source of truth)
+```bash
+ENABLE_FORWARD_USER_INFO_HEADERS=true
+WEBUI_SECRET_KEY=<persistent-openwebui-secret>
+```
 
-Users log into OpenWebUI with its local accounts. OpenWebUI is the
-authorization server for that session. When it calls Sauron it expands
-templates from the logged-in user — you do not mint a token per user:
+**Admin → External Tools → Sauron** (MCP Streamable HTTP):
+
+| Setting | Value |
+|---|---|
+| Authentication | **None** |
+| URL | `http://<sauron-host>:8880/mcp` |
+
+Custom headers:
 
 ```json
 {
@@ -65,63 +70,41 @@ templates from the logged-in user — you do not mint a token per user:
 }
 ```
 
-Set the MCP connection **Authentication** to **None**. The key and identity
-travel as custom headers, not as OpenWebUI’s own login JWT (that JWT is not
-a Sauron token and must not be sent as `Authorization: Bearer`).
+`Authentication: None` is correct. Do **not** put OpenWebUI's own session
+token in `Authorization: Bearer` — Sauron would treat that as a Sauron JWT
+and reject it.
 
-Enable `ENABLE_FORWARD_USER_INFO_HEADERS=true` so `{{USER_EMAIL}}` and
-`{{USER_GROUPS}}` expand. OpenWebUI group names must match Sauron ACL group
-names (`finance`, `engineering`, …).
+Create OpenWebUI **groups** whose names match Sauron ACL groups (`finance`,
+`engineering`, …) and add users to them. A user with no matching groups can
+call tools but sees no protected documents.
 
-**Trust model:** anyone who has the OpenWebUI application key can send any
-username and any groups. That is acceptable only while the key lives solely
-on the OpenWebUI host and `/mcp` is not public. Treat the key like an OAuth
-client secret.
+`{{USER_EMAIL}}` and `{{USER_GROUPS}}` are filled by OpenWebUI on each
+request from the signed-in user. No per-user token minting.
 
-### Direct clients (scripts, curl, a second app)
+OpenWebUI may also send `X-OpenWebUI-User-Jwt`. Sauron **ignores** it for
+now (paused until an IdP). Identity is the two `X-Sauron-*` headers.
 
-These use Sauron as a tiny authorization server for the lab:
+### What Sauron does with that request
 
-```http
-POST /api/v1/auth/token
-{"username": "mike", "password": "…", "groups": ["finance"]}
+```text
+1. X-API-Key valid?     no → 403
+2. X-Sauron-Username set?  no (and no Sauron Bearer) → 401
+3. Groups from X-Sauron-User-Groups; strip ALL unless opted in
+4. Run the tool with that username + groups
 ```
 
-Then:
+Anyone who has the OpenWebUI application key can send any username and
+groups. Keep the key only on the OpenWebUI host and keep `/mcp` off the
+public internet.
 
-```http
-POST /mcp
-X-API-Key: <that client's own application key>
-Authorization: Bearer <access_token from /auth/token>
-```
+Sauron's `ALL` group is superuser. It is stripped from forwarded groups
+unless `MCP_OPENWEBUI_ALLOW_ALL_GROUP=true`.
 
-Groups come from the JWT, not from headers. `/auth/token` does **not**
-check a real password in this lab path — the caller chooses username and
-groups. Do not expose that mint to the internet; replace it with the IdP
-when you are ready.
+### Other MCP clients (not OpenWebUI)
 
-Give each client its **own** application key. Do not reuse OpenWebUI’s key.
-
-### Planned IdP / OAuth path
-
-When the corporate IdP is available, the shape stays the same and only the
-**user** credential changes:
-
-1. User signs in at the IdP (or at OpenWebUI via OIDC).
-2. The client sends `Authorization: Bearer <IdP access token>`.
-3. Sauron validates issuer, signature, audience, and expiry (like any OAuth
-   resource server).
-4. Username and groups come from token claims (`sub` / `email`, `groups` or
-   `roles`), mapped to Sauron ACL names.
-5. `X-API-Key` can remain as the confidential-client check, or be replaced
-   by an OAuth client-credentials flow.
-
-Until that lands, do not share `MCP_OPENWEBUI_JWT_SECRET` with new clients
-and do not treat `/api/v1/auth/token` as production identity.
-
-Sauron's `ALL` group grants unrestricted document access. It is stripped from
-forwarded OpenWebUI groups by default. Do not enable
-`MCP_OPENWEBUI_ALLOW_ALL_GROUP` unless that behavior is explicitly required.
+Scripts and other apps should not reuse OpenWebUI's key. Give them their
+own key and a Sauron JWT from `POST /api/v1/auth/token` (lab only). See
+**Direct Sauron MCP clients** below.
 
 ## 1. Configure Sauron
 

@@ -10,8 +10,8 @@ SAURON supports **multiple service clients** (demo front-ends, OpenWebUI, MCP ga
 | **API key** | Service secret for that client (`X-API-Key` header) |
 | **User identity** | Trusted headers from OpenWebUI, or a Sauron JWT for direct clients |
 
-Keys answer: *“Is this a trusted backend?”* (OAuth confidential client)  
-User identity answers: *“Which person, which documents?”* (OAuth access token)
+Keys answer: *“Is this OpenWebUI (or another registered app)?”*  
+User identity answers: *“Which OpenWebUI user, which documents?”*
 
 ## Admin UI
 
@@ -70,18 +70,13 @@ backend:
 }
 ```
 
-The application key proves the request came from the trusted OpenWebUI service
-(the confidential client). It does not grant document access. Until an OAuth
-IdP is wired, OpenWebUI is the authorization server: it expands
-`{{USER_EMAIL}}` and `{{USER_GROUPS}}` on each call. Sauron ignores
-`X-OpenWebUI-User-Jwt`. Anyone with the application key can assert any
-user/groups, so treat the key like a client secret.
+The application key proves the request came from your OpenWebUI server. It
+does not grant document access. OpenWebUI is the source of truth for the
+person chatting: it expands `{{USER_EMAIL}}` and `{{USER_GROUPS}}` from the
+logged-in user. Sauron ignores `X-OpenWebUI-User-Jwt` for now.
 
-Direct MCP clients mint a lab JWT from `POST /api/v1/auth/token` and send
-`Authorization: Bearer`. That mint is not production identity.
-
-See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md) for the full OAuth-shaped
-flow, OpenWebUI setup, and the planned IdP path.
+See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md#how-openwebui-authenticates-to-sauron-mcp)
+for the OpenWebUI login → header → ACL walkthrough.
 
 ## Validation order
 

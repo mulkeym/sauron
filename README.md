@@ -344,12 +344,11 @@ existing Run:AI/Knative HTTPS route without session affinity.
 
 ### MCP authentication and ACLs
 
-Every MCP request is OAuth-shaped: a **client** credential plus a **user**
-credential. The application key (`X-API-Key`) is the confidential client.
-User identity is either OpenWebUI's templated headers (OpenWebUI is the
-authorization server today) or a Sauron JWT for scripts. An IdP access token
-will replace the user credential later. Details:
-[docs/MCP_OPENAPI_SETUP.md](docs/MCP_OPENAPI_SETUP.md#authentication-for-mcp-clients-oauth-shaped).
+OpenWebUI is the MCP client: users log into OpenWebUI, and OpenWebUI
+forwards the current user on each `/mcp` call (`X-API-Key` plus
+`X-Sauron-Username` / `X-Sauron-User-Groups`). You do not mint a Sauron
+token per OpenWebUI user. Details:
+[docs/MCP_OPENAPI_SETUP.md](docs/MCP_OPENAPI_SETUP.md#how-openwebui-authenticates-to-sauron-mcp).
 
 | Client | User identity | ACL source |
 |--------|---------------|------------|
