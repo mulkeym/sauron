@@ -345,9 +345,11 @@ existing Run:AI/Knative HTTPS route without session affinity.
 ### MCP authentication and ACLs
 
 OpenWebUI is the MCP client: users log into OpenWebUI, and OpenWebUI
-forwards the current user on each `/mcp` call (`X-API-Key` plus
-`X-Sauron-Username` / `X-Sauron-User-Groups`). You do not mint a Sauron
-token per OpenWebUI user. Details:
+forwards the current user on each `/mcp` call. Configure these custom
+headers on the OpenWebUI MCP connection: `X-API-Key`,
+`X-Sauron-Username` (`{{USER_EMAIL}}`), `X-Sauron-User-Groups`
+(`{{USER_GROUPS}}`). You do not mint a Sauron token per OpenWebUI user.
+Details:
 [docs/MCP_OPENAPI_SETUP.md](docs/MCP_OPENAPI_SETUP.md#how-openwebui-authenticates-to-sauron-mcp).
 
 | Client | User identity | ACL source |

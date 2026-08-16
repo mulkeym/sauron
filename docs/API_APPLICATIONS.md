@@ -62,6 +62,14 @@ Create a dedicated application such as `openwebui-mcp` and generate a key for
 the OpenWebUI External Tools connection. OpenWebUI sends that key only from its
 backend:
 
+Required custom headers on the OpenWebUI MCP connection:
+
+| Header | Value |
+|---|---|
+| `X-API-Key` | This application's key |
+| `X-Sauron-Username` | `{{USER_EMAIL}}` |
+| `X-Sauron-User-Groups` | `{{USER_GROUPS}}` |
+
 ```json
 {
   "X-API-Key": "<openwebui-mcp-application-key>",

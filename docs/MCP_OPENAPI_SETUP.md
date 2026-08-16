@@ -26,6 +26,27 @@ There are two pieces on every call:
 2. **Logged-in OpenWebUI user** — OpenWebUI fills username and groups from
    that session. You do **not** request a Sauron JWT per user.
 
+### Headers the MCP client must send
+
+Put these on the OpenWebUI External Tools connection (custom headers).
+Sauron will reject the call if they are missing.
+
+| Header | Required | Value when setting up OpenWebUI | Purpose |
+|---|---|---|---|
+| `X-API-Key` | **Yes** | The Sauron application key for OpenWebUI | Identifies the MCP client |
+| `X-Sauron-Username` | **Yes** (unless using a Sauron Bearer JWT) | `{{USER_EMAIL}}` | Who is asking |
+| `X-Sauron-User-Groups` | Yes, for document ACL | `{{USER_GROUPS}}` | Which Sauron ACL groups apply |
+| `Authorization` | **Do not set** in OpenWebUI | Leave Authentication as **None** | Reserved for Sauron JWTs on scripts |
+| `X-OpenWebUI-User-Jwt` | No | OpenWebUI may add this on its own | Ignored by Sauron for now |
+| `X-OpenWebUI-Chat-Id` or `X-Session-Id` | No | `{{CHAT_ID}}` if the UI offers it | Groups Switchyard LLM calls |
+
+OpenWebUI expands `{{USER_EMAIL}}`, `{{USER_GROUPS}}`, and `{{CHAT_ID}}`
+from the signed-in user on each request.
+
+A non-OpenWebUI MCP client sends `X-API-Key` plus
+`Authorization: Bearer <Sauron JWT>` instead of the two `X-Sauron-*`
+headers. See **Direct Sauron MCP clients**.
+
 ```text
 User logs into OpenWebUI  (local account)
         │
@@ -222,7 +243,13 @@ In **Admin Settings -> External Tools**, add a server with:
 | Authentication | None |
 | Access Control | Only approved OpenWebUI groups/users |
 
-Set the connection's custom Headers JSON to:
+Set the connection's custom headers. These three are required:
+
+| Header | Value |
+|---|---|
+| `X-API-Key` | Sauron application key for this OpenWebUI |
+| `X-Sauron-Username` | `{{USER_EMAIL}}` |
+| `X-Sauron-User-Groups` | `{{USER_GROUPS}}` |
 
 ```json
 {

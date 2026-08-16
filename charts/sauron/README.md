@@ -212,7 +212,9 @@ Sauron's `MCP_OPENWEBUI_JWT_SECRET`. If Sauron uses
 `secrets.existingSecret`, that Secret must include the latter key.
 
 In OpenWebUI, create an External Tool with type **MCP (Streamable HTTP)** and
-URL `https://<sauron-host>/mcp`. Set Authentication to **None** and add:
+URL `https://<sauron-host>/mcp`. Set Authentication to **None**. Required
+custom headers: `X-API-Key`, `X-Sauron-Username` (`{{USER_EMAIL}}`),
+`X-Sauron-User-Groups` (`{{USER_GROUPS}}`).
 
 ```json
 {
