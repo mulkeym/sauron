@@ -9,24 +9,32 @@ from src.auth.models import UserContext
 from src.generation.rag_chain import agent_query
 from src.generation.llm_client import resolve_llm_identity
 from src.api.query_jobs import query_queue, QueueFullError
+from src.audit.activity import query_activity_span
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 
 @router.post("/query", response_model=QueryResponse)
 async def query(payload: QueryRequest, http: Request, user: UserContext = Depends(require_auth)):
-    result = await agent_query(
-        question=payload.question, user_groups=user.groups,
-        vector_store=get_vector_store(), schema_registry=get_schema_registry(),
-        metadata_store=get_metadata_store(),
-        skip_cache=payload.skip_cache,
-        session_headers=http.headers, agent_id=user.username,
-    )
-    return QueryResponse(
-        answer=result.answer,
-        citations=[CitationResponse(doc_id=c.doc_id, filename=c.filename, doc_type=c.doc_type, chunk_index=c.chunk_index, page=c.page, snippet=c.snippet, relevance=c.relevance, figure_id=c.figure_id, section_title=c.section_title, caption=c.caption, slide=c.slide) for c in result.citations],
-        cached=result.cached,
-        cached_query=result.cached_query,
-    )
+    async with query_activity_span(
+        source="rest", tool="query",
+        username=user.username, user_groups=list(user.groups),
+        query_text=payload.question,
+    ) as span:
+        result = await agent_query(
+            question=payload.question, user_groups=user.groups,
+            vector_store=get_vector_store(), schema_registry=get_schema_registry(),
+            metadata_store=get_metadata_store(),
+            skip_cache=payload.skip_cache,
+            session_headers=http.headers, agent_id=user.username,
+        )
+        span.strategy = result.query_type or ("cache" if result.cached else "")
+        span.cache_hit = bool(result.cached)
+        return QueryResponse(
+            answer=result.answer,
+            citations=[CitationResponse(doc_id=c.doc_id, filename=c.filename, doc_type=c.doc_type, chunk_index=c.chunk_index, page=c.page, snippet=c.snippet, relevance=c.relevance, figure_id=c.figure_id, section_title=c.section_title, caption=c.caption, slide=c.slide) for c in result.citations],
+            cached=result.cached,
+            cached_query=result.cached_query,
+        )
 
 
 @router.post("/query/async", response_model=AsyncQuerySubmitResponse)

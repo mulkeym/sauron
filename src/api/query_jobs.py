@@ -177,6 +177,7 @@ class QueryJobQueue:
             if job is None:
                 self._queue.task_done()
                 continue
+            t0 = time.time()
             try:
                 vector_store, schema_registry, metadata_store = self._stores
                 job.status = QueryStatus.PROCESSING
@@ -204,13 +205,40 @@ class QueryJobQueue:
                 ]
                 self.complete(token, answer=result.answer, citations=citation_dicts,
                               cached=result.cached, cached_query=result.cached_query)
+                strategy = result.query_type or ""
+                if not strategy and job.classification:
+                    strategy = str(job.classification.get("query_type") or "")
+                from src.audit.activity import record_query_activity
+                await record_query_activity(
+                    source="rest", tool="query_async",
+                    username=job.username, user_groups=job.groups,
+                    query_text=job.question, strategy=strategy,
+                    duration_seconds=round(time.time() - t0, 2),
+                    status="ok", cache_hit=bool(result.cached),
+                )
             except asyncio.TimeoutError:
                 logger.error(f"Async query {token} timed out after {self._job_timeout}s")
                 self.fail(token, "Query timed out")
+                from src.audit.activity import record_query_activity
+                await record_query_activity(
+                    source="rest", tool="query_async",
+                    username=job.username, user_groups=job.groups,
+                    query_text=job.question,
+                    duration_seconds=round(time.time() - t0, 2),
+                    status="error", error="Query timed out",
+                )
             except Exception as e:
                 # Log the full detail server-side; return only a generic message.
                 logger.error(f"Async query {token} failed: {e}\n{traceback.format_exc()}")
                 self.fail(token, _GENERIC_ERROR)
+                from src.audit.activity import record_query_activity
+                await record_query_activity(
+                    source="rest", tool="query_async",
+                    username=job.username, user_groups=job.groups,
+                    query_text=job.question,
+                    duration_seconds=round(time.time() - t0, 2),
+                    status="error", error=_GENERIC_ERROR,
+                )
             self._queue.task_done()
 
 

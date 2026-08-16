@@ -213,3 +213,46 @@ def test_update_step_stores_classification_detail():
     data = {"query_type": "lookup", "reason": "r", "sub_tasks": ["x"], "strategy_memory": None}
     q.update_step(token, "classify.done", {"kind": "classification", "data": data})
     assert q.get_job(token).classification == data
+
+
+@pytest.mark.asyncio
+async def test_worker_records_activity_on_success():
+    from src.generation.rag_chain import RAGResponse
+    q = QueryJobQueue()
+    rec = AsyncMock()
+    with patch("src.api.query_jobs.agent_query_streamed", new_callable=AsyncMock, return_value=RAGResponse(answer="ok", citations=[], query_type="sweep", cached=False)), \
+         patch("src.audit.activity.record_query_activity", rec):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        token = q.enqueue(question="pay rate?", username="mike", groups=["finance"])
+        for _ in range(50):
+            if q.get_job(token).status == QueryStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.02)
+    rec.assert_awaited()
+    kwargs = rec.await_args.kwargs
+    assert kwargs["source"] == "rest"
+    assert kwargs["tool"] == "query_async"
+    assert kwargs["username"] == "mike"
+    assert kwargs["user_groups"] == ["finance"]
+    assert kwargs["query_text"] == "pay rate?"
+    assert kwargs["strategy"] == "sweep"
+    assert kwargs["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_worker_records_activity_on_failure():
+    q = QueryJobQueue()
+    rec = AsyncMock()
+    with patch("src.api.query_jobs.agent_query_streamed", new_callable=AsyncMock, side_effect=RuntimeError("boom")), \
+         patch("src.audit.activity.record_query_activity", rec):
+        await q.start_worker(MagicMock(), MagicMock(), MagicMock())
+        token = q.enqueue(question="pay rate?", username="mike", groups=["finance"])
+        for _ in range(50):
+            if q.get_job(token).status == QueryStatus.FAILED:
+                break
+            await asyncio.sleep(0.02)
+    rec.assert_awaited()
+    kwargs = rec.await_args.kwargs
+    assert kwargs["status"] == "error"
+    assert kwargs["tool"] == "query_async"
+    assert kwargs["error"]
