@@ -74,3 +74,28 @@ def test_query_forwards_inbound_session_header(client, auth_headers):
     assert resp.status_code == 200
     forwarded = mock_aq.await_args.kwargs["session_headers"]
     assert forwarded.get("x-openwebui-chat-id") == "chat-7" or forwarded.get("X-OpenWebUI-Chat-Id") == "chat-7"
+
+
+def test_query_records_activity(client, auth_headers):
+    mock_response = RAGResponse(answer="ok", citations=[], query_type="lookup", cached=False)
+    with patch("src.api.routes_query.agent_query", new_callable=AsyncMock, return_value=mock_response), \
+         patch("src.api.routes_query.get_vector_store", return_value=MagicMock()), \
+         patch("src.api.routes_query.get_schema_registry", return_value=MagicMock()), \
+         patch("src.api.routes_query.get_metadata_store", return_value=MagicMock()), \
+         patch("src.audit.activity.record_query_activity", new_callable=AsyncMock) as rec:
+        resp = client.post(
+            "/api/v1/query",
+            json={"question": "What is the expense policy?"},
+            headers=auth_headers,
+        )
+    assert resp.status_code == 200
+    rec.assert_awaited()
+    kwargs = rec.await_args.kwargs
+    assert kwargs["source"] == "rest"
+    assert kwargs["tool"] == "query"
+    assert kwargs["username"] == "mike"
+    assert kwargs["user_groups"] == ["finance"]
+    assert kwargs["query_text"] == "What is the expense policy?"
+    assert kwargs["strategy"] == "lookup"
+    assert kwargs["status"] == "ok"
+    assert kwargs["duration_seconds"] >= 0

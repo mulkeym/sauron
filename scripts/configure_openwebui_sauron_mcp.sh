@@ -23,7 +23,6 @@ line argument.
 
 Open WebUI must be launched with:
   ENABLE_FORWARD_USER_INFO_HEADERS=true
-  FORWARD_USER_INFO_HEADER_JWT_SECRET=<same secret as Sauron's MCP_OPENWEBUI_JWT_SECRET>
   WEBUI_SECRET_KEY=<persistent secret>
 EOF
 }
@@ -69,14 +68,13 @@ if [[ -z $target_user && -n $group_csv ]]; then
 fi
 
 forwarding=$(docker exec "$container_name" sh -c 'printf %s "${ENABLE_FORWARD_USER_INFO_HEADERS:-}"')
-identity_secret=$(docker exec "$container_name" sh -c 'if [ -n "${FORWARD_USER_INFO_HEADER_JWT_SECRET:-}" ]; then printf set; fi')
 webui_secret=$(docker exec "$container_name" sh -c 'if [ -n "${WEBUI_SECRET_KEY:-}" ]; then printf set; fi')
 
-if [[ ${forwarding,,} != true || $identity_secret != set || $webui_secret != set ]]; then
+if [[ ${forwarding,,} != true || $webui_secret != set ]]; then
   printf '%s\n' \
     'Open WebUI identity forwarding is not fully configured.' \
-    'Set ENABLE_FORWARD_USER_INFO_HEADERS=true, FORWARD_USER_INFO_HEADER_JWT_SECRET,' \
-    'and a persistent WEBUI_SECRET_KEY, then recreate the container.' >&2
+    'Set ENABLE_FORWARD_USER_INFO_HEADERS=true and a persistent WEBUI_SECRET_KEY,' \
+    'then recreate the container.' >&2
   exit 1
 fi
 
@@ -139,6 +137,7 @@ connections.append({
     'auth_type': 'none',
     'headers': {
         'X-API-Key': os.environ['SETUP_SAURON_API_KEY'],
+        'X-Sauron-Username': '{{USER_EMAIL}}',
         'X-Sauron-User-Groups': '{{USER_GROUPS}}',
     },
     'key': '',

@@ -61,7 +61,14 @@ async def query_database(
                 schema_registry=schema_registry,
                 metadata_store=metadata_store,
             )
-            return {"sql": "", "results": [], "answer": result.get("answer", ""), "citations": result.get("citations", [])}
+            return {
+                "sql": "",
+                "results": [],
+                "answer": result.get("answer", ""),
+                "citations": result.get("citations", []),
+                "query_type": result.get("query_type", ""),
+                "cached": bool(result.get("cached")),
+            }
         return {"sql": "", "results": [], "error": "No database schemas available for your groups."}
 
     user_prompt = f"Schema:\n{schema_prompt}\n\nQuestion: {question}"

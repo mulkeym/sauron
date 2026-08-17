@@ -8,10 +8,10 @@ SAURON supports **multiple service clients** (demo front-ends, OpenWebUI, MCP ga
 |---------|------|
 | **Application** | Named client (`sdwan-demo-chat`, `openwebui`, …) |
 | **API key** | Service secret for that client (`X-API-Key` header) |
-| **User identity** | Sauron JWT, or verified OpenWebUI forwarded-identity JWT |
+| **User identity** | Trusted headers from OpenWebUI, or a Sauron JWT for direct clients |
 
-Keys answer: *“Is this a trusted backend?”*  
-User groups answer: *“Which documents may this request see?”*
+Keys answer: *“Is this OpenWebUI (or another registered app)?”*  
+User identity answers: *“Which OpenWebUI user, which documents?”*
 
 ## Admin UI
 
@@ -62,31 +62,29 @@ Create a dedicated application such as `openwebui-mcp` and generate a key for
 the OpenWebUI External Tools connection. OpenWebUI sends that key only from its
 backend:
 
+Required custom headers on the OpenWebUI MCP connection:
+
+| Header | Value |
+|---|---|
+| `X-API-Key` | This application's key |
+| `X-Sauron-Username` | `{{USER_EMAIL}}` |
+| `X-Sauron-User-Groups` | `{{USER_GROUPS}}` |
+
 ```json
 {
   "X-API-Key": "<openwebui-mcp-application-key>",
+  "X-Sauron-Username": "{{USER_EMAIL}}",
   "X-Sauron-User-Groups": "{{USER_GROUPS}}"
 }
 ```
 
-The application key proves the request came from the trusted OpenWebUI service;
-it does not grant document access by itself. Sauron also requires OpenWebUI's
-short-lived, HS256-signed identity in `X-OpenWebUI-User-Jwt`. Enable it with:
+The application key proves the request came from your OpenWebUI server. It
+does not grant document access. OpenWebUI is the source of truth for the
+person chatting: it expands `{{USER_EMAIL}}` and `{{USER_GROUPS}}` from the
+logged-in user. Sauron ignores `X-OpenWebUI-User-Jwt` for now.
 
-```text
-OpenWebUI: ENABLE_FORWARD_USER_INFO_HEADERS=true
-OpenWebUI: FORWARD_USER_INFO_HEADER_JWT_SECRET=<shared-secret>
-OpenWebUI: WEBUI_SECRET_KEY=<persistent-openwebui-secret>
-Sauron:    MCP_OPENWEBUI_JWT_SECRET=<same-shared-secret>
-```
-
-OpenWebUI's ordinary session/login token is not accepted as a Sauron bearer
-token. Its forwarded identity JWT supplies the verified user; the templated
-`X-Sauron-User-Groups` header supplies the ACL group names. Because that group
-header is trusted at the application boundary, keep the application key
-exclusive to OpenWebUI and restrict `/mcp` to trusted network paths.
-
-See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md) for the complete configuration.
+See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md#how-openwebui-authenticates-to-sauron-mcp)
+for the OpenWebUI login → header → ACL walkthrough.
 
 ## Validation order
 

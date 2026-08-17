@@ -84,15 +84,23 @@ async def chat_completions(
     if not question:
         raise HTTPException(status_code=400, detail="No user message found")
 
-    # Run the RAG pipeline
-    result = await agent_query(
-        question=question,
-        user_groups=user_groups,
-        vector_store=get_vector_store(),
-        schema_registry=get_schema_registry(),
-        session_headers=http.headers,
-        agent_id=agent_id,
-    )
+    from src.audit.activity import query_activity_span
+
+    async with query_activity_span(
+        source="openai", tool="chat.completions",
+        username=agent_id or "", user_groups=list(user_groups),
+        query_text=question,
+    ) as span:
+        result = await agent_query(
+            question=question,
+            user_groups=user_groups,
+            vector_store=get_vector_store(),
+            schema_registry=get_schema_registry(),
+            session_headers=http.headers,
+            agent_id=agent_id,
+        )
+        span.strategy = result.query_type or ("cache" if result.cached else "")
+        span.cache_hit = bool(result.cached)
 
     # Format citations as part of the response
     answer = result.answer

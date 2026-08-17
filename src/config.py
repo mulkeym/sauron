@@ -49,10 +49,11 @@ class Settings(BaseSettings):
     mcp_enabled: bool = True
     mcp_path: str = "/mcp"
     mcp_stateless_http: bool = True
-    # When OpenWebUI forwarding is enabled, it signs user identity with this
-    # shared secret and sends it in X-OpenWebUI-User-Jwt. Keep the secret out of
-    # data/settings.json; configure it as an environment/Kubernetes secret.
+    # OpenWebUI JWT forwarding is paused until an IdP is wired. The secret is
+    # kept so we can re-enable verification without a settings rename.
     mcp_openwebui_jwt_secret: str = ""
+    # Trusted identity headers: accepted only after X-API-Key validates.
+    mcp_openwebui_username_header: str = "X-Sauron-Username"
     mcp_openwebui_groups_header: str = "X-Sauron-User-Groups"
     # "ALL" is Sauron's superuser ACL. Never grant it from a forwarded group
     # name unless an operator explicitly opts in.

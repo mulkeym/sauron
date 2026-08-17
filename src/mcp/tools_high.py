@@ -50,6 +50,8 @@ async def ask(
         "citations": citations,
         "retrieval_strategy": depth,
         "_call_args": {"question": full_question},
+        "query_type": response.query_type,
+        "cached": response.cached,
     }
 
 
@@ -78,7 +80,12 @@ async def summarize_topic(
         for c in response.citations
     ]
 
-    return {"summary": response.answer, "sources": sources}
+    return {
+        "summary": response.answer,
+        "sources": sources,
+        "query_type": response.query_type,
+        "cached": response.cached,
+    }
 
 
 async def compare(
@@ -105,7 +112,12 @@ async def compare(
         for c in response.citations
     ]
 
-    return {"comparison": response.answer, "sources": sources}
+    return {
+        "comparison": response.answer,
+        "sources": sources,
+        "query_type": response.query_type,
+        "cached": response.cached,
+    }
 
 
 def summarize_documents(

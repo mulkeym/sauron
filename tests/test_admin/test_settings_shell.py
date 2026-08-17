@@ -137,6 +137,7 @@ def test_top_nav_drops_moved_links():
         store.list_documents.return_value = []
         store.list_categories.return_value = []
         store.list_proposals.return_value = []
+        store.list_recent_query_activity.return_value = []
         mg.return_value = store
         resp = c.get("/admin/")  # dashboard extends base.html (no settings sub-nav)
     assert resp.status_code == 200

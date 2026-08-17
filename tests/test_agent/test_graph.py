@@ -153,3 +153,22 @@ async def test_run_agent_temporal_does_not_nameerror():
                 from src.db.schema_registry import SchemaRegistry
                 result = await run_agent(question="what changed in 2025?", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
     assert result.answer  # completed without NameError
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_copies_query_type():
+    from src.agent.graph import run_agent_streamed
+    from src.agent.state import QueryType
+    from src.generation.rag_chain import RAGResponse
+
+    class FakeGraph:
+        async def astream(self, initial, stream_mode="updates"):
+            yield {"classify": {"query_type": QueryType.LOOKUP, "answer": "hi", "citations": []}}
+
+    with patch("src.agent.graph.create_agent_graph", return_value=FakeGraph()):
+        out = await run_agent_streamed(
+            question="q", user_groups=["finance"],
+            vector_store=MagicMock(), schema_registry=MagicMock(),
+        )
+    assert isinstance(out, RAGResponse)
+    assert out.query_type == "lookup"

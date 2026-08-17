@@ -27,6 +27,7 @@ class RAGResponse:
     citations: list[Citation]
     cached: bool = False
     cached_query: str | None = None
+    query_type: str = ""
 
 
 def rag_query(question, user_groups, vector_store, top_k=10):
@@ -109,8 +110,11 @@ async def _agent_query_streamed_bound(
             )
             for c in cached.get("citations", [])
         ]
-        return RAGResponse(answer=cached["answer"], citations=citations,
-                           cached=True, cached_query=cached.get("cached_query"))
+        return RAGResponse(
+            answer=cached["answer"], citations=citations,
+            cached=True, cached_query=cached.get("cached_query"),
+            query_type="cache",
+        )
 
     # run_agent_streamed is imported lazily to avoid a circular import: src.agent.graph
     # imports RAGResponse from this module. Tests patch src.agent.graph.run_agent_streamed.

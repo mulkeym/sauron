@@ -98,3 +98,20 @@ async def test_compare():
             schema_registry=MagicMock(),
         )
     assert "comparison" in result
+
+
+@pytest.mark.asyncio
+async def test_ask_forwards_query_type_and_cached():
+    from src.mcp.tools_high import ask
+    resp = _mock_rag_response()
+    resp.query_type = "lookup"
+    resp.cached = True
+    with patch("src.mcp.tools_high.agent_query", new_callable=AsyncMock, return_value=resp):
+        result = await ask(
+            question="What is policy 4.2?",
+            user_groups=["finance"],
+            vector_store=MagicMock(),
+            schema_registry=MagicMock(),
+        )
+    assert result["query_type"] == "lookup"
+    assert result["cached"] is True

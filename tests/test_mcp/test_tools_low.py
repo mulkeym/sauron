@@ -117,3 +117,25 @@ def test_list_sources():
     mock_metadata.list_documents = AsyncMock(return_value=[mock_doc, mock_doc, mock_doc])
     result = list_sources(user_groups=["finance"], metadata_store=mock_metadata)
     assert len(result) >= 1
+
+
+@pytest.mark.asyncio
+async def test_query_database_fallback_forwards_query_type():
+    from src.mcp.tools_low import query_database
+    from src.db.schema_registry import SchemaRegistry
+
+    registry = SchemaRegistry()
+    with patch(
+        "src.mcp.tools_high.ask",
+        new_callable=AsyncMock,
+        return_value={"answer": "from docs", "citations": [], "query_type": "metadata", "cached": False},
+    ):
+        result = await query_database(
+            question="how many files?",
+            user_groups=["finance"],
+            schema_registry=registry,
+            vector_store=MagicMock(),
+        )
+    assert result["query_type"] == "metadata"
+    assert result["cached"] is False
+    assert result.get("error") in (None, "")
