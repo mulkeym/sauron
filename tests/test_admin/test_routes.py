@@ -4,8 +4,12 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
+    from src.admin.routes import _create_session, _active_sessions
     from src.main import create_app
-    return TestClient(create_app())
+    token = _create_session()
+    client = TestClient(create_app(), cookies={"sauron_session": token})
+    yield client
+    _active_sessions.discard(token)
 
 def _dashboard_store(activity=None, activity_exc=None):
     store = AsyncMock()

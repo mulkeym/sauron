@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 480
-    api_keys: str = "dev-key-1"  # comma-separated
+    api_keys: str = ""  # comma-separated; no implicit shared development key
 
     # LDAP
     ldap_enabled: bool = False

@@ -119,7 +119,7 @@ helm upgrade --install sauron ./charts/sauron \
    kubectl create namespace sauron
    kubectl -n sauron create secret generic sauron-app-secrets \
      --from-literal=JWT_SECRET_KEY="$(openssl rand -hex 32)" \
-     --from-literal=API_KEYS="app-key-1" \
+     --from-literal=API_KEYS="$(openssl rand -hex 32)" \
      --from-literal=ADMIN_USERNAME=admin \
      --from-literal=ADMIN_PASSWORD='strong-password' \
      --from-literal=MCP_OPENWEBUI_JWT_SECRET="$SAURON_MCP_SHARED_SECRET" \
@@ -168,9 +168,13 @@ See `values.yaml` for the full schema and `values-airgapped.yaml` for a Harbor-o
 kubectl port-forward -n sauron svc/sauron-api 8080:8080
 # open http://localhost:8080/admin
 
-# Health
-kubectl exec -n sauron deploy/sauron -c api -- curl -sf http://localhost:8080/api/health
+# HTTP readiness (same public sign-in page as the chart's default probes)
+kubectl exec -n sauron deploy/sauron -c api -- curl -fsS -o /dev/null http://localhost:8080/admin/login
 ```
+
+`/api/health` also remains available with an `X-API-Key` header. Update custom
+HTTP probes that still call it anonymously. API keys are empty by default;
+configure a unique bootstrap key or create application keys after admin login.
 
 ## Run:ai notes
 

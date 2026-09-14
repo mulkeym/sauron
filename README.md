@@ -258,18 +258,41 @@ The Playground and Knowledge Graph “act as / view as” dropdowns load from pe
 
 #### API authentication (apps calling SAURON)
 
-Protected REST routes require **both**:
+Every service endpoint requires an application API key, including
+`/api/v1/auth/token`, `/api/health`, `/v1/models`, `/docs`, `/redoc`, and
+`/openapi.json`. Missing or invalid keys return **403** before the endpoint
+runs. New routes are protected automatically.
+
+The admin website keeps its username/password login. All `/admin` pages and
+`/admin/api/*` actions require an admin session; application API keys do not
+grant administrator access. Unauthenticated admin API requests return **401**.
+Only `/admin/login` and read-only `/admin/static/*` assets are public. Browser
+CORS preflight responses do not grant access to the subsequent request.
+
+Create a key under **Settings → Security → Applications & API Keys**, or set a
+unique `API_KEYS` bootstrap value. New installs have no built-in development
+key. When upgrading, replace any previously configured `dev-key-1` / `dev-key-2`
+values and revoke their imported keys under Security.
+
+Document/query REST routes continue to require **both**:
 
 | Header | Purpose |
 |--------|---------|
 | `X-API-Key` | Service credential — application key from Security (or legacy `API_KEYS` env during migration) |
 | `Authorization: Bearer <JWT>` | User identity + **ACL groups** for document filtering |
 
-Mint a lab JWT:
+OpenAI-compatible `/v1/*` routes also accept an application key in
+`Authorization: Bearer <application-key>`. A user JWT alone never substitutes
+for the API key. With a user JWT, also send `X-API-Key` to retain user ACLs.
+Native MCP still requires both an application key and its existing user identity.
+
+Mint a lab JWT using a trusted application key (this lab endpoint accepts
+client-supplied groups; it is not an identity-provider login):
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/auth/token \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <your-app-key>" \
   -d '{"username":"mike","password":"demo","groups":["finance","executives"]}'
 ```
 
@@ -295,6 +318,12 @@ curl -s -X POST http://localhost:8080/api/v1/ingest/async \
 ```
 
 **CORS:** SAURON allows browser origins on `localhost` / `127.0.0.1` for local demos. Production front-ends should call SAURON only from a **backend** (BFF), not the browser—use a dedicated application API key per client.
+
+**Health checks:** `/api/health` requires `X-API-Key`. The bundled Docker and
+Helm probes use the public `/admin/login` page to check HTTP readiness without
+embedding credentials. Update any custom unauthenticated `/api/health` probes
+when upgrading. Browser admin requests must remain same-origin; reverse proxies
+must preserve the public Host and correctly forward the request scheme.
 
 See [docs/API_APPLICATIONS.md](docs/API_APPLICATIONS.md) for multi-app key management.
 

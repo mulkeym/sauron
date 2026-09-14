@@ -63,9 +63,10 @@ api:
       cpu: "4"
       memory: 8Gi
   # Local sentence-transformers embeddings need substantial RAM/CPU
+  # The sign-in page checks HTTP readiness without exposing a public API.
   livenessProbe:
     httpGet:
-      path: /api/health
+      path: /admin/login
       port: http
     initialDelaySeconds: 60
     periodSeconds: 30
@@ -73,7 +74,7 @@ api:
     failureThreshold: 3
   readinessProbe:
     httpGet:
-      path: /api/health
+      path: /admin/login
       port: http
     initialDelaySeconds: 30
     periodSeconds: 10
@@ -183,7 +184,7 @@ secrets:
   #   JWT_SECRET_KEY, API_KEYS, ADMIN_USERNAME, ADMIN_PASSWORD, VLLM_API_KEY,
   #   MCP_OPENWEBUI_JWT_SECRET
   jwtSecretKey: "change-me-in-production"
-  apiKeys: "dev-key-1"
+  apiKeys: "" # Set a unique bootstrap key or create keys through the admin UI.
   adminUsername: "admin"
   adminPassword: "password123"
   vllmApiKey: ""

@@ -290,7 +290,7 @@ or rewrites `/mcp` consistently. `MCP_PATH` controls the path inside Sauron.
 First verify the shared application route remains healthy:
 
 ```bash
-curl -fsS https://<sauron-host>/api/health
+curl -fsS https://<sauron-host>/api/health -H 'X-API-Key: <your-app-key>'
 ```
 
 Then use OpenWebUI's **Verify Connection** action. Sauron should log an MCP
