@@ -14,6 +14,7 @@ from src.api.routes_query import router as query_router
 from src.admin.routes import router as admin_router
 from src.api.routes_openai_compat import router as openai_compat_router
 from src.config import settings
+from src.auth.http import EndpointAuthenticationMiddleware
 
 _ssl_verify_disabled = False
 
@@ -126,6 +127,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=app_lifespan,
     )
+
+    # Gate every route, including docs, health, token issuance, and mounted MCP.
+    # CORS is added last so it can answer preflight without invoking endpoints.
+    app.add_middleware(EndpointAuthenticationMiddleware)
 
     # Allow browser demos (e.g. Vite on :5173) to call the API cross-origin.
     # Without this, preflight OPTIONS fails with 405 and the browser reports "Failed to fetch".

@@ -101,26 +101,26 @@ def main():
 # Query as Mike (finance access):
 curl -X POST http://localhost:8080/api/v1/query \\
   -H "Authorization: Bearer {mike['token']}" \\
-  -H "X-API-Key: dev-key-1" \\
+  -H "X-API-Key: <your-app-key>" \\
   -H "Content-Type: application/json" \\
   -d '{{"question": "What is the expense policy?"}}'
 
 # Query as Bob (IT access — should NOT see finance docs):
 curl -X POST http://localhost:8080/api/v1/query \\
   -H "Authorization: Bearer {bob['token']}" \\
-  -H "X-API-Key: dev-key-1" \\
+  -H "X-API-Key: <your-app-key>" \\
   -H "Content-Type: application/json" \\
   -d '{{"question": "What is the expense policy?"}}'
 
 # List documents visible to Mike:
 curl http://localhost:8080/api/v1/documents \\
   -H "Authorization: Bearer {mike['token']}" \\
-  -H "X-API-Key: dev-key-1"
+  -H "X-API-Key: <your-app-key>"
 
 # Upload a document with finance ACL:
 curl -X POST http://localhost:8080/api/v1/ingest \\
   -H "Authorization: Bearer {mike['token']}" \\
-  -H "X-API-Key: dev-key-1" \\
+  -H "X-API-Key: <your-app-key>" \\
   -F "file=@test_fixtures/sample.pdf" \\
   -F 'acl_groups=["finance", "executives"]'
 """)

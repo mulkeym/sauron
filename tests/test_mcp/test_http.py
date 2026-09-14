@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.auth.jwt import create_token
+from src.auth.http import EndpointAuthenticationMiddleware
 from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
 from src.mcp.http import add_mcp_http_route, create_mcp_http_app
@@ -20,6 +21,7 @@ def _app(metadata_store=None):
     )
     mcp_app = create_mcp_http_app(server)
     app = FastAPI(lifespan=mcp_app.lifespan)
+    app.add_middleware(EndpointAuthenticationMiddleware)
 
     @app.get("/admin/")
     async def admin_page():
@@ -53,9 +55,13 @@ def test_native_mcp_rejects_missing_application_key():
 
 
 def test_native_mcp_does_not_intercept_admin_redirect_or_unknown_routes():
+    from src.admin.routes import _create_session, _active_sessions
+    token = _create_session()
     with TestClient(_app(), follow_redirects=False) as client:
+        client.cookies.set("sauron_session", token)
         admin = client.get("/admin")
-        unknown = client.get("/not-an-mcp-route")
+        unknown = client.get("/not-an-mcp-route", headers=_headers())
+    _active_sessions.discard(token)
     assert admin.status_code == 307
     assert admin.headers["location"].endswith("/admin/")
     assert unknown.status_code == 404

@@ -49,7 +49,7 @@ services:
       - LANCEDB_PATH=/app/data/lancedb
       - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
-      - API_KEYS=${API_KEYS:-dev-key-1}
+      - API_KEYS=${API_KEYS:-}
       - MCP_ENABLED=${MCP_ENABLED:-true}
       - MCP_PATH=${MCP_PATH:-/mcp}
       - MCP_STATELESS_HTTP=${MCP_STATELESS_HTTP:-true}

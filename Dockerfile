@@ -285,8 +285,9 @@ ENV LANCEDB_PATH=/app/data/lancedb \
 EXPOSE 8080
 VOLUME /app/data
 
+# Probe the public sign-in page; /api/health requires an application API key.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8080/api/health || exit 1
+    CMD curl -fsS -o /dev/null http://localhost:8080/admin/login || exit 1
 
 ENTRYPOINT ["scripts/entrypoint.sh"]
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -28,7 +28,10 @@ openpyxl>=3.1.0
 xlrd>=2.0.1  # legacy binary .xls parsing (openpyxl only reads .xlsx)
 
 # Embeddings & Vector DB
-sentence-transformers>=3.3.0
+# Validated with nomic-embed-text-v1's remote model code. Transformers 5.17
+# removes get_extended_attention_mask, which that model still calls.
+sentence-transformers==5.7.0
+transformers==5.15.0
 einops>=0.8.0
 lancedb>=0.30.0
 onnx>=1.22.0

@@ -205,7 +205,7 @@ rpds-py==2026.6.3
 safetensors==0.8.0
 scikit-learn==1.9.0
 scipy==1.17.1
-sentence-transformers==5.6.1
+sentence-transformers==5.7.0
 sentry-sdk==2.66.1
 setuptools==83.0.0
 shellingham==1.5.4
@@ -233,7 +233,7 @@ tomli_w==1.2.0
 torch==2.13.0
 torchvision==0.28.0
 tqdm==4.69.1
-transformers==5.14.1
+transformers==5.15.0
 typer==0.27.0
 typing-inspection==0.4.2
 typing_extensions==4.16.0
