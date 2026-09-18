@@ -16,6 +16,7 @@ from pathlib import Path
 from src.ingestion.isolation import read_json, write_json
 
 logger = logging.getLogger(__name__)
+MIB = 1024 * 1024
 
 
 class SpawnedProcess:
@@ -73,6 +74,51 @@ def worker_diagnostic(path: Path, task_dir: Path, max_bytes: int = 4096) -> str:
     return "\n".join(lines[-12:]).replace(str(task_dir), "<extraction-task>")
 
 
+def available_memory_bytes() -> int | None:
+    """Return the smallest visible system/container memory ceiling."""
+    budgets = []
+    for name in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            budget = int(Path(name).read_text().strip())
+            if 0 < budget < 2**60:
+                budgets.append(budget)
+        except (OSError, ValueError):
+            pass
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                budgets.append(int(line.split()[1]) * 1024)
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    return min(budgets) if budgets else None
+
+
+def current_memory_usage() -> int | None:
+    """Return total memory charged to this container's cgroup when available."""
+    for name in ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"):
+        try:
+            return int(Path(name).read_text().strip())
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def extraction_memory_ceiling(memory_mb: int, baseline: int | None) -> int | None:
+    """Calculate a container-usage ceiling that leaves the API headroom."""
+    requested = max(128, int(memory_mb)) * MIB
+    ceilings = []
+    if baseline is not None:
+        ceilings.append(baseline + requested)
+    total = available_memory_bytes()
+    if total is not None:
+        # Keep one quarter of the budget, and never less than 512 MiB, outside
+        # extraction. On the 4 GiB production LXC this reserves 1 GiB.
+        reserve = max(512 * MIB, total // 4)
+        ceilings.append(max(128 * MIB, total - reserve))
+    return min(ceilings) if ceilings else None
+
+
 def fail(task_dir: Path, message: str) -> None:
     write_json(task_dir / "status.json", {"state": "failed", "error": message})
 
@@ -98,6 +144,8 @@ async def run_task(task_dir: Path, *, command: list[str] | None = None) -> None:
     try:
         request = read_json(task_dir / "running.json", 1024 * 1024)
         timeout = max(1, float(request["timeout"]))
+        memory_baseline = current_memory_usage()
+        memory_ceiling = extraction_memory_ceiling(request["memory_mb"], memory_baseline)
         write_json(task_dir / "status.json", {"state": "running", "progress": "Parsing document in isolated worker"})
         command = command or [sys.executable, "-m", "src.ingestion.extraction_worker", "--child", str(task_dir)]
         log_path = task_dir / "worker.log"
@@ -118,8 +166,13 @@ async def run_task(task_dir: Path, *, command: list[str] | None = None) -> None:
                 await stop_process(process)
                 fail(task_dir, f"Extraction exceeded its {timeout:g}-second time limit")
                 return
+            usage = current_memory_usage()
+            if memory_ceiling is not None and usage is not None and usage > memory_ceiling:
+                await stop_process(process)
+                fail(task_dir, "Extraction exceeded its memory limit; the API remains available")
+                return
             try:
-                await asyncio.wait_for(process.wait(), timeout=0.25)
+                await asyncio.wait_for(process.wait(), timeout=0.05)
             except asyncio.TimeoutError:
                 pass
         if process.returncode:
@@ -162,7 +215,6 @@ def child(task_dir: Path) -> None:
     file_limit = max(request["max_result_bytes"] * 2, 64 * 1024 * 1024)
     resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
     try:
-        apply_memory_limit(request["memory_mb"])
         from src.config import settings
         for key, value in request["settings"].items():
             if key in type(settings).model_fields:
@@ -182,40 +234,6 @@ def child(task_dir: Path) -> None:
     except Exception as exc:
         logger.exception("Document extraction failed")
         fail(task_dir, f"Document extraction failed: {type(exc).__name__}: {str(exc)[:1000]}")
-
-
-def apply_memory_limit(memory_mb: int) -> None:
-    """Hard address-space ceiling on Linux, capped at half the cgroup budget.
-
-    Address space is stricter than RSS: a model that cannot fit fails the file
-    rather than letting the extractor allocate the container's entire budget.
-    macOS does not reliably enforce RLIMIT_AS; the production container does.
-    """
-    if sys.platform != "linux":
-        return
-    import resource
-    limit = max(128, int(memory_mb)) * 1024 * 1024
-    budgets = []
-    for name in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        try:
-            budget = int(Path(name).read_text().strip())
-            if 0 < budget < 2**60:
-                budgets.append(budget)
-        except (OSError, ValueError):
-            pass
-    # Docker inside an LXC can report memory.max="max" even though /proc/meminfo
-    # correctly reflects the outer LXC ceiling. Include it so the extractor
-    # cannot claim the API's entire budget in that deployment shape.
-    try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemTotal:"):
-                budgets.append(int(line.split()[1]) * 1024)
-                break
-    except (OSError, ValueError, IndexError):
-        pass
-    if budgets:
-        limit = min(limit, min(budgets) // 2)
-    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 
 
 def main():

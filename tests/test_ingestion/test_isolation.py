@@ -27,7 +27,11 @@ def isolated_settings(tmp_path, monkeypatch):
 
 def request_dir(tmp_path, timeout=5, max_result_bytes=1000):
     tmp_path.mkdir(parents=True, exist_ok=True)
-    write_json(tmp_path / "request.json", {"timeout": timeout, "max_result_bytes": max_result_bytes})
+    write_json(tmp_path / "request.json", {
+        "timeout": timeout,
+        "memory_mb": 4096,
+        "max_result_bytes": max_result_bytes,
+    })
     return tmp_path
 
 
@@ -105,6 +109,20 @@ async def test_native_exit_includes_bounded_worker_diagnostic(tmp_path):
     assert "exit code 127" in error
     assert "loader failed safely" in error
     assert str(task_dir) not in error
+
+
+@pytest.mark.asyncio
+async def test_container_memory_pressure_stops_worker(tmp_path, monkeypatch):
+    mib = 1024 * 1024
+    readings = iter([100 * mib, 900 * mib])
+    monkeypatch.setattr(extraction_worker, "current_memory_usage", lambda: next(readings, 900 * mib))
+    monkeypatch.setattr(extraction_worker, "available_memory_bytes", lambda: 1024 * mib)
+    task_dir = request_dir(tmp_path / "memory")
+    await extraction_worker.run_task(task_dir, command=[
+        sys.executable, "-c", "import time; time.sleep(30)"])
+    error = read_json(task_dir / "status.json", 65536)["error"]
+    assert "memory limit" in error
+    assert "API remains available" in error
 
 
 @pytest.mark.asyncio
@@ -196,30 +214,20 @@ async def test_queue_reports_parser_death_and_health_remains_available(tmp_path,
         await queue.stop_worker()
 
 
-def test_linux_memory_ceiling_reserves_half_container_budget(monkeypatch):
-    import resource
-    calls = []
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(Path, "read_text", lambda self: str(2 * 1024**3))
-    monkeypatch.setattr(resource, "setrlimit", lambda kind, limit: calls.append((kind, limit)))
-    extraction_worker.apply_memory_limit(4096)
-    assert calls == [(resource.RLIMIT_AS, (1024**3, 1024**3))]
-
-
-def test_linux_memory_ceiling_uses_meminfo_when_nested_cgroup_is_unbounded(monkeypatch):
-    import resource
-    calls = []
-
+def test_nested_lxc_memory_ceiling_reserves_api_headroom(monkeypatch):
     def content(path):
         if str(path) == "/proc/meminfo":
             return "MemTotal:        4194304 kB\nMemFree:         123 kB\n"
         return "max"
 
-    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(Path, "read_text", content)
-    monkeypatch.setattr(resource, "setrlimit", lambda kind, limit: calls.append((kind, limit)))
-    extraction_worker.apply_memory_limit(4096)
-    assert calls == [(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))]
+    assert extraction_worker.available_memory_bytes() == 4 * 1024**3
+    assert extraction_worker.extraction_memory_ceiling(4096, 600 * 1024**2) == 3 * 1024**3
+
+
+def test_operator_memory_limit_can_be_lower_than_system_ceiling(monkeypatch):
+    monkeypatch.setattr(extraction_worker, "available_memory_bytes", lambda: 8 * 1024**3)
+    assert extraction_worker.extraction_memory_ceiling(512, 600 * 1024**2) == 1112 * 1024**2
 
 
 @pytest.mark.asyncio

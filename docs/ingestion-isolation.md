@@ -41,18 +41,21 @@ failure handler instead of being swallowed by OCR or layout fallbacks.
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `EXTRACTION_TIMEOUT_SECONDS` | `1200` | Maximum runtime of one extractor, including OCR/vision |
-| `EXTRACTION_MEMORY_MB` | `4096` | Linux per-process address-space ceiling |
+| `EXTRACTION_MEMORY_MB` | `4096` | Maximum memory growth allowed during extraction |
 | `EXTRACTION_MAX_RESULT_MB` | `32` | Maximum JSON result accepted by the API |
 | `EXTRACTION_WORK_DIR` | `data/extraction` | Private temporary input/result directories |
 
-On Linux, the memory ceiling is also capped at half of the available system or
-container memory, leaving room for the API. Sauron checks both the cgroup limit
-and `/proc/meminfo`; the latter covers Docker running inside a memory-limited
-LXC where the inner cgroup can appear unbounded. Address space includes mapped
-models and libraries, so this is stricter than resident RAM. If an OCR model
-cannot fit, the upload fails; adjust the container and extraction budgets together.
-The hard memory ceiling is Linux-specific; macOS development still gets crash
-isolation and timeouts, but does not enforce this ceiling.
+On Linux, the supervisor watches total memory charged to the container while
+the worker runs. It honors the configured growth limit and also reserves one
+quarter of available memory (at least 512 MiB) for the API. Sauron checks both
+the cgroup limit and `/proc/meminfo`; the latter covers Docker running inside a
+memory-limited LXC where the inner cgroup can appear unbounded. The supervisor
+kills the worker process group before it consumes that reserve. This uses
+resident container memory rather than an address-space limit because parser
+libraries can map several gigabytes of virtual files while using much less RAM.
+If an OCR model cannot fit, the upload fails; adjust the container and extraction
+budgets together. Systems without cgroup usage metrics still get crash isolation
+and timeouts, but cannot enforce the aggregate memory ceiling.
 
 This is process isolation within a shared container. It does not guarantee
 survival of host-wide or container-wide OOM, or protect the API from failures
