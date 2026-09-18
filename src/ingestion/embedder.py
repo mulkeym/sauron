@@ -100,15 +100,21 @@ def _get_local_model():
     return model
 
 
-def _embed_via_local(texts: list[str], batch_size: int = 0) -> list[list[float]]:
-    """Embed using local sentence-transformers model on CPU."""
+def _embed_via_local_direct(texts: list[str], batch_size: int = 0):
+    """Embed in the dedicated child process using sentence-transformers."""
     import numpy as np
     if batch_size == 0:
         batch_size = settings.embedding_batch_size
 
     model = _get_local_model()
     embeddings: np.ndarray = model.encode(texts, batch_size=batch_size, show_progress_bar=False)
-    return embeddings.tolist()
+    return embeddings
+
+
+def _embed_via_local(texts: list[str], batch_size: int = 0) -> list[list[float]]:
+    """Keep PyTorch and the local model out of the API process."""
+    from src.ingestion.embedding_isolation import embed_local_in_worker
+    return embed_local_in_worker(texts, batch_size or settings.embedding_batch_size)
 
 
 def _get_max_embed_chars() -> int:

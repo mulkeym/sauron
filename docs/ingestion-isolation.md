@@ -17,6 +17,12 @@ already-initialized API. This avoids copying LanceDB and other native runtime
 state during child startup, which can otherwise exhaust a tight container or
 LXC memory budget before the worker's own limits take effect.
 
+Local sentence-transformer embeddings use the same process boundary. PyTorch
+and the embedding model load only in a disposable worker, with batches capped
+at four texts (and smaller batches for larger chunk tiers). The API retains
+LanceDB writes and receives only the resulting vectors. A native failure or
+memory spike therefore fails the active operation without killing `uvicorn`.
+
 A native crash, killed process, oversized result or timeout fails that file.
 Queued ingestion records the error, cleans up partial writes and continues to
 the next job. The synchronous API returns HTTP 422 for extraction failure.

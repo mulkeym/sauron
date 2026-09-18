@@ -211,6 +211,10 @@ class VectorStore:
         return chunks
 
     def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:
+        # Avoid a second local-model load when creating the first table. The
+        # isolated embedding result already provides the exact dimension.
+        if vectors and settings.embedding_dimension <= 0:
+            settings.embedding_dimension = len(vectors[0])
         records = []
         schema_names = set(self.table.schema.names)
         for text, vector, meta in zip(texts, vectors, metadatas):

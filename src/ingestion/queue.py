@@ -306,7 +306,7 @@ class IngestQueue:
         chunks = []  # ensure defined even if all sheets de-dup to zero text chunks
 
         # Smaller batch sizes for larger tiers to prevent OOM kills
-        TIER_BATCH_SIZES = {"small": 64, "medium": 32, "large": 16, "xlarge": 8}
+        TIER_BATCH_SIZES = {"small": 4, "medium": 4, "large": 2, "xlarge": 1}
 
         # Structured handling for spreadsheets: clean sheets -> DuckDB + schema +
         # row narratives; messy sheets -> deterministic region narratives. Returns
