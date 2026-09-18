@@ -37,7 +37,7 @@ Sauron will reject the call if they are missing.
 | `X-Sauron-Username` | **Yes** (unless using a Sauron Bearer JWT) | `{{USER_EMAIL}}` | Who is asking |
 | `X-Sauron-User-Groups` | Yes, for document ACL | `{{USER_GROUPS}}` | Which Sauron ACL groups apply |
 | `Authorization` | **Do not set** in OpenWebUI | Leave Authentication as **None** | Reserved for Sauron JWTs on scripts |
-| `X-OpenWebUI-User-Jwt` | No | OpenWebUI may add this on its own | Ignored by Sauron for now |
+| `X-OpenWebUI-User-Jwt` | No | Leave unset for username/group mode | If supplied, must validate against Sauron’s configured shared secret |
 | `X-OpenWebUI-Chat-Id` or `X-Session-Id` | No | `{{CHAT_ID}}` if the UI offers it | Groups Switchyard LLM calls |
 
 OpenWebUI expands `{{USER_EMAIL}}`, `{{USER_GROUPS}}`, and `{{CHAT_ID}}`
@@ -67,10 +67,9 @@ Tools run as alice@corp with ACL groups finance + executives
 
 ### What you configure once in OpenWebUI
 
-**Container env** (so templates expand):
+**OpenWebUI container env** (keep its own session secret persistent):
 
 ```bash
-ENABLE_FORWARD_USER_INFO_HEADERS=true
 WEBUI_SECRET_KEY=<persistent-openwebui-secret>
 ```
 
@@ -102,8 +101,10 @@ call tools but sees no protected documents.
 `{{USER_EMAIL}}` and `{{USER_GROUPS}}` are filled by OpenWebUI on each
 request from the signed-in user. No per-user token minting.
 
-OpenWebUI may also send `X-OpenWebUI-User-Jwt`. Sauron **ignores** it for
-now (paused until an IdP). Identity is the two `X-Sauron-*` headers.
+No shared JWT secret is required for username/group mode. Leave
+`FORWARD_USER_INFO_HEADER_JWT_SECRET` unset and Authentication **None**.
+If `X-OpenWebUI-User-Jwt` or `Authorization` is supplied, Sauron validates
+that credential; invalid or expired tokens never fall back to unsigned headers.
 
 ### What Sauron does with that request
 
@@ -137,6 +138,7 @@ DB-backed application key created in **Settings -> Security**, or use
 MCP_ENABLED=true
 MCP_PATH=/mcp
 MCP_STATELESS_HTTP=true
+MCP_OPENWEBUI_TRUST_HEADERS=true
 # Bootstrap alternative to a DB-backed application key:
 API_KEYS=<dedicated-sauron-application-key>
 MCP_OPENWEBUI_USERNAME_HEADER=X-Sauron-Username
@@ -145,8 +147,15 @@ MCP_OPENWEBUI_ALLOW_ALL_GROUP=false
 ```
 
 In Kubernetes, put `API_KEYS` in a Secret, not a ConfigMap or Helm values
-file committed to source control. `MCP_OPENWEBUI_JWT_SECRET` is unused while
-OpenWebUI JWT verification is paused.
+file committed to source control. No JWT secret is needed for header mode.
+
+All identity settings are also available under **Settings → All Settings**.
+Saved admin settings override environment values, including a previously saved
+`MCP_OPENWEBUI_TRUST_HEADERS=false`; enable **Trust OpenWebUI user headers**
+there when migrating an existing installation. New installs enable this mode
+by default. The default header is `X-Sauron-Username`; the previous
+`X-OpenWebUI-User-Name` is accepted as a fallback when the default header is
+absent. An explicitly configured custom header stays authoritative.
 
 The same Sauron application-key management used by the REST API applies here.
 A DB-backed, dedicated OpenWebUI application key is preferred because it can be
@@ -160,15 +169,15 @@ ASGI application is mounted during process startup.
 Set these environment variables on OpenWebUI:
 
 ```bash
-ENABLE_FORWARD_USER_INFO_HEADERS=true
 WEBUI_SECRET_KEY=<persistent-openwebui-secret>
 ```
 
-`ENABLE_FORWARD_USER_INFO_HEADERS` is required so OpenWebUI expands
-`{{USER_EMAIL}}` and `{{USER_GROUPS}}` on the Sauron connection. The signed
-`X-OpenWebUI-User-Jwt` path is paused; `FORWARD_USER_INFO_HEADER_JWT_SECRET` is
-optional until an IdP is added. Keep `WEBUI_SECRET_KEY` persistent across
-restarts.
+The custom username/group templates do not require shared JWT forwarding.
+Keep `WEBUI_SECRET_KEY` persistent across restarts. For optional signed identity
+forwarding, set `ENABLE_FORWARD_USER_INFO_HEADERS=true` and
+`FORWARD_USER_INFO_HEADER_JWT_SECRET` on OpenWebUI, and set the matching
+`MCP_OPENWEBUI_JWT_SECRET` in Sauron. The setup helper's default is
+`--identity-mode headers`; use `--identity-mode signed` only for that alternative.
 
 ### Start the OpenWebUI Docker container
 
@@ -178,8 +187,7 @@ script uses the `open-webui` Docker volume to keep the OpenWebUI database.
 1. Create `.openwebui.env` in the repository root:
 
    ```dotenv
-   ENABLE_FORWARD_USER_INFO_HEADERS=true
-   WEBUI_SECRET_KEY=<persistent-openwebui-secret>
+      WEBUI_SECRET_KEY=<persistent-openwebui-secret>
    ```
 
 2. Restrict access to the file:
@@ -317,8 +325,8 @@ Expected outcomes:
   type is **MCP (Streamable HTTP)**, and the URL ends in `/mcp`.
 - **401 from Sauron:** send `X-Sauron-Username` (and usually
   `X-Sauron-User-Groups`) after a valid API key, or a Sauron Bearer JWT.
-  Enable `ENABLE_FORWARD_USER_INFO_HEADERS` so OpenWebUI expands
-  `{{USER_EMAIL}}` / `{{USER_GROUPS}}`.
+  Check **Trust OpenWebUI user headers** in Sauron's admin settings, and verify
+  the custom `{{USER_EMAIL}}` / `{{USER_GROUPS}}` templates expand for the user.
 - **403 from Sauron:** verify the dedicated application key is active and is
   sent as `X-API-Key` rather than as a bearer token.
 - **Tools appear but return no documents:** ensure `{{USER_GROUPS}}` is present

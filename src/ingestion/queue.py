@@ -1,6 +1,4 @@
 from __future__ import annotations
-# src/ingestion/queue.py
-from __future__ import annotations
 """Ingestion job queue with step-level status tracking."""
 import asyncio
 import logging
@@ -60,6 +58,7 @@ class IngestQueue:
         self._jobs: dict[str, IngestJob] = {}
         self._queue: asyncio.Queue | None = None
         self._worker_running = False
+        self._workers: list[asyncio.Task] = []
         # KG extraction runs without locks — counts are approximate when parallel
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
@@ -134,7 +133,15 @@ class IngestQueue:
         from src.config import settings
         self.max_parallel = settings.max_parallel_ingestion
         for i in range(self.max_parallel):
-            asyncio.create_task(self._worker_loop(vector_store, metadata_store))
+            self._workers.append(asyncio.create_task(self._worker_loop(vector_store, metadata_store)))
+
+    async def stop_worker(self):
+        """Cancel indexing tasks and reap any active extraction subprocess."""
+        for task in self._workers:
+            task.cancel()
+        await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
+        self._worker_running = False
 
     async def _worker_loop(self, vector_store, metadata_store):
         import traceback
@@ -142,9 +149,14 @@ class IngestQueue:
             job_id = await self._queue.get()
             job = self._jobs.get(job_id)
             if not job:
+                self._queue.task_done()
                 continue
             try:
                 await self._process_job(job, vector_store, metadata_store)
+            except asyncio.CancelledError:
+                self.fail_job(job_id, "Ingestion interrupted by application shutdown")
+                await self._cleanup_failed_job(job, vector_store, metadata_store)
+                raise
             except Exception as e:
                 error_msg = f"{str(e)}\n{traceback.format_exc()}"
                 logger.error(f"Ingestion failed for {job.filename} at step {job.step}: {error_msg}")
@@ -155,14 +167,14 @@ class IngestQueue:
                 # no owning document. Deleting by this job's doc_id is bounded
                 # to exactly this job (a no-op if nothing was written yet).
                 await self._cleanup_failed_job(job, vector_store, metadata_store)
-                # Write to file for debugging
-                with open('/tmp/ingest_errors.log', 'a') as f:
-                    f.write(f"\n{'='*60}\n")
-                    f.write(f"Job: {job.filename}\n")
-                    f.write(f"Step: {job.step}\n")
-                    f.write(f"Progress: {job.progress}\n")
-                    f.write(f"Error:\n{error_msg}\n")
-            self._queue.task_done()
+            finally:
+                self._queue.task_done()
+                # Worker failures must not leak uploaded source files.
+                if job.step in (IngestStep.COMPLETE, IngestStep.FAILED):
+                    try:
+                        Path(job.file_path).unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning("Could not remove upload %s: %s", job.filename, exc)
 
     async def _cleanup_failed_job(self, job: IngestJob, vector_store, metadata_store):
         """Remove any partial writes left by a failed job, keyed on its doc_id.
@@ -190,23 +202,24 @@ class IngestQueue:
 
     async def _process_job(self, job: IngestJob, vector_store, metadata_store):
         import asyncio
-        from src.ingestion.parser import parse_document
+        from src.ingestion.isolation import extract_in_worker
+        from src.ingestion.prepared_index import index_prepared
         from src.ingestion.chunker import chunk_text
         from src.ingestion.embedder import embed_texts
-        from src.ingestion.tabular_ingest import ingest_structured_sheets, ingest_grids, SPREADSHEET_DOC_TYPES
-        from src.ingestion.tabular_chunker import sheets_needing_text, build_tier_chunks
-        from src.ingestion.pdf_extract import extract_pdf
+        from src.ingestion.tabular_ingest import SPREADSHEET_DOC_TYPES
+        from src.ingestion.tabular_chunker import build_tier_chunks
         from src.knowledge.categorizer import categorize_document
         from src.retrieval.models import ChunkMetadata
 
         doc_id = str(uuid.uuid4())
-        job.doc_id = doc_id  # record early so a failed job's partial writes can be cleaned up
         file_path = Path(job.file_path)
 
         # Duplicate check: hash file content before doing any work
         import hashlib
-        content_bytes = file_path.read_bytes()
-        content_hash = hashlib.sha256(content_bytes).hexdigest()
+        def hash_file():
+            with file_path.open("rb") as stream:
+                return hashlib.file_digest(stream, "sha256").hexdigest()
+        content_hash = await asyncio.to_thread(hash_file)
 
         # Check by content hash
         existing = await metadata_store.find_by_content_hash(content_hash)
@@ -229,10 +242,13 @@ class IngestQueue:
                 pass
             return
 
-        # Step 1: Parse (fast, ok on event loop)
+        # Step 1: All file parsing runs outside the API process.
         self.update_step(job.job_id, IngestStep.PARSING, f"Parsing {job.filename}")
-        parsed = await asyncio.to_thread(parse_document, file_path)
-        parsed.filename = job.filename
+        prepared = await extract_in_worker(
+            file_path, job.filename,
+            progress_cb=lambda message: self.update_step(job.job_id, IngestStep.PARSING, message),
+        )
+        parsed = prepared.parsed
 
         # Step 2: Categorize (LLM call — run in thread)
         category = job.category
@@ -300,86 +316,14 @@ class IngestQueue:
         is_pdf = _is_structured_pdf(parsed.doc_type)
         is_docx = parsed.doc_type == "docx"
         is_pptx = parsed.doc_type == "pptx"
-        text_sheets = None
-        enriched_prose = None  # PDF/DOCX/PPTX figure-enriched text for chunk + KG
-        figure_records = []
-        from src.config import settings as _settings
-
-        def _fig_progress(msg: str):
-            self.update_step(job.job_id, IngestStep.STORING, msg)
-
-        if is_spreadsheet:
-            self.update_step(job.job_id, IngestStep.STORING, "Structured spreadsheet ingest (DuckDB + narratives)")
-            grids, classifications, ingested = await ingest_structured_sheets(
-                file_path, doc_id, parsed.filename, parsed.doc_type,
-                job.acl_groups, category, vector_store, metadata_store,
-                dataset_id=job.dataset_id,
-            )
-            text_sheets = sheets_needing_text(grids, classifications, ingested)
-            # Embedded chart/screenshot images in .xlsx → figure strategies + optional grids
-            if _settings.figure_extraction_enabled and Path(file_path).suffix.lower() in (".xlsx", ".xlsm"):
-                try:
-                    from src.ingestion.figure_extract import enrich_office_document_with_figures_async
-                    self.update_step(job.job_id, IngestStep.STORING, "Extracting figures from spreadsheet…")
-                    office_figures = await enrich_office_document_with_figures_async(
-                        Path(file_path), "", progress_cb=_fig_progress,
-                    )
-                    if office_figures.table_grids:
-                        await ingest_grids(
-                            office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
-                            job.acl_groups, category, vector_store, metadata_store,
-                            dataset_id=job.dataset_id,
-                        )
-                    figure_records = office_figures.figures
-                    if office_figures.enriched_text.strip():
-                        # Attach figure prose as extra narrative tier via enriched path
-                        enriched_prose = (
-                            (parsed.text or "") + "\n\n## Embedded figures\n\n"
-                            + office_figures.enriched_text
-                        ).strip()
-                except Exception as fig_err:
-                    logger.warning(f"Spreadsheet figure extract failed: {fig_err}")
-        elif is_pdf:
-            self.update_step(job.job_id, IngestStep.STORING, "Structured PDF ingest (tables -> DuckDB + narratives)")
-            try:
-                extracted = await asyncio.to_thread(extract_pdf, Path(file_path))
-                if _settings.figure_extraction_enabled:
-                    from src.ingestion.figure_extract import enrich_pdf_with_figures_async
-                    self.update_step(job.job_id, IngestStep.STORING, "Extracting figures (OCR + vision)…")
-                    extracted = await enrich_pdf_with_figures_async(
-                        Path(file_path), extracted, progress_cb=_fig_progress,
-                    )
-                await ingest_grids(
-                    extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
-                    job.acl_groups, category, vector_store, metadata_store,
-                    dataset_id=job.dataset_id,
-                )
-                enriched_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
-                figure_records = extracted.figure_records
-            except Exception as e:
-                logger.warning(f"PDF structured extract failed for {parsed.filename}, "
-                               f"falling back to flat text: {e}")
-                is_pdf = False
-        elif (is_docx or is_pptx) and _settings.figure_extraction_enabled:
-            try:
-                from src.ingestion.figure_extract import enrich_office_document_with_figures_async
-                office_name = "PowerPoint" if is_pptx else "Word document"
-                self.update_step(job.job_id, IngestStep.STORING, f"Extracting figures from {office_name}…")
-                office_figures = await enrich_office_document_with_figures_async(
-                    Path(file_path), parsed.text or "", document_blocks=parsed.blocks,
-                    progress_cb=_fig_progress,
-                )
-                enriched_prose = office_figures.enriched_text
-                figure_records = office_figures.figures
-                if office_figures.table_grids:
-                    await ingest_grids(
-                        office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
-                        job.acl_groups, category, vector_store, metadata_store,
-                        dataset_id=job.dataset_id,
-                    )
-            except Exception as e:
-                logger.warning(f"Office figure extract failed for {parsed.filename}: {e}")
-                enriched_prose = parsed.text
+        # No artifact writes occur before this point. A parser failure must
+        # not initialize vector/embedding storage just to delete nonexistent data.
+        job.doc_id = doc_id
+        self.update_step(job.job_id, IngestStep.STORING, "Indexing extracted tables and figures")
+        text_sheets, enriched_prose, figure_records = await index_prepared(
+            prepared, doc_id, job.acl_groups, category, vector_store, metadata_store,
+            dataset_id=job.dataset_id,
+        )
 
         # Re-summarize when figures substantially grew the text
         if enriched_prose and len(enriched_prose) > len(parsed.text or "") + 200:

@@ -1,0 +1,41 @@
+{% extends "settings_base.html" %}
+{% block title %}All Settings - Settings{% endblock %}
+{% block settings_content %}
+<h1>All Settings</h1>
+<p class="section-desc">Every application configuration field is available here. Saved values persist in the data volume. Fields marked “restart required” take effect after Sauron restarts. Changing embedding models also requires rebuilding the document index.</p>
+<form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+  <input type="hidden" name="keep_blank_secrets" value="true">
+  {% for group, fields in catalog.items() %}
+  <details class="settings-section" {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ group }}</strong> ({{ fields|length }})</summary>
+    {% for f in fields %}
+    <div class="form-group" style="margin-top:1rem;">
+      <label for="{{ f.name }}">{{ f.label }}{% if f.restart %} — restart required{% endif %}{% if f.pending %} — change pending{% endif %}</label>
+      {% if f.choices %}
+      <select id="{{ f.name }}" name="{{ f.name }}" {% if f.description %}aria-describedby="{{ f.name }}_help"{% endif %}>
+        {% for choice in f.choices %}<option value="{{ choice }}" {{ 'selected' if f.value == choice }}>{{ choice }}</option>{% endfor %}
+      </select>
+      {% elif f.kind == 'boolean' %}
+      <select id="{{ f.name }}" name="{{ f.name }}" {% if f.description %}aria-describedby="{{ f.name }}_help"{% endif %}>
+        <option value="true" {{ 'selected' if f.value }}>Enabled</option>
+        <option value="false" {{ 'selected' if not f.value }}>Disabled</option>
+      </select>
+      {% elif f.secret %}
+      <input type="password" id="{{ f.name }}" name="{{ f.name }}" value="" autocomplete="new-password" placeholder="{{ 'Configured — leave blank to keep' if f.configured else 'Not configured' }}">
+      {% if f.name not in ['admin_password', 'jwt_secret_key', 'database_url'] %}
+      <label for="clear_{{ f.name }}" style="display:inline-flex;align-items:center;gap:0.5rem;"><input type="checkbox" id="clear_{{ f.name }}" name="clear_{{ f.name }}" value="true" style="width:auto;margin:0;"> Clear saved value</label>
+      {% endif %}
+      {% elif f.name == 'answer_domain_instructions' %}
+      <textarea id="{{ f.name }}" name="{{ f.name }}" rows="6" maxlength="20000" style="width:100%;">{{ f.value }}</textarea>
+      {% else %}
+      <input id="{{ f.name }}" name="{{ f.name }}" type="{{ f.kind }}" value="{{ f.value }}" {% if f.description %}aria-describedby="{{ f.name }}_help"{% endif %} {% if f.kind == 'number' %}step="{{ f.step }}"{% endif %} {% if f.minimum is not none %}min="{{ f.minimum }}"{% endif %} {% if f.maximum is not none %}max="{{ f.maximum }}"{% endif %}>
+      {% endif %}
+      {% if f.description %}<p id="{{ f.name }}_help" class="section-desc">{{ f.description }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </details>
+  {% endfor %}
+  <button type="submit">Save all settings</button>
+  <span id="save-status" role="status" aria-live="polite"></span>
+</form>
+{% endblock %}

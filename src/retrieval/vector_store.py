@@ -157,9 +157,11 @@ class VectorStore:
                 logger.debug(f"Index on '{field}': {e}")
 
     def _build_acl_filter(self, user_groups: list[str]) -> str | None:
+        if not user_groups:
+            return "1 = 0"
         if "ALL" in user_groups:
             return None
-        quoted = ", ".join(f"'{g}'" for g in user_groups)
+        quoted = ", ".join("'" + g.replace("'", "''") + "'" for g in user_groups)
         return f"array_has_any(acl_groups, make_array({quoted}))"
 
     def _build_filter(self, user_groups: list[str], tier: str | None = None, doc_ids: list[str] | None = None) -> str | None:
@@ -169,9 +171,11 @@ class VectorStore:
         if acl:
             parts.append(acl)
         if tier:
-            parts.append(f"chunk_size_tier = '{tier}'")
-        if doc_ids:
-            quoted = ", ".join(f"'{d}'" for d in doc_ids)
+            parts.append("chunk_size_tier = '" + tier.replace("'", "''") + "'")
+        if doc_ids == []:
+            parts.append("1 = 0")
+        elif doc_ids is not None:
+            quoted = ", ".join("'" + d.replace("'", "''") + "'" for d in doc_ids)
             parts.append(f"doc_id IN ({quoted})")
         return " AND ".join(parts) if parts else None
 
@@ -307,7 +311,7 @@ class VectorStore:
     def get_chunks_by_doc(self, doc_id: str, limit: int = 200, tier: str | None = None) -> list[RetrievedChunk]:
         """Retrieve chunks for a document, optionally filtered by tier."""
         try:
-            where = f"doc_id = '{doc_id}'"
+            where = "doc_id = '" + doc_id.replace("'", "''") + "'"
             if tier:
                 where += f" AND chunk_size_tier = '{tier}'"
             results = self.table.search().where(where).limit(limit).to_list()
@@ -317,6 +321,13 @@ class VectorStore:
         except Exception as e:
             logger.warning(f"get_chunks_by_doc failed: {e}")
             return []
+
+    def read_document_page(self, doc_id: str, user_groups: list[str], *, offset=0, limit=100):
+        """Read indexed passages directly, with explicit pagination and no embedding."""
+        where = self._build_filter(user_groups, doc_ids=[doc_id])
+        where += " AND chunk_size_tier IN ('medium', 'table_row')"
+        rows = self.table.search().where(where).offset(offset).limit(limit + 1).to_list()
+        return self._results_to_chunks(rows[:limit]), len(rows) > limit
 
     def expand_window(self, chunks: list[RetrievedChunk], window: int = 3) -> list[RetrievedChunk]:
         """Pull neighboring chunks from the same document and tier."""

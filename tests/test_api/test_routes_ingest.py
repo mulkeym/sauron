@@ -34,6 +34,16 @@ def test_ingest_requires_auth(client):
     resp = client.post("/api/v1/ingest", files={"file": ("test.pdf", b"content", "application/pdf")})
     assert resp.status_code in (401, 403)
 
+
+def test_ingest_returns_file_error_when_extractor_crashes(client, auth_headers):
+    from src.ingestion.isolation import ExtractionWorkerError
+    with patch("src.ingestion.pipeline.extract_in_worker", new_callable=AsyncMock,
+               side_effect=ExtractionWorkerError("Extraction worker stopped (SIGSEGV)")):
+        response = client.post("/api/v1/ingest",
+            files={"file": ("bad.pdf", b"bad PDF", "application/pdf")}, headers=auth_headers)
+    assert response.status_code == 422
+    assert "SIGSEGV" in response.json()["detail"]
+
 def test_list_documents(client, auth_headers):
     mock_doc = MagicMock()
     mock_doc.doc_id = "d1"

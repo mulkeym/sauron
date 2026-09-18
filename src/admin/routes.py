@@ -6,14 +6,25 @@ import secrets
 import tempfile
 from pathlib import Path
 from typing import List
-from fastapi import APIRouter, Request, Form, UploadFile, File, HTTPException
+from fastapi import APIRouter, Request, Form, UploadFile, File, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from src.api.routes_ingest import get_metadata_store, get_vector_store, get_schema_registry
 from src.config import settings
 from src.ingestion.queue import ingest_queue
+from src.ingestion.uploads import save_upload
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+async def _require_admin_api(request: Request):
+    if request.url.path.startswith("/admin/api/"):
+        if not _is_authenticated(request):
+            raise HTTPException(status_code=401, detail="Admin login required")
+        from src.auth.http import _same_origin
+        origin = request.headers.get("origin")
+        if origin and not _same_origin(origin, str(request.url)):
+            raise HTTPException(status_code=403, detail="Admin requests must use the same origin")
+
+
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(_require_admin_api)])
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
@@ -38,6 +49,31 @@ def _require_login(request: Request):
     if not _is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
     return None
+
+
+def _citation_html(c, ordinal):
+    from html import escape
+    from urllib.parse import urlsplit
+    label = escape(c.get("evidence_id") or str(ordinal))
+    filename = escape(c.get("filename", ""))
+    url = c.get("source_url", "")
+    name = f"[{label}] {filename}"
+    try:
+        safe_url = urlsplit(url).scheme in {"https", "http"}
+    except ValueError:
+        safe_url = False
+    if safe_url:
+        name = f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{name}</a>'
+    locations = []
+    for field, prefix in (("page", "page "), ("slide", "slide "), ("figure_id", "figure "), ("section_title", "")):
+        if c.get(field) is not None:
+            locations.append(escape(prefix + str(c[field])))
+    if c.get("source_kind") == "derived":
+        locations.append("Derived evidence")
+    location = " &mdash; ".join(locations)
+    snippet = escape(c.get("snippet", ""))
+    return (f'<div class="citation-card"><span class="filename">{name}</span> {location}'
+            f'<details><summary>View supporting passage</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">{snippet}</pre></details></div>')
 
 
 def _format_structured_lookup(trace: dict) -> str:
@@ -817,7 +853,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
     # Look up doc_ids for the selected dataset, filtered by user's ACL groups
     allowed_doc_ids = None
     if app_id:
-        docs = await store.list_documents(user_groups)
+        docs = await store.list_documents(None if "ALL" in user_groups else user_groups)
         allowed_doc_ids = [d.doc_id for d in docs if d.dataset_id == app_id]
 
     _playground_jobs[query_id] = {"step": "classify", "result_html": "", "error": "", "step_detail": "", "completed_steps": [], "active_substep": ""}
@@ -900,10 +936,12 @@ async def playground_start(request: Request, question: str = Form(""), play_user
 
             # Check query cache first (unless skip_cache is set) — shared decision
             # (same embed -> lookup -> judge path the public query API uses).
+            from src.agent.profiles import active_snapshot
+            answer_profile = active_snapshot()
             _skip_cache = skip_cache == "true"
             _playground_jobs[query_id]["step"] = "cache_check"
             from src.retrieval.query_cache import judged_cache_lookup, cache_store
-            _decision = await judged_cache_lookup(question, user_groups, skip_cache=_skip_cache)
+            _decision = await judged_cache_lookup(question, user_groups, skip_cache=_skip_cache, metadata_store=store, dataset_id=app_id, allowed_doc_ids=allowed_doc_ids, mode=mode, answer_profile=answer_profile)
             query_vector = _decision.query_vector
             cached = _decision.cached
             cache_time = _decision.cache_time
@@ -930,13 +968,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 judge_reason = html_mod.escape(judgment.get("reason", ""))
 
                 citations = cached.get("citations", [])
-                citations_html = ""
-                for i, c in enumerate(citations, 1):
-                    page = f' &mdash; page {c.get("page", "")}' if c.get("page") else ''
-                    figure = f' &mdash; figure {c.get("figure_id")}' if c.get("figure_id") else ''
-                    slide = f' &mdash; slide {c.get("slide")}' if c.get("slide") else ''
-                    section = f' &mdash; {c.get("section_title")}' if c.get("section_title") else ''
-                    citations_html += f'<div class="citation-card"><span class="filename">[{i}] {c.get("filename", "")}</span>{page}{slide}{figure}{section}<span class="score"> &mdash; relevance: {c.get("relevance", 0):.2f}</span><div class="snippet">{c.get("snippet", "")[:300]}</div></div>'
+                citations_html = "".join(_citation_html(c, i) for i, c in enumerate(citations, 1))
 
                 result_html = f"""<div class="trace-panel">
                 <div class="trace-header">
@@ -1018,7 +1050,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 </div>
                 <div class="result-card">
                     <div class="result-meta">Groups: {', '.join(user_groups)} | Source: LightRAG</div>
-                    <div class="result-answer">{answer}</div>
+                    <div class="result-answer">{html_mod.escape(answer)}</div>
                 </div>"""
                 _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
                 return
@@ -1047,8 +1079,9 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 retrieved_chunks=[], sql_results=[], retrieval_attempts=0,
                 needs_reretrieval=False, answer="", citations=[], warnings=[],
                 skip_graph=(mode == "vector_only"),
+                answer_profile=answer_profile,
                 dataset_id=app_id or 0,
-                **({"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids else {}),
+                **({"allowed_doc_ids": allowed_doc_ids} if allowed_doc_ids is not None else {}),
             )
             # Live classify sub-step reporter -> records onto the job dict, which
             # the status poll returns whole, so the UI can show what classify is doing.
@@ -1122,46 +1155,21 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                         _playground_jobs[query_id]["step_detail"] = _format_live_step(node_name, node_output, final_state)
 
                     step_start = now
-                    final_state.update(node_output if isinstance(node_output, dict) else {})
+                    if isinstance(node_output, dict):
+                        from src.agent.state import _merge_chunks
+                        merged = _merge_chunks(final_state.get("retrieved_chunks", []), node_output.get("retrieved_chunks", []))
+                        final_state.update(node_output)
+                        final_state["retrieved_chunks"] = merged
 
 
-            # Answer is produced by streaming (graph was built without synthesize).
-            has_context = bool(final_state.get("retrieved_chunks")) or bool(final_state.get("sql_results"))
-            answer = "I could not find any relevant information in the documents you have access to."
+            # Use the same synthesis and structured clarification contract as the
+            # API and profile preview. Do not stream the model's JSON envelope.
+            from src.agent.synthesizer import synthesize_answer
+            _playground_jobs[query_id]["step"] = "synthesize"
             synth_start = time.time()
-            if has_context:
-                from src.agent.synthesizer import build_synthesis_context
-                _playground_jobs[query_id]["stream_context"] = {
-                    "context": build_synthesis_context(final_state),
-                    "question": question,
-                }
-                _playground_jobs[query_id]["stream_ready"] = True
-                _playground_jobs[query_id]["step"] = "streaming"
-
-                # The SSE endpoint (opened by the frontend) streams the answer and
-                # stores it back as streamed_answer. Wait for it; fall back to a
-                # non-streamed generate so a closed tab can never hang the job.
-                for _ in range(1500):  # ~5 min at 0.2s
-                    if _playground_jobs[query_id].get("streamed_answer") is not None:
-                        break
-                    await asyncio.sleep(0.2)
-                streamed = _playground_jobs[query_id].get("streamed_answer")
-                if streamed is not None:
-                    answer = streamed
-                else:
-                    from src.agent.synthesizer import (
-                        SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts)
-                    from src.generation.llm_client import generate as _gen
-                    from src.config import settings as _cfg
-                    ctx = _playground_jobs[query_id]["stream_context"]["context"]
-                    answer = _strip_reasoning_artifacts(_gen(
-                        system_prompt=SYSTEM_PROMPT,
-                        user_prompt=USER_PROMPT_TEMPLATE.format(context=ctx, question=question),
-                        max_tokens=_cfg.llm_max_output_tokens))
-
-            # Synthesize wasn't a graph node; build citations + a trace step here.
-            from src.agent.synthesizer import build_citations
-            final_state["citations"] = build_citations(final_state) if has_context else []
+            checked = await asyncio.to_thread(synthesize_answer, final_state)
+            final_state.update(checked)
+            answer = checked["answer"]
             synth_elapsed = round(time.time() - synth_start, 2)
             steps_data.append({"step": "synthesize", "time": synth_elapsed,
                                "output": {"answer": answer, "citations": final_state["citations"]}})
@@ -1277,22 +1285,13 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             # `chunks` here (as this handler used to) dropped those SQL citations.
             citations = final_state.get("citations", [])
 
-            citations_html = ""
-            for i, c in enumerate(citations, 1):
-                page = f' &mdash; page {c.page}' if c.page else ''
-                figure = f' &mdash; figure {c.figure_id}' if c.figure_id else ''
-                slide = f' &mdash; slide {c.slide}' if c.slide else ''
-                section = f' &mdash; {c.section_title}' if c.section_title else ''
-                if c.source_url:
-                    name_display = f'<a href="{c.source_url}" target="_blank" style="color:#3b82f6;">[{i}] {c.filename}</a>'
-                else:
-                    name_display = f'[{i}] {c.filename}'
-                citations_html += f'<div class="citation-card"><span class="filename">{name_display}</span>{page}{slide}{figure}{section}<span class="score"> &mdash; relevance: {c.relevance:.2f}</span><div class="snippet">{c.snippet[:300]}</div></div>'
+            citations_html = "".join(_citation_html(c.model_dump(), i) for i, c in enumerate(citations, 1))
 
-            result_html = f"""{trace_html}
+            evidence_warnings = "".join(f'<p class="status-err">{html_mod.escape(w)}</p>' for w in final_state.get("warnings", []))
+            result_html = f"""{trace_html}{evidence_warnings}
             <div class="result-card">
                 <div class="result-meta">Groups: {', '.join(user_groups)}</div>
-                <div class="result-answer">{answer}</div>
+                <div class="result-answer">{html_mod.escape(answer)}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
             </div>"""
@@ -1302,20 +1301,13 @@ async def playground_start(request: Request, question: str = Form(""), play_user
 
             # Cache the result for future queries
             try:
-                citation_dicts = [
-                    {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
-                     "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
-                     "relevance": c.relevance, "figure_id": c.figure_id,
-                     "section_title": c.section_title, "caption": c.caption,
-                     "slide": c.slide}
-                    for c in citations
-                ]
+                citation_dicts = [c.model_dump() for c in citations]
                 source_ids = list({c.doc_id for c in citations})
-                if query_vector is not None:  # skip store when embed failed (fail-open)
+                if query_vector is not None and not final_state.get("warnings"):
                     cache_store(
                         query_text=question, query_vector=query_vector,
                         answer=answer, citations=citation_dicts,
-                        user_groups=user_groups, source_doc_ids=source_ids,
+                        user_groups=user_groups, source_doc_ids=source_ids, scope_revision=_decision.scope_revision,
                     )
             except Exception:
                 pass
@@ -1474,13 +1466,13 @@ async def playground_stream(query_id: str):
             return
 
         from src.generation.llm_client import generate_stream
-        from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts
+        from src.agent.synthesizer import get_system_prompt, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts
         from src.config import settings as _cfg
 
         try:
             full_text = ""
             for token in generate_stream(
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=get_system_prompt(),
                 user_prompt=USER_PROMPT_TEMPLATE.format(
                     context=context_data["context"],
                     question=context_data["question"],
@@ -1493,7 +1485,8 @@ async def playground_stream(query_id: str):
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
             # Send cleaned final answer
-            cleaned = _strip_reasoning_artifacts(full_text)
+            from src.agent.synthesizer import finalize_answer
+            cleaned = finalize_answer({}, full_text, context_data["evidence_pack"])["answer"]
             yield f"data: {json.dumps({'done': True, 'answer': cleaned})}\n\n"
 
             # Store the final answer back in the job for citations
@@ -1607,14 +1600,10 @@ async def bulk_upload(
 
     job_ids = []
     for file in files:
-        suffix = Path(file.filename).suffix
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
+        tmp_path = await save_upload(file)
 
         job_id = ingest_queue.enqueue(
-            filename=file.filename, file_path=tmp_path,
+            filename=file.filename, file_path=str(tmp_path),
             acl_groups=groups, uploaded_by="admin",
             category=category, dataset_id=dataset_id,
             auto_categorize=do_auto_cat, build_graph=do_build_graph,
@@ -2486,9 +2475,18 @@ async def settings_section_page(request: Request, section: str):
     redirect = _require_login(request)
     if redirect:
         return redirect
-    if section not in ("security", "models", "retrieval", "system", "maintenance"):
+    if section not in ("security", "models", "retrieval", "system", "maintenance", "answers", "advanced", "profiles"):
         raise HTTPException(status_code=404)
     ctx = {"settings": settings, "active": section}
+    if section == "profiles":
+        from src.admin.profile_routes import list_profiles
+        ctx["profile_book"] = list_profiles()
+    if section == "advanced":
+        from src.admin.settings_catalog import settings_catalog
+        ctx["catalog"] = settings_catalog()
+    if section == "answers":
+        from src.agent.synthesizer import get_system_prompt
+        ctx["resolved_prompt"] = get_system_prompt()
     if section == "security":
         store = get_metadata_store()
         groups = await store.list_acl_groups(active_only=False)
@@ -2514,65 +2512,33 @@ async def settings_section_page(request: Request, section: str):
 
 
 
-# Form field -> caster. Membership mirrors the persisted settings dict.
-_SETTINGS_FIELDS = {
-    "admin_username": str, "admin_password": str, "api_keys": str,
-    "vllm_base_url": str, "vllm_model_name": str, "vllm_api_key": str,
-    "ssl_verify": bool,
-    "embedding_mode": str, "embedding_api_url": str, "embedding_model_name": str,
-    "entity_merge_auto_threshold": float, "entity_merge_review_threshold": float,
-    "max_parallel_ingestion": int, "llm_concurrency": int,
-    "llm_max_context": int, "llm_max_output_tokens": int, "metadata_max_doc_length": int,
-    "metadata_extraction_enabled": bool, "feedback_enabled": bool,
-    "prf_enabled": bool, "strategy_memory_enabled": bool,
-    "feedback_similarity_threshold": float,
-}
-# String fields that must NOT be cleared when submitted blank (creds/urls). vllm_api_key may be blanked.
-_SETTINGS_KEEP_IF_BLANK = {
-    "admin_username", "admin_password", "api_keys",
-    "vllm_base_url", "vllm_model_name",
-    "embedding_mode", "embedding_api_url", "embedding_model_name",
-}
-
-
 def _apply_settings_update(form) -> dict:
-    """Partial update of the live `settings` object from a submitted form: only
-    fields PRESENT in the form are touched (so a per-section save never clobbers
-    another section). Returns the full persist dict. ``form`` is a Starlette
-    FormData (has .getlist) or a plain dict (tests). Booleans use the last value
-    (sections post a hidden 'false' + checkbox 'true', so an unchecked box still
-    posts 'false')."""
-    def last(name):
-        return form.getlist(name)[-1] if hasattr(form, "getlist") else form[name]
-
-    for name, caster in _SETTINGS_FIELDS.items():
-        if name not in form:
-            continue
-        raw = last(name)
-        if caster is bool:
-            val = str(raw).strip().lower() in ("true", "1", "on", "yes")
-        else:
-            s = str(raw).strip()
-            if s == "" and name in _SETTINGS_KEEP_IF_BLANK:
-                continue
-            if s == "" and caster is not str:
-                continue                       # blank numeric -> keep current (avoid caster("") error)
-            val = caster(s)                    # str("") == "" allowed (e.g. clearing vllm_api_key)
-        setattr(settings, name, val)
-
-    return {name: getattr(settings, name) for name in _SETTINGS_FIELDS}
+    from src.admin.settings_catalog import prepare_update, apply_live
+    values = prepare_update(form)
+    apply_live(values)
+    return values
 
 
 @router.post("/api/settings")
 async def save_settings(request: Request):
-    """Persist a partial settings update (only the submitted section's fields)."""
-    persist = _apply_settings_update(await request.form())
-    Path("data/settings.json").write_text(json.dumps(persist, indent=2) + "\n")
-    # Apply TLS-disable patches without restart when ssl_verify was turned off.
+    from src.admin.settings_catalog import prepare_update, persist_settings, apply_live, RESTART_FIELDS
+    from pydantic import ValidationError
+    try:
+        values = prepare_update(await request.form())
+    except ValidationError as exc:
+        # Do not include invalid submitted values, which may be credentials.
+        fields = ", ".join(sorted({str(e["loc"][0]) for e in exc.errors()}))
+        return HTMLResponse(f'<div class="status-err" role="alert">Invalid settings: {_escape_html(fields)}. Check the field type and limits.</div>', status_code=422)
+    except ValueError as exc:
+        return HTMLResponse(f'<div class="status-err" role="alert">{_escape_html(str(exc))}</div>', status_code=422)
+    pending = [k for k in RESTART_FIELDS if values[k] != getattr(settings, k)]
+    persist_settings(values)
+    apply_live(values)
     if not settings.ssl_verify:
         from src.main import apply_ssl_verify_setting
         apply_ssl_verify_setting()
-    return HTMLResponse('<div class="status-ok">Settings saved successfully.</div>')
+    note = " Restart Sauron to apply: " + ", ".join(sorted(pending)) + "." if pending else " Changes are active."
+    return HTMLResponse('<div class="status-ok" role="status">Settings saved.' + _escape_html(note) + '</div>')
 
 
 @router.post("/api/settings/list-llm-models")
@@ -3149,3 +3115,8 @@ async def restore_backup(backup_file: UploadFile = File(...)):
         )
     except Exception as e:
         return HTMLResponse(f'<span class="status-err">Restore failed: {e}</span>')
+
+
+# Nested router inherits the parent admin authentication/origin dependencies.
+from src.admin.profile_routes import router as answer_profile_router
+router.include_router(answer_profile_router)

@@ -1,5 +1,4 @@
 import json
-import tempfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from src.api.models import DeleteDocumentResponse, DatasetInfo, DocumentInfo, IngestResponse
@@ -7,6 +6,8 @@ from src.auth.dependencies import require_auth
 from src.auth.models import UserContext
 from src.db.metadata import MetadataStore
 from src.ingestion.pipeline import ingest_document
+from src.ingestion.uploads import save_upload
+from src.ingestion.isolation import ExtractionWorkerError
 from src.retrieval.vector_store import VectorStore
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion"])
@@ -75,11 +76,7 @@ async def ingest_file(
     user: UserContext = Depends(require_auth),
 ):
     groups = await _resolve_ingest_groups(acl_groups, dataset_id, user)
-    suffix = Path(file.filename or "upload.bin").suffix
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await save_upload(file)
     try:
         result = await ingest_document(
             file_path=tmp_path,
@@ -91,6 +88,8 @@ async def ingest_file(
             original_filename=file.filename,
             dataset_id=dataset_id or None,
         )
+    except ExtractionWorkerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
     return IngestResponse(doc_id=result.doc_id, filename=result.filename, doc_type=result.doc_type, chunk_count=result.chunk_count)
@@ -107,14 +106,10 @@ async def ingest_file_async(
     """Queue a document for async ingestion. Returns immediately with a job_id."""
     from src.ingestion.queue import ingest_queue
     groups = await _resolve_ingest_groups(acl_groups, dataset_id, user)
-    suffix = Path(file.filename or "upload.bin").suffix
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    tmp_path = await save_upload(file)
     await ingest_queue.start_worker(get_vector_store(), get_metadata_store())
     job_id = ingest_queue.enqueue(
-        filename=file.filename, file_path=tmp_path,
+        filename=file.filename, file_path=str(tmp_path),
         acl_groups=groups, uploaded_by=user.username,
         category=category, dataset_id=dataset_id or 0,
         auto_categorize=auto_categorize == "true",

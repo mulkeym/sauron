@@ -56,12 +56,20 @@ class CitationResponse(BaseModel):
     page: int | None = None
     snippet: str
     relevance: float
+    source_url: str = ""
+    evidence_id: str = ""
+    source_kind: str = "document"
+    source_locator: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
+    chunk_size_tier: str = ""
     figure_id: str | None = None
     section_title: str | None = None
     caption: str | None = None
     slide: int | None = None
 
 class QueryResponse(BaseModel):
+    warnings: list[str] = []
     answer: str
     citations: list[CitationResponse]
     cached: bool = False
@@ -72,6 +80,7 @@ class AsyncQuerySubmitResponse(BaseModel):
     status: str
 
 class AsyncQueryStatusResponse(BaseModel):
+    warnings: list[str] = []
     token: str
     status: str
     step: str

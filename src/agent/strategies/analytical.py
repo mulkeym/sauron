@@ -10,7 +10,8 @@ async def retrieve_analytical(state: AgentState, vector_store, schema_registry: 
 
     from src.agent.strategies.structured import run_structured_lookup, StructuredLookupTrace
 
-    schemas = schema_registry.list_for_user(user_groups)
+    from src.retrieval.query_scope import scoped_schemas
+    schemas = scoped_schemas(schema_registry, state)
     if not schemas:
         from src.agent.strategies.map_reduce import retrieve_map_reduce
         result = await retrieve_map_reduce(state, vector_store=vector_store)

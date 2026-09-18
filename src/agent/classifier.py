@@ -66,6 +66,10 @@ def format_available_tables(schemas, hints=None) -> str:
 def classify_query(state: AgentState, available_tables: str = "") -> dict:
     question = state["question"]
     system_prompt = CLASSIFICATION_PROMPT
+    from src.agent.profiles import profile_for_state
+    profile = profile_for_state(state)
+    if profile and profile.routing_instructions:
+        system_prompt += "\n\nTeam routing guidance (use only the supported query types):\n" + profile.routing_instructions
     if available_tables:
         system_prompt += (
             "\n\nAvailable structured tables (queryable with SQL):\n"
@@ -112,24 +116,33 @@ def _classify_node_factory(schema_registry):
     confidence-gated soft override from Strategy Memory."""
     async def classify_node(state: AgentState) -> dict:
         import asyncio
+        from src.agent.profiles import profile_for_state, structured_enabled
+        from src.retrieval.query_scope import scoped_schemas
+        profile = profile_for_state(state)
         # Live sub-step reporter for async-status visibility; no-op when absent
         # (sync path / tests). Fires synchronously mid-node so progress shows in
         # real time instead of only after the node completes.
         progress = state.get("progress") or (lambda *a, **k: None)
         available = ""
-        if schema_registry is not None:
+        if schema_registry is not None and structured_enabled(state):
             progress("classify.hints")
-            schemas = schema_registry.list_for_user(state.get("user_groups", ["ALL"]))
+            schemas = scoped_schemas(schema_registry, state)
             hints = await _resolve_hints_for_classifier(schemas)
             available = format_available_tables(schemas, hints)
         # classify_query makes a blocking LLM call — run it off the event loop
         # (the old sync node was run by LangGraph in a threadpool).
         progress("classify.llm")
-        result = await asyncio.to_thread(classify_query, state, available)
+        if profile and profile.strategy != "auto":
+            result = {"query_type": QueryType(profile.strategy), "sub_tasks": [state["question"]],
+                      "reason": "Selected by the published answer profile."}
+        else:
+            result = await asyncio.to_thread(classify_query, state, available)
         llm_pick = result["query_type"]
 
         memory_decision = {"llm_pick": str(llm_pick), "overrode": False, "reason": "disabled"}
-        if settings.strategy_memory_enabled:
+        memory_enabled = settings.strategy_memory_enabled and (
+            profile is None or (profile.strategy_memory and profile.strategy == "auto"))
+        if memory_enabled:
             progress("classify.strategy")
             try:
                 best = await get_best_strategy(state["question"])
@@ -170,7 +183,14 @@ def _classify_node_factory(schema_registry):
                 logger.warning("Strategy memory lookup failed, keeping LLM pick: %s", e)
                 memory_decision["reason"] = "error"
 
-        result["strategy_memory"] = memory_decision if settings.strategy_memory_enabled else None
+        if profile:
+            if not profile.structured_lookup and result["query_type"] == QueryType.ANALYTICAL:
+                result["query_type"] = QueryType.LOOKUP
+                result["reason"] = "Structured lookup is disabled by the answer profile."
+            tasks = result.get("sub_tasks") or []
+            tasks = [t.strip() for t in tasks if isinstance(t, str) and t.strip() and t.strip() != state["question"]]
+            result["sub_tasks"] = [state["question"], *list(dict.fromkeys(tasks))[:profile.max_subtasks]]
+        result["strategy_memory"] = memory_decision if memory_enabled else None
         progress("classify.done", {"kind": "classification", "data": {
             "query_type": str(result["query_type"]),
             "reason": result.get("reason", ""),

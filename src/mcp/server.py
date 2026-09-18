@@ -79,6 +79,7 @@ def create_mcp_server(
             return await asyncio.to_thread(
                 search_documents, query=query, user_groups=user_groups(),
                 vector_store=vector_store, doc_type=doc_type or None, top_k=top_k,
+                metadata_store=metadata_store,
             )
         return await run_logged_mcp_tool(tool="search_documents", query_text=query, fn=_run)
 
@@ -98,12 +99,16 @@ def create_mcp_server(
         )
 
     @mcp.tool()
-    async def tool_lookup_document(doc_id: str) -> dict:
-        """Read the full content of a document. Accepts either a doc_id (UUID) or a filename. Use this when the user asks to read, view, summarize, or display a specific file. You can pass the filename directly (e.g., 'sample.pdf') or a doc_id from tool_list_documents."""
+    async def tool_lookup_document(doc_id: str, offset: int = 0, limit: int = 100) -> dict:
+        """Read indexed document passages by exact document ID or unique filename.
+        Follow next_offset until null to read subsequent pages. complete is true
+        only when this response includes every indexed passage. This is extracted
+        indexed content, not the original binary file."""
         async def _run():
             return await asyncio.to_thread(
                 lookup_document, doc_id=doc_id, user_groups=user_groups(),
-                vector_store=vector_store,
+                vector_store=vector_store, metadata_store=metadata_store,
+                offset=offset, limit=limit,
             )
         return await run_logged_mcp_tool(tool="lookup_document", query_text=doc_id, fn=_run)
 
@@ -116,6 +121,7 @@ def create_mcp_server(
                 search_meetings, user_groups=user_groups(),
                 vector_store=vector_store, topic=topic or None,
                 speaker=speaker or None, type_filter=type_filter or None,
+                metadata_store=metadata_store,
             )
         return await run_logged_mcp_tool(tool="search_meetings", query_text=q, fn=_run)
 

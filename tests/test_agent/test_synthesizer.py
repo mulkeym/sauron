@@ -1,6 +1,12 @@
 import pytest
+import re
 from unittest.mock import patch
 from src.agent.synthesizer import synthesize_answer
+
+
+def cited_answer(**kwargs):
+    ids = re.findall(r"\[E[a-f0-9]{12}\]", kwargs["user_prompt"])
+    return "Expenses require approval; salary 1500000. " + " ".join(ids)
 from src.agent.state import AgentState, QueryType
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
 
@@ -22,7 +28,7 @@ def _make_chunk(text, doc_id="d1", filename="policy.pdf", page=None, score=0.9):
 
 
 def test_synthesize_with_chunks():
-    with patch("src.agent.synthesizer.generate", return_value="Expenses over $500 need approval [1]."):
+    with patch("src.agent.synthesizer.generate", side_effect=cited_answer):
         state = AgentState(
             question="What is the expense policy?",
             user_groups=["finance"],
@@ -38,7 +44,7 @@ def test_synthesize_with_chunks():
 
 
 def test_synthesize_with_sql_results():
-    with patch("src.agent.synthesizer.generate", return_value="Q3 2026 revenue was $1,500,000."):
+    with patch("src.agent.synthesizer.generate", side_effect=cited_answer):
         state = AgentState(
             question="What was Q3 revenue?",
             user_groups=["finance"],
@@ -68,7 +74,7 @@ def test_build_synthesis_context_includes_sql_block():
     assert "23440" in ctx
 
 
-def test_build_citations_dedupes_chunks_by_document():
+def test_build_citations_preserves_distinct_passages():
     from src.agent.synthesizer import build_citations
     state = AgentState(
         question="policy?", user_groups=["finance"], query_type=QueryType.LOOKUP,
@@ -77,7 +83,7 @@ def test_build_citations_dedupes_chunks_by_document():
         sql_results=[],
     )
     cits = build_citations(state)
-    assert len(cits) == 1                      # one per document
+    assert len(cits) == 2                      # one per actual passage
     assert cits[0].doc_id == "d1"
     assert cits[0].relevance == 0.95           # best score kept
 
@@ -113,7 +119,8 @@ def test_synthesize_handles_context_cap_without_nameerror():
             sql_results=[],
         )
         result = synthesize_answer(state)  # must not raise NameError
-    assert result["answer"] == "ok"
+    assert "could not find" in result["answer"].lower()
+    assert result["citations"] == []
 
 
 def _chunk(text, doc_id="d1", tier="medium", score=0.9):
@@ -127,7 +134,7 @@ def _chunk(text, doc_id="d1", tier="medium", score=0.9):
     )
 
 
-def test_sweep_keeps_structured_narratives_drops_raw_when_mapreduce():
+def test_sweep_keeps_original_passages_alongside_summaries():
     """With a map-reduce synthesis present, structured table_row narratives are
     kept in the synthesis context but bulky raw sweep chunks are dropped."""
     captured = {}
@@ -151,7 +158,8 @@ def test_sweep_keeps_structured_narratives_drops_raw_when_mapreduce():
     ctx = captured["user_prompt"]
     assert "Map-reduce synthesis" in ctx          # synthetic kept
     assert "locality=Tampa" in ctx                # structured narrative kept
-    assert "RAWSWEEPBLOB" not in ctx              # raw sweep chunk dropped
+    assert "RAWSWEEPBLOB" in ctx
+    assert ctx.index("RAWSWEEPBLOB") < ctx.index("Map-reduce synthesis")
 
 
 def test_no_mapreduce_keeps_raw_chunks():
@@ -224,7 +232,7 @@ def test_sql_answer_cites_source_document(monkeypatch):
     from src.ingestion.tabular_store import duckdb_table_name
     tbl = duckdb_table_name("docpay", "pay")
     monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
-    with patch("src.agent.synthesizer.generate", lambda **k: "answer"):
+    with patch("src.agent.synthesizer.generate", cited_answer):
         state = AgentState(
             question="pay?", user_groups=["finance"], query_type=QueryType.ANALYTICAL,
             retrieved_chunks=[], sql_results=[{"salary": 91162}],
@@ -234,7 +242,8 @@ def test_sql_answer_cites_source_document(monkeypatch):
     cits = [c for c in result["citations"] if c.doc_id == "docpay"]
     assert len(cits) == 1
     assert cits[0].filename == "2026-pay.xlsx"
-    assert "15 rows" in cits[0].snippet
+    assert "91162" in cits[0].snippet
+    assert cits[0].source_kind == "query_result"
     assert cits[0].relevance == 1.0
 
 
@@ -264,19 +273,19 @@ def test_sql_block_labels_source_filename(monkeypatch):
     assert tbl not in ctx.split("Result rows:")[0].split("Executed SQL:")[0]  # no raw table name before the SQL itself
 
 
-def test_sql_citation_deduped_with_chunk(monkeypatch):
+def test_sql_and_text_have_distinct_evidence_ids(monkeypatch):
     from src.ingestion.tabular_store import duckdb_table_name
     tbl = duckdb_table_name("docpay", "pay")
     monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
     chunk = _chunk("locality=Tampa: salary 91162", doc_id="docpay", tier="table_row")
-    with patch("src.agent.synthesizer.generate", lambda **k: "answer"):
+    with patch("src.agent.synthesizer.generate", cited_answer):
         state = AgentState(
             question="pay?", user_groups=["finance"], query_type=QueryType.SWEEP,
             retrieved_chunks=[chunk], sql_results=[{"salary": 91162}],
             structured_trace={"status": "ran", "row_count": 15, "sql": f'SELECT * FROM "{tbl}"'},
         )
         result = synthesize_answer(state)
-    assert len([c for c in result["citations"] if c.doc_id == "docpay"]) == 1
+    assert len([c for c in result["citations"] if c.doc_id == "docpay"]) == 2
 
 
 def test_no_sql_citation_when_zero_rows(monkeypatch):
@@ -284,7 +293,7 @@ def test_no_sql_citation_when_zero_rows(monkeypatch):
     tbl = duckdb_table_name("docpay", "pay")
     monkeypatch.setattr("src.api.routes_ingest.get_metadata_store", lambda: _sql_doc_ms())
     chunk = _chunk("some prose", doc_id="d1", tier="large")
-    with patch("src.agent.synthesizer.generate", lambda **k: "answer"):
+    with patch("src.agent.synthesizer.generate", cited_answer):
         state = AgentState(
             question="pay?", user_groups=["finance"], query_type=QueryType.ANALYTICAL,
             retrieved_chunks=[chunk], sql_results=[],
@@ -312,18 +321,9 @@ def test_synthesis_context_caps_wide_sql_result():
     assert "showing" in ctx and "of 885" in ctx          # truncation is disclosed
 
 
-def test_prompts_instruct_direct_answer_first():
-    """Guard the intent: both prompt constants must impose a 'direct answer first,
-    then detail' structure so answers don't open with a data dump."""
+def test_prompts_require_evidence_and_preserve_procedures():
     from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
-    sys_l = SYSTEM_PROMPT.lower()
-    usr_l = USER_PROMPT_TEMPLATE.lower()
-    # System prompt sets up the lead->detail structure.
-    assert "direct" in sys_l and "answer" in sys_l
-    assert "start with" in sys_l          # the lead instruction
-    assert "supporting detail" in sys_l or "then" in sys_l
-    # User prompt still demands completeness AND a direct lead first.
-    assert "first" in usr_l and "direct" in usr_l
-    # Completeness guarantees are preserved (don't drop the list-everything behavior).
-    assert "every unique item" in usr_l
-    assert "deduplicat" in usr_l
+    assert "exact documented commands" in SYSTEM_PROMPT
+    assert "untrusted data" in SYSTEM_PROMPT
+    assert "conflicting" in USER_PROMPT_TEMPLATE
+    assert "[E...]" in USER_PROMPT_TEMPLATE

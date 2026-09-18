@@ -2,6 +2,15 @@
 import pytest
 
 from src.retrieval import query_cache as qc
+from src.retrieval.query_scope import QueryScope
+from unittest.mock import AsyncMock
+
+
+@pytest.fixture(autouse=True)
+def scoped_cache(monkeypatch):
+    monkeypatch.setattr(qc.settings, "query_cache_mode", "semantic")
+    monkeypatch.setattr(qc.settings, "query_cache_min_confidence", 0.9)
+    monkeypatch.setattr("src.retrieval.query_scope.resolve_query_scope", AsyncMock(return_value=QueryScope(("d1",), "revision")))
 
 
 @pytest.mark.asyncio
@@ -74,9 +83,8 @@ async def test_embed_failure_is_fail_open(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_judge_failure_fails_open_to_accept(monkeypatch):
-    # cache_judge already returns applicable=True on its own internal error;
-    # the helper must honor that (serve the cache when the judge is down).
+async def test_uncertain_judge_rejects_cached_answer(monkeypatch):
+    # A weak applicability score cannot authorize reuse.
     monkeypatch.setattr(qc, "embed_query", lambda q: [0.0])
     monkeypatch.setattr(qc, "cache_lookup",
         lambda v, g, **k: {"answer": "A", "cached_query": "old", "citations": [], "cached_at": 0})
@@ -85,4 +93,4 @@ async def test_judge_failure_fails_open_to_accept(monkeypatch):
     monkeypatch.setattr(qc, "cache_judge", _judge)
 
     d = await qc.judged_cache_lookup("q", ["ALL"])
-    assert d.accepted is True
+    assert d.accepted is False

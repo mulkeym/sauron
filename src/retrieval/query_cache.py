@@ -1,11 +1,8 @@
 from __future__ import annotations
-"""Query result cache — stores previous answers for semantic reuse.
+"""Opt-in answer reuse, bounded by source/access/configuration revisions and expiry.
 
-Cached results are matched by embedding similarity (not exact query match),
-so "army contracts" and "What did the army award?" can share a cache entry.
-
-ACL-aware: cached results are only returned if the user's groups match
-the groups that were used when the cache entry was created.
+Exact mode matches the original question; semantic mode additionally requires
+an affirmative applicability judgment. All uncertain checks fall back to retrieval.
 """
 import asyncio
 import json
@@ -14,7 +11,6 @@ import time
 import uuid
 from dataclasses import dataclass
 
-import numpy as np
 import pyarrow as pa
 
 from src.config import settings
@@ -54,61 +50,10 @@ def _get_cache_table():
         _cache_table = db.create_table("query_cache", schema=schema)
         logger.info("Created query_cache table")
 
+    # Old rows have no revision and are intentionally never reused.
+    if "scope_revision" not in _cache_table.schema.names:
+        _cache_table.add_columns({"scope_revision": "CAST(NULL AS STRING)"})
     return _cache_table
-
-
-def _has_new_related_docs(source_doc_ids: list[str], cached_at: float) -> bool:
-    """Check if new documents were added in the same categories since the cache was built."""
-    import asyncio
-    from datetime import datetime, timezone
-
-    if not source_doc_ids:
-        return False
-
-    try:
-        from src.db.metadata import MetadataStore
-
-        async def _check():
-            store = MetadataStore()
-            await store.init()
-
-            # Get categories of the cached source documents
-            source_categories = set()
-            for doc_id in source_doc_ids:
-                doc = await store.get_document(doc_id)
-                if doc and doc.category:
-                    source_categories.add(doc.category)
-
-            if not source_categories:
-                return False
-
-            # Check if any documents in those categories were created after the cache
-            cached_time = datetime.fromtimestamp(cached_at, tz=timezone.utc)
-            all_docs = await store.list_documents(None)
-            for doc in all_docs:
-                if doc.category in source_categories and doc.doc_id not in source_doc_ids:
-                    doc_time = doc.created_at
-                    if doc_time is None:
-                        continue
-                    # Normalize: make naive datetimes UTC-aware for comparison
-                    if doc_time.tzinfo is None:
-                        doc_time = doc_time.replace(tzinfo=timezone.utc)
-                    if doc_time > cached_time:
-                        return True
-            return False
-
-        # Run async check — handle both async and sync contexts
-        try:
-            loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, _check()).result()
-        except RuntimeError:
-            return asyncio.run(_check())
-
-    except Exception as e:
-        logger.warning(f"New doc check failed: {e}")
-        return False  # on error, use cache (conservative)
 
 
 def _acl_key(user_groups: list[str]) -> str:
@@ -117,11 +62,14 @@ def _acl_key(user_groups: list[str]) -> str:
 
 
 def cache_lookup(query_vector: list[float], user_groups: list[str],
-                 similarity_threshold: float = 0.92) -> dict | None:
+                 similarity_threshold: float = 0.92, *, scope_revision: str = "",
+                 query_text: str = "") -> dict | None:
     """Search cache for a semantically similar query with matching ACL.
 
     Returns cached result dict or None if no hit.
     """
+    if settings.query_cache_mode == "off" or not scope_revision or not user_groups:
+        return None
     table = _get_cache_table()
     if table.count_rows() == 0:
         return None
@@ -129,7 +77,12 @@ def cache_lookup(query_vector: list[float], user_groups: list[str],
     acl_key = _acl_key(user_groups)
 
     try:
-        results = table.search(query_vector).limit(5).to_list()
+        safe_revision = scope_revision.replace("'", "''")
+        search = table.search(query_vector).where(f"scope_revision = '{safe_revision}'", prefilter=True)
+        if settings.query_cache_mode == "exact":
+            exact = query_text.strip().replace("'", "''")
+            search = search.where(f"scope_revision = '{safe_revision}' AND query_text = '{exact}'", prefilter=True)
+        results = search.limit(5).to_list()
 
         for row in results:
             # Check similarity
@@ -141,11 +94,13 @@ def cache_lookup(query_vector: list[float], user_groups: list[str],
             if row.get("acl_groups_json", "") != acl_key:
                 continue
 
-            # Check if new related documents have been added since cache was built
             cached_at = row.get("created_at", 0)
+            if not 0 <= time.time() - cached_at <= settings.query_cache_ttl_seconds:
+                continue
+            if row.get("scope_revision") != scope_revision:
+                continue
             source_doc_ids = json.loads(row.get("source_doc_ids_json", "[]"))
-            if _has_new_related_docs(source_doc_ids, cached_at):
-                logger.info(f"Cache stale: new related documents added since {time.strftime('%Y-%m-%d %H:%M', time.localtime(cached_at))}")
+            if not source_doc_ids:
                 continue
 
             logger.info(f"Cache hit: \"{row['query_text'][:60]}\" (similarity: {score:.3f})")
@@ -204,7 +159,7 @@ Respond with ONLY JSON:
         }
     except Exception as e:
         logger.warning(f"Cache judge failed: {e}")
-        return {"applicable": True, "confidence": 0.5, "reason": "Judge unavailable, using cache"}
+        return {"applicable": False, "confidence": 0.0, "reason": "Judge unavailable; retrieve fresh evidence"}
 
 
 @dataclass
@@ -212,6 +167,7 @@ class CacheDecision:
     """Outcome of the shared cache lookup+judge sequence.
     Both the API (agent_query) and the admin playground consume this so the
     cache decision lives in exactly one place."""
+    scope_revision: str = ""
     query_vector: list | None = None   # reuse for cache_store; None if embed failed
     hit: bool = False                  # cache_lookup found a vector+ACL+freshness match
     accepted: bool = False             # hit AND judge applicable -> serve the cache
@@ -222,14 +178,20 @@ class CacheDecision:
 
 
 async def judged_cache_lookup(question: str, user_groups: list,
-                              *, skip_cache: bool = False) -> CacheDecision:
-    """Embed the question, look up the cache, and (on a hit) run the LLM
-    applicability judge. Single source of truth for "is there a usable cache
-    hit". Fail-open throughout: embed failure -> no hit (and no vector to store);
-    cache_judge already returns applicable=True on its own error."""
+                              *, skip_cache: bool = False, metadata_store=None,
+                              dataset_id=0, allowed_doc_ids=None, mode="full", answer_profile=None) -> CacheDecision:
+    """Return fresh retrieval whenever cache scope or applicability is uncertain."""
     d = CacheDecision()
     t0 = time.time()
+    if settings.query_cache_mode == "off" or not user_groups:
+        return d
     try:
+        from src.retrieval.query_scope import resolve_query_scope
+        scope = await resolve_query_scope(user_groups, metadata_store,
+            dataset_id=dataset_id, allowed_doc_ids=allowed_doc_ids, mode=mode, answer_profile=answer_profile)
+        d.scope_revision = scope.revision
+        if not scope.doc_ids:
+            return d
         d.query_vector = await asyncio.to_thread(embed_query, question)
     except Exception as e:
         logger.warning(f"Cache embed failed: {e}")
@@ -240,12 +202,21 @@ async def judged_cache_lookup(question: str, user_groups: list,
         d.cache_time = round(time.time() - t0, 2)
         return d
 
-    d.cached = cache_lookup(d.query_vector, user_groups)
+    try:
+        d.cached = await asyncio.to_thread(cache_lookup, d.query_vector, user_groups,
+            scope_revision=d.scope_revision, query_text=question)
+    except Exception:
+        logger.warning("Cache unavailable; retrieving fresh evidence")
+        return d
     d.cache_time = round(time.time() - t0, 2)
     if not d.cached:
         return d
 
     d.hit = True
+    if settings.query_cache_mode == "exact":
+        d.accepted = True
+        d.judgment = {"applicable": True, "confidence": 1.0, "reason": "Exact question and scope revision match"}
+        return d
     tj = time.time()
     d.judgment = await cache_judge(
         original_query=d.cached.get("cached_query", ""),
@@ -253,19 +224,27 @@ async def judged_cache_lookup(question: str, user_groups: list,
         cached_answer=d.cached.get("answer", ""),
     )
     d.judge_time = round(time.time() - tj, 2)
-    d.accepted = bool(d.judgment.get("applicable", False))
+    confidence = d.judgment.get("confidence", 0)
+    d.accepted = (d.judgment.get("applicable") is True
+                  and isinstance(confidence, (int, float))
+                  and settings.query_cache_min_confidence <= confidence <= 1.0)
     return d
 
 
 def cache_store(query_text: str, query_vector: list[float], answer: str,
                 citations: list[dict], user_groups: list[str],
-                source_doc_ids: list[str], query_type: str = ""):
-    """Store a query result in the cache."""
+                source_doc_ids: list[str], query_type: str = "", *, scope_revision: str = ""):
+    """Store only answers with evidence and a checked catalog revision."""
+    if settings.query_cache_mode == "off" or not scope_revision or not source_doc_ids or not citations:
+        return
+    if any(c.get("source_kind") != "document" for c in citations):
+        return  # Derived graph/SQL summaries need their own freshness tracking.
     table = _get_cache_table()
 
     record = {
         "id": str(uuid.uuid4()),
-        "query_text": query_text,
+        "query_text": query_text.strip(),
+        "scope_revision": scope_revision,
         "vector": query_vector,
         "answer": answer,
         "citations_json": json.dumps(citations),

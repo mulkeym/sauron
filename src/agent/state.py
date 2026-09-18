@@ -4,12 +4,18 @@ from typing import Annotated, TypedDict
 from src.retrieval.models import Citation, RetrievedChunk
 
 
+def chunk_key(chunk: RetrievedChunk) -> tuple:
+    m = chunk.metadata
+    return (m.doc_id, m.chunk_size_tier, m.chunk_index, m.start_char,
+            m.content_type, m.figure_id)
+
+
 def _merge_chunks(existing: list[RetrievedChunk], new: list[RetrievedChunk]) -> list[RetrievedChunk]:
-    """Reducer: merge retrieved_chunks from parallel branches, deduplicating by (doc_id, chunk_index)."""
-    seen = {(c.metadata.doc_id, c.metadata.chunk_index) for c in existing}
+    """Keep distinct source spans and size tiers when combining branches."""
+    seen = {chunk_key(c) for c in existing}
     merged = list(existing)
     for c in new:
-        key = (c.metadata.doc_id, c.metadata.chunk_index)
+        key = chunk_key(c)
         if key not in seen:
             merged.append(c)
             seen.add(key)
@@ -29,6 +35,7 @@ class AgentState(TypedDict, total=False):
     original_question: str  # preserved across retries
     user_groups: list[str]
     query_type: QueryType | None
+    reason: str
     sub_tasks: list[str]
     retrieved_chunks: Annotated[list[RetrievedChunk], _merge_chunks]
     sql_results: list[dict]
@@ -38,6 +45,10 @@ class AgentState(TypedDict, total=False):
     answer: str
     citations: list[Citation]
     warnings: list[str]
+    answer_profile: dict  # immutable request snapshot of one published/draft profile
+    response_kind: str  # answer, clarification, or insufficient_evidence
+    preview: bool
+    preview_evidence: list[dict]
     skip_graph: bool
     allowed_doc_ids: list[str]  # restrict retrieval to these doc_ids (app filter)
     dataset_id: int  # dataset filter for KG queries

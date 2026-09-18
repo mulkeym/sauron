@@ -1,0 +1,37 @@
+#profile-page { max-width: 1420px; }
+#profile-page h1 { margin-bottom: .5rem; }
+#profile-page h2 { margin-bottom: .7rem; }
+#profile-page h3 { font-size: .95rem; margin: 1rem 0 .5rem; }
+#profile-page p { line-height: 1.5; }
+#profile-page .profile-help { color: var(--text-secondary); font-size: .85rem; margin: .5rem 0 1rem; }
+#profile-page .profile-banner { border-left: 4px solid var(--text-secondary); padding: .8rem 1rem; background: var(--bg-card); margin: 1rem 0; }
+.profile-toolbar, .profile-actions { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }
+.profile-toolbar .form-group { flex: 1; min-width: 180px; margin: 0; }
+#profile-page .profile-toolbar .form-group { margin-bottom: 0; }
+.profile-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr); gap: 1.25rem; align-items: start; }
+.profile-layout > * { min-width: 0; }
+#profile-page .form-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+#profile-page .form-row > * { flex: 1; min-width: 180px; }
+#profile-page .form-group { margin-bottom: 1rem; }
+#profile-page input, #profile-page textarea, #profile-page select { max-width: none; }
+#profile-page pre, #preview-answer { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; line-height: 1.55; }
+#profile-page pre { padding: .8rem; background: var(--bg-card-alt); max-height: 400px; overflow: auto; }
+#profile-page details { margin: .8rem 0; }
+#profile-page summary { cursor: pointer; padding: .4rem 0; }
+.profile-fields { border: 1px solid var(--border); padding: .75rem; margin-bottom: 1rem; }
+.profile-fields label { display: inline-flex; align-items: center; gap: .4rem; margin: .4rem .7rem .4rem 0; }
+.profile-fields input { width: auto; }
+#profile-page button:disabled { opacity: .6; cursor: not-allowed; }
+#profile-page :is(button,input,select,textarea,summary):focus-visible { outline: 3px solid #3b82f6; outline-offset: 3px; }
+#profile-status, #preview-status { min-height: 1.6rem; margin: .8rem 0; color: var(--text); }
+#profile-error { border: 1px solid #b91c1c; padding: .8rem; margin: .8rem 0; color: var(--text); }
+#profile-page ul { margin: .8rem 0; padding-left: 1.3rem; }
+#preview-result { border-top: 1px solid var(--border); padding-top: 1rem; }
+#profile-page [aria-invalid="true"] { border-color: #b91c1c; }
+@media (max-width: 1150px) { .profile-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 650px) {
+  body:has(#profile-page) .settings-shell { flex-direction: column; }
+  body:has(#profile-page) .settings-subnav { width: 100%; }
+  body:has(#profile-page) .settings-pane { width: 100%; min-width: 0; }
+  #profile-page .settings-section { padding: 1rem; }
+}

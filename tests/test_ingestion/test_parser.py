@@ -52,11 +52,16 @@ def test_parse_transcript():
     assert len(mike_questions) == 2
 
 
-def test_parse_unsupported_format():
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".xyz", delete=False) as f:
-        f.write(b"some content")
-        path = Path(f.name)
-    with pytest.raises(ValueError, match="Unsupported"):
+def test_unknown_extension_preserves_plaintext(tmp_path):
+    path = tmp_path / "notes.xyz"
+    path.write_text("some content")
+    result = parse_document(path)
+    assert result.text == "some content"
+    assert result.doc_type == "xyz"
+
+
+def test_unknown_binary_format_is_rejected(tmp_path):
+    path = tmp_path / "binary.xyz"
+    path.write_bytes(b"binary\x00content")
+    with pytest.raises(ValueError, match="binary file"):
         parse_document(path)
-    path.unlink()

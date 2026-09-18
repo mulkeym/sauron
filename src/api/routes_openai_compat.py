@@ -10,10 +10,7 @@ import uuid
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from src.api.routes_ingest import get_vector_store, get_schema_registry
-from src.auth.api_key import validate_api_key
-from src.auth.jwt import decode_token
-from src.config import settings
+from src.api.routes_ingest import get_vector_store, get_schema_registry, get_metadata_store
 from src.generation.rag_chain import agent_query
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
@@ -54,25 +51,15 @@ async def chat_completions(
     authorization: str = Header(default=""),
     x_api_key: str = Header(default="", alias="X-API-Key"),
 ):
-    # Auth: try JWT first, fall back to API key only (for simple clients)
-    user_groups = ["ALL"]
-    agent_id = None
-    if authorization.startswith("Bearer "):
-        token = authorization.removeprefix("Bearer ")
-        # Check if it's a JWT or just an API key used as bearer token
-        try:
-            user = decode_token(token)
-            user_groups = user.groups
-            agent_id = user.username
-        except ValueError:
-            # Might be an API key passed as bearer token (common with OpenAI clients)
-            if not validate_api_key(token):
-                raise HTTPException(status_code=401, detail="Invalid token")
-    elif x_api_key:
-        if not validate_api_key(x_api_key):
-            raise HTTPException(status_code=403, detail="Invalid API key")
-    else:
-        raise HTTPException(status_code=401, detail="Missing authentication")
+    # Application credentials never grant document access on their own. Use
+    # the same user identity and configured forwarding rules as the MCP endpoint.
+    from src.mcp.auth import extract_mcp_context, MCPAuthenticationError
+    try:
+        identity = extract_mcp_context(dict(http.headers))
+    except MCPAuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    user_groups = identity.groups
+    agent_id = identity.agent_id or identity.username
 
     # Extract the last user message as the question
     question = ""
@@ -88,7 +75,7 @@ async def chat_completions(
 
     async with query_activity_span(
         source="openai", tool="chat.completions",
-        username=agent_id or "", user_groups=list(user_groups),
+        username=identity.username, user_groups=list(user_groups),
         query_text=question,
     ) as span:
         result = await agent_query(
@@ -96,6 +83,7 @@ async def chat_completions(
             user_groups=user_groups,
             vector_store=get_vector_store(),
             schema_registry=get_schema_registry(),
+            metadata_store=get_metadata_store(),
             session_headers=http.headers,
             agent_id=agent_id,
         )
@@ -108,8 +96,10 @@ async def chat_completions(
         sources = "\n\n---\n**Sources:**\n"
         for i, c in enumerate(result.citations, 1):
             page_info = f", page {c.page}" if c.page else ""
-            sources += f"- [{i}] {c.filename}{page_info} (relevance: {c.relevance:.2f})\n"
+            sources += f"- [{c.evidence_id or i}] {c.filename}{page_info}\n"
         answer += sources
+    if result.warnings:
+        answer += "\n\nEvidence limitations:\n" + "\n".join("- " + w for w in result.warnings)
 
     # Return OpenAI-compatible response
     return {

@@ -146,9 +146,9 @@ async def test_ingest_document_invokes_tabular_branch_for_spreadsheet(tmp_path, 
 
     async def _fake_orch(*args, **kwargs):
         calls.append(args)
-        return [], [], set()
-    # pipeline imports the orchestrator into its own namespace, so patch it there.
-    monkeypatch.setattr(pipe, "ingest_structured_sheets", _fake_orch)
+        return [], set()
+    # The API indexes grids already extracted by the subprocess.
+    monkeypatch.setattr("src.ingestion.prepared_index.ingest_grids", _fake_orch)
 
     store = MetadataStore(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db")
     await store.init()

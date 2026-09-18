@@ -20,9 +20,15 @@ def search_documents(
     vector_store,
     doc_type: str | None = None,
     top_k: int = 10,
+    metadata_store=None,
 ) -> list[dict]:
+    from src.retrieval.query_scope import resolve_query_scope_sync
+    scope = resolve_query_scope_sync(user_groups, metadata_store)
+    if not scope.doc_ids:
+        return []
     vector = embed_query(query)
-    chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k)
+    chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k,
+                                 doc_ids=list(scope.doc_ids))
     # Only filter by doc_type if it's a known type (pdf, docx, xlsx, transcript)
     valid_types = {"pdf", "docx", "xlsx", "transcript", "txt", "markdown"}
     if doc_type and doc_type.lower() in valid_types:
@@ -90,28 +96,46 @@ async def query_database(
         return {"sql": sql, "results": [], "error": str(exc)}
 
 
-def lookup_document(
-    doc_id: str,
-    user_groups: list[str],
-    vector_store,
-) -> dict:
-    vector = embed_query(f"document {doc_id}")
-    chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=100)
-    # Match by doc_id (UUID) or by filename
-    matching = [c for c in chunks if c.metadata.doc_id == doc_id or c.metadata.filename == doc_id]
-    if not matching:
-        return {"content": "", "metadata": {}, "error": f"Document '{doc_id}' not found. Use tool_list_documents to get valid doc_ids or filenames."}
-    matching_sorted = sorted(matching, key=lambda c: c.metadata.chunk_index)
-    content = "\n".join(c.text for c in matching_sorted)
-    first_meta = matching_sorted[0].metadata
-    metadata = {
-        "doc_id": first_meta.doc_id,
-        "filename": first_meta.filename,
-        "doc_type": first_meta.doc_type,
-        "category": first_meta.category,
-        "acl_groups": first_meta.acl_groups,
-    }
-    return {"content": content, "metadata": metadata}
+def lookup_document(doc_id: str, user_groups: list[str], vector_store,
+                    metadata_store=None, offset: int = 0, limit: int = 100) -> dict:
+    """Read a page of authorized indexed passages by exact ID or unique filename."""
+    if offset < 0 or not 1 <= limit <= 200:
+        return {"error": "offset must be nonnegative and limit must be 1–200.", "content": "", "metadata": {}}
+    if not user_groups:
+        return {"content": "", "metadata": {}, "error": "Document not found or not accessible."}
+    if metadata_store is None:
+        from src.api.routes_ingest import get_metadata_store
+        metadata_store = get_metadata_store()
+    async def resolve():
+        docs = await metadata_store.list_documents(None if "ALL" in user_groups else user_groups)
+        # Check again at this boundary so even a stale vector ACL cannot grant access.
+        docs = [d for d in docs if "ALL" in user_groups or set(user_groups).intersection(d.acl_groups)]
+        exact = [d for d in docs if d.doc_id == doc_id]
+        return exact or [d for d in docs if d.filename == doc_id]
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        matching = asyncio.run(resolve())
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            matching = pool.submit(asyncio.run, resolve()).result()
+    if len(matching) != 1:
+        error = "Filename is ambiguous; use a document ID." if matching else "Document not found or not accessible."
+        return {"content": "", "metadata": {}, "error": error}
+    doc = matching[0]
+    chunks, more = vector_store.read_document_page(doc.doc_id, user_groups, offset=offset, limit=limit)
+    # The cursor follows index order; explicit source positions let clients
+    # reconstruct reading order without assuming chunks are contiguous prose.
+    content = "\n\n".join(c.text for c in chunks)
+    return {"content": content,
+            "metadata": {"doc_id": doc.doc_id, "filename": doc.filename,
+                         "doc_type": doc.doc_type, "category": doc.category,
+                         "source_url": getattr(doc, "source_url", "") or ""},
+            "chunks": [c.model_dump() for c in chunks], "offset": offset,
+            "next_offset": offset + len(chunks) if more else None,
+            "complete": offset == 0 and not more,
+            "representation": "indexed_passages"}
 
 
 def search_meetings(
@@ -121,10 +145,16 @@ def search_meetings(
     speaker: str | None = None,
     type_filter: str | None = None,
     top_k: int = 50,
+    metadata_store=None,
 ) -> list[dict]:
+    from src.retrieval.query_scope import resolve_query_scope_sync
+    scope = resolve_query_scope_sync(user_groups, metadata_store)
+    if not scope.doc_ids:
+        return []
     query = topic if topic else "meeting transcript"
     vector = embed_query(query)
-    chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k)
+    chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k,
+                                 doc_ids=list(scope.doc_ids))
     # Filter to transcripts only
     chunks = [c for c in chunks if c.metadata.doc_type == "transcript"]
     if speaker is not None:

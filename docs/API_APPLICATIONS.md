@@ -81,7 +81,10 @@ Required custom headers on the OpenWebUI MCP connection:
 The application key proves the request came from your OpenWebUI server. It
 does not grant document access. OpenWebUI is the source of truth for the
 person chatting: it expands `{{USER_EMAIL}}` and `{{USER_GROUPS}}` from the
-logged-in user. Sauron ignores `X-OpenWebUI-User-Jwt` for now.
+logged-in user. Use Authentication **None** and leave JWT forwarding unset. If a signed
+identity token is supplied, Sauron validates it. Trusted username headers
+default to enabled; the admin **Trust OpenWebUI user headers** switch can
+disable them. The same identity rules apply to MCP and `/v1/chat/completions`.
 
 See [MCP_OPENAPI_SETUP.md](MCP_OPENAPI_SETUP.md#how-openwebui-authenticates-to-sauron-mcp)
 for the OpenWebUI login → header → ACL walkthrough.

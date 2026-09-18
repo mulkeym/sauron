@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 
 from src.ingestion.tabular import SheetGrid
 
@@ -83,12 +84,15 @@ DIGITAL_MIN_CHARS = 20   # a page with fewer extractable chars is treated as sca
 _TABLE_SETTINGS = {"vertical_strategy": "text", "horizontal_strategy": "text"}
 
 
-def _page_tables(page, page_no: int) -> list[SheetGrid]:
+def _page_tables(page, page_no: int) -> tuple[list[SheetGrid], list[tuple]]:
+    """Extract tables once and keep their bounds for prose/figure placement."""
     grids: list[SheetGrid] = []
-    raw_tables = page.extract_tables() or []
-    if not raw_tables:
-        raw_tables = page.extract_tables(table_settings=_TABLE_SETTINGS) or []
-    for n, raw in enumerate(raw_tables):
+    bboxes: list[tuple] = []
+    tables = page.find_tables() or []
+    if not tables:
+        tables = page.find_tables(table_settings=_TABLE_SETTINGS) or []
+    for n, table in enumerate(tables):
+        raw = table.extract()
         g = normalize_grid(raw, sheet_name=f"p{page_no}_table{n}")
         if g.rows:
             # Check integrity on the RAW table (before normalize pads it), so a
@@ -99,15 +103,17 @@ def _page_tables(page, page_no: int) -> list[SheetGrid]:
                     "PDF table %s has inconsistent row widths (possible "
                     "mis-extraction); ingesting anyway", g.sheet_name)
             grids.append(g)
-    return grids
+            bboxes.append(table.bbox)
+    return grids, bboxes
 
 
-def _page_layout_lines(page, page_no: int) -> list[ProseBlock]:
+def _page_layout_lines(page, page_no: int, table_bboxes: list[tuple]) -> list[ProseBlock]:
     """Positioned text lines outside table regions, in page reading order."""
-    table_bboxes = [t.bbox for t in (page.find_tables() or [])]
     lines: list[ProseBlock] = []
     try:
         raw_lines = page.extract_text_lines(return_chars=True) or []
+    except MemoryError:
+        raise
     except Exception:
         raw_lines = []
     for line in raw_lines:
@@ -140,13 +146,8 @@ def _page_layout_lines(page, page_no: int) -> list[ProseBlock]:
     return lines
 
 
-def _page_prose(page, page_no: int = 0) -> str:
-    """Page text with detected-table regions removed so prose isn't duplicated."""
-    lines = _page_layout_lines(page, page_no)
-    if lines:
-        return "\n".join(line.text for line in lines)
-    # Compatibility fallback for unusual PDFs where line extraction fails.
-    table_bboxes = [t.bbox for t in (page.find_tables() or [])]
+def _page_prose(page, table_bboxes: list[tuple]) -> str:
+    """Fallback text using the table bounds already detected on this page."""
     if not table_bboxes:
         return page.extract_text() or ""
 
@@ -157,7 +158,11 @@ def _page_prose(page, page_no: int = 0) -> str:
             for (bx0, btop, bx1, bbot) in table_bboxes
         )
 
-    return page.filter(outside_tables).extract_text() or ""
+    filtered = page.filter(outside_tables)
+    try:
+        return filtered.extract_text() or ""
+    finally:
+        filtered.close()
 
 
 def _html_to_grid(html: str, sheet_name: str) -> SheetGrid | None:
@@ -185,12 +190,25 @@ def _html_to_grid(html: str, sheet_name: str) -> SheetGrid | None:
 
 
 def _partition_scanned(path: Path, page_no: int):
-    """Real OCR partition for one page (seam mocked in tests)."""
+    """OCR a one-page PDF; Unstructured does not support page_numbers."""
+    from pypdf import PdfReader, PdfWriter
     from unstructured.partition.pdf import partition_pdf
-    return partition_pdf(
-        filename=str(path), strategy="hi_res", infer_table_structure=True,
-        page_numbers=[page_no + 1],   # unstructured is 1-indexed
-    )
+
+    # Spill large pages to an anonymous temporary file. Closing it (or a
+    # killed worker exiting) removes the file without leaving a PDF behind.
+    with SpooledTemporaryFile(max_size=1024 * 1024) as single_page:
+        # A reader caches resolved objects, including image streams. Close it
+        # per page before OCR so those resources do not accumulate across pages.
+        with path.open("rb") as source, PdfReader(source) as reader, PdfWriter() as writer:
+            # Article threads can reference other pages; OCR needs this page only.
+            writer.add_page(reader.pages[page_no], excluded_keys=["/B"])
+            writer.write(single_page)
+        del writer
+        single_page.seek(0)
+        return partition_pdf(
+            file=single_page, strategy="hi_res", infer_table_structure=True,
+            starting_page_number=page_no + 1,
+        )
 
 
 def _extract_scanned_page(path: Path, page_no: int):
@@ -198,6 +216,8 @@ def _extract_scanned_page(path: Path, page_no: int):
     grids: list[SheetGrid] = []
     try:
         elements = _partition_scanned(path, page_no)
+    except MemoryError:
+        raise
     except Exception as e:
         logger.warning(f"OCR partition failed on page {page_no} of {path.name}: {e}")
         return blocks, grids
@@ -227,22 +247,28 @@ def extract_pdf(path: Path) -> ExtractedPdf:
     methods: set[str] = set()
     with pdfplumber.open(str(path)) as pdf:
         for i, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            if len(text.strip()) >= DIGITAL_MIN_CHARS:
-                methods.add("digital")
-                grids.extend(_page_tables(page, i))
-                page_layout = _page_layout_lines(page, i)
-                layout.extend(page_layout)
-                body = "\n".join(block.text for block in page_layout).strip()
-                if not body:
-                    body = _page_prose(page, i).strip()
-                if body:
-                    prose.append(ProseBlock(text=body, page=i))
-            else:
-                methods.add("ocr")
-                p_blocks, p_grids = _extract_scanned_page(path, i)
-                prose.extend(p_blocks)
-                grids.extend(p_grids)
+            try:
+                text = page.extract_text() or ""
+                if len(text.strip()) >= DIGITAL_MIN_CHARS:
+                    methods.add("digital")
+                    page_grids, table_bboxes = _page_tables(page, i)
+                    grids.extend(page_grids)
+                    page_layout = _page_layout_lines(page, i, table_bboxes)
+                    layout.extend(page_layout)
+                    body = "\n".join(block.text for block in page_layout).strip()
+                    if not body:
+                        body = _page_prose(page, table_bboxes).strip()
+                    if body:
+                        prose.append(ProseBlock(text=body, page=i))
+                else:
+                    methods.add("ocr")
+                    # Triage is done; release pdfplumber caches before loading OCR.
+                    page.close()
+                    p_blocks, p_grids = _extract_scanned_page(path, i)
+                    prose.extend(p_blocks)
+                    grids.extend(p_grids)
+            finally:
+                page.close()
 
     method = "mixed" if len(methods) > 1 else (methods.pop() if methods else "digital")
     stitched = stitch_tables(grids)

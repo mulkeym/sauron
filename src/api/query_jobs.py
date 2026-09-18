@@ -53,6 +53,7 @@ class QueryJob:
     step: str = "queued"
     answer: str | None = None
     citations: list[dict] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     cached: bool = False
     cached_query: str | None = None
     error: str | None = None
@@ -91,7 +92,7 @@ class QueryJobQueue:
         expired = [
             t for t, j in self._jobs.items()
             if j.status in _TERMINAL and j.completed_at is not None
-            and now - j.completed_at > self._ttl
+            and now - j.completed_at >= self._ttl
         ]
         for t in expired:
             del self._jobs[t]
@@ -195,14 +196,8 @@ class QueryJobQueue:
                     ),
                     timeout=self._job_timeout,
                 )
-                citation_dicts = [
-                    {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
-                     "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
-                     "relevance": c.relevance, "figure_id": c.figure_id,
-                     "section_title": c.section_title, "caption": c.caption,
-                     "slide": c.slide}
-                    for c in result.citations
-                ]
+                citation_dicts = [c.model_dump() for c in result.citations]
+                job.warnings = result.warnings
                 self.complete(token, answer=result.answer, citations=citation_dicts,
                               cached=result.cached, cached_query=result.cached_query)
                 strategy = result.query_type or ""

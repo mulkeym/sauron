@@ -8,11 +8,20 @@ from src.knowledge.categorizer import CategorizationResult
 FIXTURES = Path(__file__).parent.parent.parent / "test_fixtures"
 
 
+@pytest.fixture(autouse=True)
+def extraction_transport(monkeypatch):
+    from src.ingestion.prepared import prepare_document
+    monkeypatch.setattr("src.ingestion.pipeline.extract_in_worker", prepare_document)
+
+
 @pytest.fixture
-def mock_deps():
+def mock_deps(monkeypatch, tmp_path):
     mock_vector_store = MagicMock()
     mock_metadata_store = AsyncMock()
-    mock_embed = MagicMock(return_value=[[0.1] * 1024])
+    mock_embed = MagicMock(side_effect=lambda texts, *a, **k: [[0.1] * 1024 for _ in texts])
+    monkeypatch.setattr("src.generation.llm_client.generate", lambda **kwargs: "A document summary")
+    monkeypatch.setattr("src.knowledge.graph_rag.insert_document", AsyncMock())
+    monkeypatch.setattr("src.config.settings.tabular_duckdb_path", str(tmp_path / "tables.duckdb"))
     return mock_vector_store, mock_metadata_store, mock_embed
 
 
@@ -30,7 +39,9 @@ async def test_ingest_pdf(mock_deps):
     assert isinstance(result, IngestResult)
     assert result.doc_type == "pdf"
     assert result.chunk_count > 0
-    vector_store.upsert.assert_called_once()
+    tiers = {m.chunk_size_tier for call in vector_store.upsert.call_args_list
+             for m in call.kwargs["metadatas"]}
+    assert tiers == {"small", "medium", "large", "xlarge"}
     metadata_store.add_document.assert_called_once()
 
 
@@ -69,28 +80,17 @@ async def test_ingest_auto_categorizes(mock_deps):
 
 
 @pytest.mark.asyncio
-async def test_ingest_extracts_entities(mock_deps):
+async def test_ingest_preserves_knowledge_graph_indexing(mock_deps):
     vector_store, metadata_store, mock_embed = mock_deps
-    metadata_store.add_entity = AsyncMock(return_value=1)
-    metadata_store.add_mention = AsyncMock()
-    metadata_store.add_relationship = AsyncMock()
-
-    from src.knowledge.extractor import ExtractionResult
-    mock_extraction = ExtractionResult(
-        entities=[{"name": "Mike", "type": "person"}, {"name": "Policy 4.2", "type": "policy"}],
-        relationships=[{"source": "Policy 4.2", "target": "expense reporting", "type": "governs"}],
-        sections=[],
-    )
-
-    with patch("src.ingestion.pipeline.embed_texts", mock_embed):
-        with patch("src.ingestion.pipeline.extract_entities", return_value=mock_extraction):
-            result = await ingest_document(
-                file_path=FIXTURES / "sample.pdf", acl_groups=["finance"],
-                uploaded_by="mike", vector_store=vector_store, metadata_store=metadata_store,
-            )
+    with patch("src.ingestion.pipeline.embed_texts", mock_embed), \
+         patch("src.knowledge.graph_rag.insert_document", new_callable=AsyncMock) as insert:
+        result = await ingest_document(
+            file_path=FIXTURES / "sample.pdf", acl_groups=["finance"],
+            uploaded_by="mike", vector_store=vector_store, metadata_store=metadata_store,
+        )
     assert result.chunk_count > 0
-    metadata_store.add_entity.assert_called()
-    metadata_store.add_mention.assert_called()
+    insert.assert_awaited_once()
+    assert insert.call_args.kwargs["doc_id"] == result.doc_id
 
 
 @pytest.mark.asyncio
@@ -305,10 +305,10 @@ async def test_pdf_figure_has_page_chunk_and_ordered_kg(monkeypatch):
         ],
         method="mixed", figure_records=[record],
     )
-    monkeypatch.setattr(pipeline, "extract_pdf", lambda path: base)
+    monkeypatch.setattr("src.ingestion.pdf_extract.extract_pdf", lambda path: base)
     monkeypatch.setattr(
         "src.ingestion.figure_extract.enrich_pdf_with_figures",
-        lambda path, extracted: enriched,
+        lambda path, extracted, **kwargs: enriched,
     )
 
     captured = []

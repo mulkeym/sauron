@@ -1,9 +1,26 @@
 # src/config.py
 from __future__ import annotations
 from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from typing import Literal
 
 
 class Settings(BaseSettings):
+    @field_validator("*")
+    @classmethod
+    def nonnegative_numbers(cls, value, info):
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value < 0:
+            raise ValueError("Numeric settings must be nonnegative")
+        import math
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("Numeric settings must be finite")
+        positive = {"llm_concurrency", "max_parallel_ingestion", "max_parallel_async_query",
+                    "embedding_batch_size", "vllm_request_timeout", "llm_max_context",
+                    "llm_max_output_tokens", "chunk_size", "max_async_query_jobs"}
+        if info.field_name in positive and value == 0:
+            raise ValueError("This setting must be greater than zero")
+        return value
+
     # LLM
     vllm_base_url: str = "https://api.openai.com/v1"
     vllm_model_name: str = "gpt-4.1-mini"
@@ -12,7 +29,7 @@ class Settings(BaseSettings):
     ssl_verify: bool = True  # set to False for self-signed certs
 
     # Embeddings
-    embedding_mode: str = "local"  # "local" (sentence-transformers, no server needed) or "api" (external endpoint)
+    embedding_mode: Literal["local", "api"] = "local"  # local model or external endpoint
     embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint (only used when mode=api)
     embedding_model_name: str = "nomic-ai/nomic-embed-text-v1"  # local default; set to API model name when mode=api
     embedding_batch_size: int = 64  # batch size for local embedding (CPU)
@@ -49,11 +66,25 @@ class Settings(BaseSettings):
     mcp_enabled: bool = True
     mcp_path: str = "/mcp"
     mcp_stateless_http: bool = True
-    # OpenWebUI JWT forwarding is paused until an IdP is wired. The secret is
-    # kept so we can re-enable verification without a settings rename.
+    # When OpenWebUI forwarding is enabled, it signs user identity with this
+    # shared secret and sends it in X-OpenWebUI-User-Jwt. Operators may set it
+    # in the environment or the protected, owner-readable admin settings file.
     mcp_openwebui_jwt_secret: str = ""
-    # Trusted identity headers: accepted only after X-API-Key validates.
-    mcp_openwebui_username_header: str = "X-Sauron-Username"
+    mcp_openwebui_trust_headers: bool = Field(
+        default=True,
+        title="Trust OpenWebUI user headers",
+        description="Accept a forwarded username without a JWT on MCP and chat-completion requests. "
+        "A valid Sauron API key is still required; its holder can assert usernames and groups. "
+        "Keep the connector key private to your trusted OpenWebUI backend.",
+    )
+    mcp_openwebui_username_header: str = Field(
+        default="X-Sauron-Username",
+        title="OpenWebUI username header",
+        description="Header carrying the username when trusted user headers are enabled. "
+        "In OpenWebUI, set its value to {{USER_NAME}} or {{USER_EMAIL}}.",
+        min_length=1,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+    )
     mcp_openwebui_groups_header: str = "X-Sauron-User-Groups"
     # "ALL" is Sauron's superuser ACL. Never grant it from a forwarded group
     # name unless an operator explicitly opts in.
@@ -64,6 +95,12 @@ class Settings(BaseSettings):
     mcp_alt_port: int = 8091
     # Concurrency
     max_parallel_ingestion: int = 3  # concurrent file ingestion jobs
+    # Native file parsers run serially in disposable child processes. These
+    # limits are separate from the concurrency of indexing/LLM work above.
+    extraction_work_dir: str = "data/extraction"
+    extraction_timeout_seconds: int = Field(default=1200, ge=1)
+    extraction_memory_mb: int = Field(default=4096, ge=128)
+    extraction_max_result_mb: int = Field(default=32, ge=1)
     max_parallel_async_query: int = 3  # concurrent async query worker slots
     async_query_ttl_seconds: int = 3600  # how long finished async jobs are retained
     max_async_query_jobs: int = 100  # cap on tracked async jobs (reject new submits past this)
@@ -109,6 +146,10 @@ class Settings(BaseSettings):
     sql_schema_prompt_budget_chars: int = 600000  # hard cap on the text-to-SQL schema prompt (~150K tokens, safely under a 256K-token context); over this, value dumps are dropped, then tables truncated. Safety net behind the router.
 
     # Relevance feedback
+    query_cache_mode: Literal["off", "exact", "semantic"] = "off"
+    query_cache_ttl_seconds: int = Field(default=3600, ge=1, le=604800)
+    query_cache_min_confidence: float = Field(default=0.95, ge=0, le=1)
+    answer_domain_instructions: str = Field(default="", max_length=20000)
     feedback_enabled: bool = True
     feedback_similarity_threshold: float = 0.85
     feedback_boost_cited: float = 0.3
@@ -182,7 +223,7 @@ class Settings(BaseSettings):
 def _load_persisted_settings(s: Settings) -> Settings:
     """Apply settings saved via the admin UI (data/settings.json).
 
-    These override docker-compose defaults but NOT explicit host env vars.
+    Persisted admin settings override environment defaults.
     The file lives on the mounted volume so it survives container restarts.
     """
     import json
@@ -197,10 +238,12 @@ def _load_persisted_settings(s: Settings) -> Settings:
     except Exception:
         return s
 
-    for key, value in saved.items():
-        if hasattr(s, key):
-            setattr(s, key, value)
-    return s
+    try:
+        return Settings.model_validate({**s.model_dump(), **saved})
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Invalid persisted settings; using environment defaults")
+        return s
 
 
 settings = _load_persisted_settings(Settings())

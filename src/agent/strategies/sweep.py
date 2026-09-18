@@ -17,6 +17,8 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     For date-specific queries, also filters by filename to narrow down results.
     """
     question = state["question"]
+    from src.agent.profiles import retrieval_limit
+    top_k = retrieval_limit(state, "discovery", top_k)
     user_groups = state["user_groups"]
     doc_ids = state.get("allowed_doc_ids")
 
@@ -31,6 +33,8 @@ async def retrieve_sweep(state: AgentState, vector_store: VectorStore, top_k: in
     # Step 1: Search for relevant documents
     # Date filter adds docs that mention the date — used as a boost, not exclusive
     date_filter_docs = _extract_date_filter(question, vector_store, user_groups)
+    if doc_ids is not None and date_filter_docs:
+        date_filter_docs = [d for d in date_filter_docs if d in doc_ids]
     if date_filter_docs:
         logger.info(f"Sweep: date filter found {len(date_filter_docs)} docs mentioning the date")
 

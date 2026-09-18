@@ -13,9 +13,11 @@ async def retrieve_cross_reference(
     schema_registry: SchemaRegistry,
 ) -> dict:
     question = state["question"]
+    from src.agent.profiles import retrieval_limit, structured_enabled
+    from src.retrieval.query_scope import scoped_schemas
     user_groups = state["user_groups"]
     doc_ids = state.get("allowed_doc_ids")
-    sub_tasks = state.get("sub_tasks", [question])
+    sub_tasks = state.get("sub_tasks") or [question]
 
     # Embed all sub-tasks in one batch (model isn't thread-safe for concurrent calls)
     from src.ingestion.embedder import embed_texts
@@ -25,7 +27,7 @@ async def retrieve_cross_reference(
     async def search_task(task, vector):
         return vector_store.hybrid_search_reranked(
             vector=vector, text_query=task,
-            user_groups=user_groups, top_k=30, tier="medium", doc_ids=doc_ids,
+            user_groups=user_groups, top_k=retrieval_limit(state, "lookup", 30), tier="medium", doc_ids=doc_ids,
         )
 
     all_results = await asyncio.gather(
@@ -50,13 +52,13 @@ async def retrieve_cross_reference(
 
     sql_results = []
     structured_trace = None
-    has_schemas = len(schema_registry.list_for_user(user_groups)) > 0
+    has_schemas = structured_enabled(state) and len(scoped_schemas(schema_registry, state)) > 0
     if has_schemas:
         analytical_result = await retrieve_analytical(state, vector_store=vector_store, schema_registry=schema_registry)
         sql_results = analytical_result.get("sql_results", [])
         structured_trace = analytical_result.get("structured_trace")
 
-    unique_chunks = vector_store.expand_window(unique_chunks, window=2)
+    unique_chunks = vector_store.expand_window(unique_chunks, window=retrieval_limit(state, "window", 2))
     result = {
         "retrieved_chunks": unique_chunks,
         "sql_results": sql_results,

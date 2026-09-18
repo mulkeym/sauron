@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.ingestion.embedder import embed_query
 from src.generation.llm_client import generate
@@ -28,6 +28,7 @@ class RAGResponse:
     cached: bool = False
     cached_query: str | None = None
     query_type: str = ""
+    warnings: list[str] = field(default_factory=list)
 
 
 def rag_query(question, user_groups, vector_store, top_k=10):
@@ -88,6 +89,8 @@ async def _agent_query_streamed_bound(
     question: str, user_groups: list[str], vector_store, schema_registry,
     metadata_store=None, step_callback=None, skip_cache: bool = False,
 ) -> RAGResponse:
+    from src.agent.profiles import active_snapshot
+    answer_profile = active_snapshot()
     # Surface the cache lookup as the first observable step. It runs before the
     # graph, so it is not a graph node — emit it explicitly (the spec's data flow
     # lists "checking cache" as a step callers should see).
@@ -95,26 +98,12 @@ async def _agent_query_streamed_bound(
         step_callback("cache_check")
     # Shared cache decision (embed -> lookup -> LLM applicability judge) — same
     # path the admin playground uses, so the two cannot diverge.
-    decision = await judged_cache_lookup(question, user_groups, skip_cache=skip_cache)
+    decision = await judged_cache_lookup(question, user_groups, skip_cache=skip_cache, metadata_store=metadata_store, answer_profile=answer_profile)
     if decision.accepted:
         cached = decision.cached
-        citations = [
-            Citation(
-                doc_id=c.get("doc_id", ""), filename=c.get("filename", ""),
-                doc_type=c.get("doc_type", ""), chunk_index=c.get("chunk_index", 0),
-                page=c.get("page"), snippet=c.get("snippet", ""),
-                relevance=c.get("relevance", 0.0),
-                figure_id=c.get("figure_id"), section_title=c.get("section_title"),
-                caption=c.get("caption"),
-                slide=c.get("slide"),
-            )
-            for c in cached.get("citations", [])
-        ]
-        return RAGResponse(
-            answer=cached["answer"], citations=citations,
-            cached=True, cached_query=cached.get("cached_query"),
-            query_type="cache",
-        )
+        citations = [Citation(**c) for c in cached.get("citations", [])]
+        return RAGResponse(answer=cached["answer"], citations=citations,
+                           cached=True, cached_query=cached.get("cached_query"), query_type="cache")
 
     # run_agent_streamed is imported lazily to avoid a circular import: src.agent.graph
     # imports RAGResponse from this module. Tests patch src.agent.graph.run_agent_streamed.
@@ -123,23 +112,17 @@ async def _agent_query_streamed_bound(
         question=question, user_groups=user_groups, vector_store=vector_store,
         schema_registry=schema_registry, metadata_store=metadata_store,
         step_callback=step_callback,
+        answer_profile=answer_profile,
     )
 
-    if decision.query_vector is not None:
+    if decision.query_vector is not None and not result.warnings:
         try:
-            citation_dicts = [
-                {"doc_id": c.doc_id, "filename": c.filename, "doc_type": c.doc_type,
-                 "chunk_index": c.chunk_index, "page": c.page, "snippet": c.snippet,
-                 "relevance": c.relevance, "figure_id": c.figure_id,
-                 "section_title": c.section_title, "caption": c.caption,
-                 "slide": c.slide}
-                for c in result.citations
-            ]
+            citation_dicts = [c.model_dump() for c in result.citations]
             source_ids = list({c.doc_id for c in result.citations})
             cache_store(
                 query_text=question, query_vector=decision.query_vector,
                 answer=result.answer, citations=citation_dicts,
-                user_groups=user_groups, source_doc_ids=source_ids,
+                user_groups=user_groups, source_doc_ids=source_ids, scope_revision=decision.scope_revision,
             )
         except Exception:
             pass

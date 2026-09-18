@@ -199,6 +199,8 @@ async def retrieve_map_reduce(
 ) -> dict:
     """Map-reduce: extract from each doc individually, then combine."""
     question = state["question"]
+    from src.agent.profiles import retrieval_limit
+    top_k = retrieval_limit(state, "discovery", top_k)
     user_groups = state["user_groups"]
     doc_ids = state.get("allowed_doc_ids")
 
@@ -208,6 +210,8 @@ async def retrieve_map_reduce(
     # Check for date-specific query
     from src.agent.strategies.sweep import _extract_date_filter
     date_filter_docs = _extract_date_filter(question, vector_store, user_groups)
+    if doc_ids is not None and date_filter_docs:
+        date_filter_docs = [d for d in date_filter_docs if d in doc_ids]
 
     if date_filter_docs:
         logger.info(f"Map-reduce: date filter found {len(date_filter_docs)} docs mentioning the date")
@@ -279,13 +283,13 @@ async def retrieve_map_reduce(
     if metadata_store:
         q_terms = _query_terms(question)
         all_docs = await metadata_store.list_documents(user_groups)
-        allowed_set = set(doc_ids) if doc_ids else None
+        allowed_set = set(doc_ids) if doc_ids is not None else None
 
         # Collect metadata for every candidate, and discover docs that vector
         # search missed but whose metadata contains a significant query term.
         existing_candidates = set(candidate_doc_ids)
         for doc in all_docs:
-            if allowed_set and doc.doc_id not in allowed_set:
+            if allowed_set is not None and doc.doc_id not in allowed_set:
                 continue  # not in selected dataset
             meta = getattr(doc, 'metadata_tags', {}) or {}
             if doc.doc_id not in existing_candidates:

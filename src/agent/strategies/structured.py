@@ -583,7 +583,8 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
     user_groups = state["user_groups"]
 
     try:
-        schemas = schema_registry.list_for_user(user_groups)
+        from src.retrieval.query_scope import scoped_schemas
+        schemas = scoped_schemas(schema_registry, state)
         scored = tables_relevant_scored(question, schemas)
     except Exception:
         return {}   # gate/registry error -> RAG-only sweep (fail-open)
@@ -618,7 +619,7 @@ async def retrieve_structured(state, vector_store, schema_registry) -> dict:
     try:
         qv = await asyncio.to_thread(embed_query, question)
         chunks = vector_store.search(
-            vector=qv, user_groups=user_groups, top_k=20, tier="table_row",
+            vector=qv, user_groups=user_groups, top_k=20, tier="table_row", doc_ids=state.get("allowed_doc_ids"),
         )
     except Exception:
         chunks = []

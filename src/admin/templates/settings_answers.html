@@ -1,0 +1,47 @@
+{% extends "settings_base.html" %}
+{% block title %}Answers &amp; Evidence - Settings{% endblock %}
+{% block settings_content %}
+<h1>Answers &amp; Evidence</h1>
+<p class="section-desc">Control answer guidance and reuse. Source access checks and evidence reference validation always apply.</p>
+<p class="section-desc">Use <a href="/admin/settings/profiles">Answer Profiles</a> to edit prompts, retrieval and response policies, test a draft, and publish or restore a revision. Team instructions below apply to every profile.</p>
+<form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+  <div class="settings-section">
+    <h3>Answer guidance</h3>
+    <div class="form-group">
+      <label for="answer_domain_instructions">Team instructions</label>
+      <textarea id="answer_domain_instructions" name="answer_domain_instructions" rows="9" maxlength="20000" aria-describedby="instructions-help" style="width:100%;">{{ settings.answer_domain_instructions }}</textarea>
+      <p id="instructions-help" class="section-desc">Describe your terminology, preferred answer format, and when to ask for platform, firmware, environment, or site details. Changes apply to new answers and invalidate older cache entries.</p>
+    </div>
+    <details>
+      <summary>View the current system prompt</summary>
+      <pre style="white-space:pre-wrap;overflow-wrap:anywhere;">{{ resolved_prompt }}</pre>
+      <p class="section-desc">Reload this page after saving to refresh the prompt preview.</p>
+    </details>
+  </div>
+  <div class="settings-section">
+    <h3>Answer cache</h3>
+    <div class="form-group">
+      <label for="query_cache_mode">Reuse policy</label>
+      <select id="query_cache_mode" name="query_cache_mode" aria-describedby="cache-help">
+        <option value="off" {{ 'selected' if settings.query_cache_mode == 'off' }}>Off — retrieve evidence for every question</option>
+        <option value="exact" {{ 'selected' if settings.query_cache_mode == 'exact' }}>Exact question and source scope</option>
+        <option value="semantic" {{ 'selected' if settings.query_cache_mode == 'semantic' }}>Similar questions, with an applicability check</option>
+      </select>
+      <p id="cache-help" class="section-desc">Off is the default for operational documentation. Reuse requires unchanged documents, access scope, and configuration. An unavailable check always falls back to fresh retrieval.</p>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="query_cache_ttl_seconds">Maximum age (seconds)</label>
+        <input id="query_cache_ttl_seconds" name="query_cache_ttl_seconds" type="number" min="1" max="604800" value="{{ settings.query_cache_ttl_seconds }}">
+      </div>
+      <div class="form-group">
+        <label for="query_cache_min_confidence">Minimum applicability score</label>
+        <input id="query_cache_min_confidence" name="query_cache_min_confidence" type="number" min="0" max="1" step="0.01" value="{{ settings.query_cache_min_confidence }}" aria-describedby="confidence-help">
+        <p id="confidence-help" class="section-desc">Used for similar-question reuse only. This score does not measure answer correctness.</p>
+      </div>
+    </div>
+  </div>
+  <button type="submit">Save answer settings</button>
+  <span id="save-status" role="status" aria-live="polite"></span>
+</form>
+{% endblock %}

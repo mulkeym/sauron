@@ -51,6 +51,7 @@ def build_catalog_connection(docs, dataset_names=None, datasets=None, categories
     import duckdb
     dataset_names = dataset_names or {}
     con = duckdb.connect(":memory:", config={"enable_external_access": False})
+    con.execute("SET TimeZone='UTC'")
     con.execute("""CREATE TABLE files (
         doc_id VARCHAR, filename VARCHAR, doc_type VARCHAR, dataset VARCHAR,
         category VARCHAR, uploaded_by VARCHAR, created_at TIMESTAMPTZ,
@@ -137,7 +138,9 @@ async def retrieve_metadata_catalog(state, metadata_store=None, generate_fn=None
         from src.api.routes_ingest import get_metadata_store
         metadata_store = get_metadata_store()
 
-    docs = await metadata_store.list_documents(user_groups)   # ACL boundary
+    docs = await metadata_store.list_documents(None if "ALL" in user_groups else user_groups)
+    if state.get("allowed_doc_ids") is not None:
+        docs = [d for d in docs if d.doc_id in state["allowed_doc_ids"]]
     try:
         datasets = await metadata_store.list_datasets(active_only=True)
     except Exception:
@@ -146,6 +149,8 @@ async def retrieve_metadata_catalog(state, metadata_store=None, generate_fn=None
         categories = await metadata_store.list_categories()
     except Exception:
         categories = []
+    datasets = [ds for ds in datasets if ds.id in {d.dataset_id for d in docs}]
+    categories = [c for c in categories if c.name in {d.category for d in docs}]
     dataset_names = {getattr(ds, "id", 0): ds.name for ds in datasets}
 
     trace = StructuredLookupTrace(query_type="metadata")

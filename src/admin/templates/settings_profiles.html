@@ -1,0 +1,94 @@
+{% extends "settings_base.html" %}
+{% block title %}Answer Profiles - Settings{% endblock %}
+{% block settings_content %}
+<link rel="stylesheet" href="/admin/static/answer_profiles.css">
+<div id="profile-page">
+  <h1>Answer Profiles</h1>
+  <p>Shape how Sauron searches and answers. Test a working draft, then publish it for new questions.</p>
+  <p id="active-profile" class="profile-banner"></p>
+  <div class="profile-toolbar">
+    <div class="form-group"><label for="profile-picker">Working profile</label><select id="profile-picker"></select></div>
+    <button id="new-profile" type="button" class="btn-secondary">Create a copy</button>
+    <button id="reload-profiles" type="button" class="btn-secondary">Reload saved profiles</button>
+  </div>
+  <p id="profile-status" role="status" aria-live="polite"></p>
+  <div id="profile-error" role="alert" tabindex="-1" hidden></div>
+  <div class="profile-layout">
+    <div>
+      <form id="profile-editor">
+        <section class="settings-section">
+          <h2>Working draft</h2>
+          <p id="draft-status" class="profile-help"></p>
+          <div class="form-group"><label for="profile-name">Name</label><input id="profile-name" name="name" maxlength="100" required></div>
+          <div class="form-group"><label for="profile-description">Description</label><input id="profile-description" name="description" maxlength="500"></div>
+          <div class="form-group"><label for="profile-instructions">Answer instructions</label><textarea id="profile-instructions" name="instructions" rows="8" maxlength="20000" aria-describedby="instruction-help"></textarea>
+            <p id="instruction-help" class="profile-help">Set terminology, tone, and procedure format. Shared team instructions also apply. Source access checks and citation rules always remain in effect.</p></div>
+          <details id="prompt-disclosure"><summary>View the full prompts</summary>
+            <button id="refresh-prompt" type="button" class="btn-secondary">Refresh from draft</button>
+            <h3>Answer prompt</h3><pre id="resolved-prompt">Open to compose this draft's prompt.</pre>
+            <h3>Routing prompt</h3><pre id="routing-prompt"></pre>
+            <p class="profile-help">Automatic routing also receives the tables available to the requesting user's groups.</p>
+          </details>
+        </section>
+        <section class="settings-section">
+          <h2>Retrieval</h2>
+          <div class="form-group"><label for="profile-strategy">Routing strategy</label><select id="profile-strategy" name="strategy">
+            <option value="auto">Automatic classification</option><option value="lookup">Targeted lookup</option><option value="sweep">Search across documents</option><option value="analytical">Structured database query</option><option value="cross_reference">Cross-reference sources</option><option value="temporal">Date-oriented lookup</option><option value="metadata">Document catalog</option>
+          </select></div>
+          <div class="form-group"><label for="profile-routing">Automatic routing instructions</label><textarea id="profile-routing" name="routing_instructions" rows="4" maxlength="6000" aria-describedby="routing-help"></textarea>
+            <p id="routing-help" class="profile-help">Explain when to use existing strategies. A fixed routing strategy bypasses classification and learned strategy overrides.</p></div>
+          <div class="form-group"><label for="profile-depth">Retrieval depth</label><select id="profile-depth" name="retrieval_depth" aria-describedby="depth-help"><option value="focused">Focused</option><option value="balanced">Balanced</option><option value="thorough">Thorough</option></select>
+            <p id="depth-help" class="profile-help">Focused: 15 lookup candidates / 50 discovery results. Balanced: 30 / 250. Thorough: 60 / 500. Broader searches can take longer; depth does not guarantee complete coverage.</p></div>
+          <div class="form-row">
+            <div class="form-group"><label for="profile-graph">Knowledge graph enrichment</label><select id="profile-graph" name="graph_enrichment"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+            <div class="form-group"><label for="profile-structured">Structured table lookup</label><select id="profile-structured" name="structured_lookup"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label for="profile-memory">Learned strategy overrides</label><select id="profile-memory" name="strategy_memory" aria-describedby="memory-help"><option value="false">Disabled</option><option value="true">Allow when automatic</option></select><p id="memory-help" class="profile-help">Also requires the system's Strategy Memory setting to be enabled.</p></div>
+            <div class="form-group"><label for="profile-subtasks">Maximum extra subqueries</label><input id="profile-subtasks" name="max_subtasks" type="number" min="0" max="8" required></div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>When details or evidence are missing</h2>
+          <div class="form-group"><label for="profile-clarification">Clarification behavior</label><select id="profile-clarification" name="clarification"><option value="when_needed">Ask when missing details affect the procedure</option><option value="answer_with_caveats">Give supported information with caveats</option></select></div>
+          <fieldset class="profile-fields"><legend>Details Sauron may ask for</legend>
+            <label><input type="checkbox" name="clarification_fields" value="platform"> Platform</label>
+            <label><input type="checkbox" name="clarification_fields" value="software_version"> Software version</label>
+            <label><input type="checkbox" name="clarification_fields" value="environment"> Environment</label>
+            <label><input type="checkbox" name="clarification_fields" value="site"> Site</label>
+          </fieldset>
+          <div class="form-group"><label for="profile-evidence">Insufficient evidence</label><select id="profile-evidence" name="insufficient_evidence"><option value="partial">Allow cited partial answers and identify gaps</option><option value="abstain">Abstain when the complete answer is unsupported</option></select></div>
+          <div class="profile-actions"><button id="save-draft" type="submit">Save draft</button><button id="publish-profile" type="button" class="btn-secondary" aria-describedby="publish-help">Publish saved draft</button></div>
+          <p id="publish-help" class="profile-help">Save edits before publishing. Publishing activates this profile for new MCP and API answers; questions already running keep their original revision.</p>
+        </section>
+      </form>
+      <section class="settings-section">
+        <h2>Published revisions</h2>
+        <p class="profile-help">Activate an earlier revision to roll back. The working draft is preserved.</p>
+        <div class="form-group"><label for="revision-picker">Revision</label><select id="revision-picker"></select></div>
+        <details><summary>Inspect revision settings</summary><pre id="revision-settings"></pre></details>
+        <button id="activate-revision" type="button" class="btn-secondary">Activate selected revision</button>
+        <details><summary>Publication history</summary><ul id="activation-history"></ul></details>
+      </section>
+    </div>
+    <aside class="profile-preview settings-section" aria-labelledby="preview-heading">
+      <h2 id="preview-heading">Try a question</h2>
+      <p class="profile-help">Runs the current draft against your indexed documents. Does not publish changes, reuse cached answers, or train strategy memory.</p>
+      <form id="profile-preview-form">
+        <div class="form-group"><label for="preview-question">Question</label><textarea id="preview-question" rows="4" maxlength="5000" required placeholder="How do we deploy a new branch edge?"></textarea></div>
+        <div class="form-group"><label for="preview-groups">Test as groups</label><input id="preview-groups" aria-describedby="groups-help" placeholder="engineering, network-ops"><p id="groups-help" class="profile-help">Comma-separated document ACL group names. Empty means no document access. ALL explicitly tests unrestricted access.</p></div>
+        <div class="form-group"><label for="preview-dataset">Dataset ID</label><input id="preview-dataset" type="number" min="0" value="0" aria-describedby="dataset-help"><p id="dataset-help" class="profile-help">Use 0 for all datasets accessible to these groups.</p></div>
+        <button id="run-preview" type="submit">Run draft preview</button>
+      </form>
+      <p id="preview-status" role="status" aria-live="polite">No preview yet.</p>
+      <section id="preview-result" hidden aria-label="Draft preview result">
+        <p id="preview-meta"></p><div id="preview-answer"></div>
+        <ul id="preview-warnings"></ul>
+        <h3>Evidence supplied to the model</h3><div id="preview-evidence"></div>
+      </section>
+    </aside>
+  </div>
+</div>
+<script type="application/json" id="profile-data">{{ profile_book | tojson }}</script>
+<script src="/admin/static/answer_profiles.js" defer></script>
+{% endblock %}

@@ -1,9 +1,12 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.auth.jwt import create_token
+from src.config import settings
 from src.auth.http import EndpointAuthenticationMiddleware
 from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
@@ -150,3 +153,36 @@ def test_sync_tool_retains_authenticated_request_context():
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
     assert list_sources.call_args.kwargs["user_groups"] == ["finance"]
+
+
+@pytest.mark.parametrize("groups,expected", [
+    ("finance, ALL, engineering,finance", ["finance", "engineering"]),
+    ("", []),
+])
+def test_trusted_openwebui_headers_initialize_and_scope_tool_calls(monkeypatch, groups, expected):
+    monkeypatch.setattr(settings, "mcp_openwebui_trust_headers", True)
+    monkeypatch.setattr(settings, "mcp_openwebui_jwt_secret", "")
+    monkeypatch.setattr(settings, "mcp_openwebui_allow_all_group", False)
+    metadata_store = AsyncMock()
+    metadata_store.list_documents.return_value = []
+    headers = {
+        "X-API-Key": "test-key-1",
+        "X-OpenWebUI-User-Name": "Mike",
+        "X-Sauron-User-Groups": groups,
+        "Accept": "application/json, text/event-stream",
+    }
+    with TestClient(_app(metadata_store)) as client:
+        initialized = client.post("/mcp", headers=headers, json=_request("initialize", {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "openwebui-test", "version": "1"},
+        }))
+        response = client.post("/mcp", headers=headers, json=_request("tools/call", {
+            "name": "tool_list_documents", "arguments": {},
+        }))
+        rejected = client.post("/mcp", headers={"X-API-Key": "test-key-1"},
+                               json=_request("tools/list"))
+    assert initialized.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert rejected.status_code == 401
+    metadata_store.list_documents.assert_awaited_once_with(expected)

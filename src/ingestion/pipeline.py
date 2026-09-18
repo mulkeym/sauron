@@ -3,12 +3,12 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.ingestion.parser import parse_document
+from src.ingestion.isolation import extract_in_worker
+from src.ingestion.prepared_index import index_prepared
 from src.ingestion.chunker import chunk_text
 from src.ingestion.embedder import embed_texts
-from src.ingestion.tabular_ingest import ingest_structured_sheets, ingest_grids, SPREADSHEET_DOC_TYPES
-from src.ingestion.tabular_chunker import sheets_needing_text, build_tier_chunks
-from src.ingestion.pdf_extract import extract_pdf
+from src.ingestion.tabular_ingest import SPREADSHEET_DOC_TYPES
+from src.ingestion.tabular_chunker import build_tier_chunks
 from src.retrieval.models import ChunkMetadata
 from src.retrieval.vector_store import VectorStore
 from src.db.metadata import MetadataStore
@@ -43,9 +43,8 @@ async def ingest_document(
     dataset_id=None,
 ):
     doc_id = str(uuid.uuid4())
-    parsed = parse_document(Path(file_path))
-    if original_filename:
-        parsed.filename = original_filename
+    prepared = await extract_in_worker(Path(file_path), original_filename or Path(file_path).name)
+    parsed = prepared.parsed
 
     if not category and auto_categorize:
         cat_result = categorize_document(
@@ -102,76 +101,10 @@ async def ingest_document(
     is_pdf = _is_structured_pdf(parsed.doc_type)
     is_docx = parsed.doc_type == "docx"
     is_pptx = parsed.doc_type == "pptx"
-    text_sheets = None
-    enriched_prose = None
-    figure_records = []
-    from src.config import settings as _settings
-
-    if is_spreadsheet:
-        # Structured: clean sheets -> DuckDB + schema + row narratives; messy
-        # sheets -> deterministic region narratives. Returns which clean sheets
-        # fully succeeded so we can de-dup their full text below.
-        grids, classifications, ingested = await ingest_structured_sheets(
-            file_path, doc_id, parsed.filename, parsed.doc_type,
-            acl_groups, category, vector_store, metadata_store,
-            dataset_id=dataset_id,
-        )
-        text_sheets = sheets_needing_text(grids, classifications, ingested)
-        if _settings.figure_extraction_enabled and Path(file_path).suffix.lower() in (".xlsx", ".xlsm"):
-            try:
-                from src.ingestion.figure_extract import enrich_office_document_with_figures
-                office_figures = enrich_office_document_with_figures(Path(file_path), "")
-                if office_figures.table_grids:
-                    await ingest_grids(
-                        office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
-                        acl_groups, category, vector_store, metadata_store,
-                        dataset_id=dataset_id,
-                    )
-                figure_records = office_figures.figures
-                if office_figures.enriched_text.strip():
-                    enriched_prose = (
-                        (parsed.text or "") + "\n\n## Embedded figures\n\n"
-                        + office_figures.enriched_text
-                    ).strip()
-            except Exception as fig_err:
-                logger.warning(f"Spreadsheet figure extract failed: {fig_err}")
-    elif is_pdf:
-        try:
-            extracted = extract_pdf(Path(file_path))
-            if _settings.figure_extraction_enabled:
-                from src.ingestion.figure_extract import enrich_pdf_with_figures
-                extracted = enrich_pdf_with_figures(Path(file_path), extracted)
-            await ingest_grids(
-                extracted.table_grids, doc_id, parsed.filename, parsed.doc_type,
-                acl_groups, category, vector_store, metadata_store,
-                dataset_id=dataset_id,
-            )
-            enriched_prose = "\n\n".join(b.text for b in extracted.prose_blocks)
-            figure_records = extracted.figure_records
-            logger.info(f"PDF structured extract [{parsed.filename}]: "
-                        f"{len(extracted.table_grids)} table(s), method={extracted.method}, "
-                        f"prose_blocks={len(extracted.prose_blocks)}")
-        except Exception as e:
-            logger.warning(f"PDF structured extract failed for {parsed.filename}, "
-                           f"falling back to flat text: {e}")
-            is_pdf = False   # fall back to parsed.text chunking below
-    elif (is_docx or is_pptx) and _settings.figure_extraction_enabled:
-        try:
-            from src.ingestion.figure_extract import enrich_office_document_with_figures
-            office_figures = enrich_office_document_with_figures(
-                Path(file_path), parsed.text or "", document_blocks=parsed.blocks,
-            )
-            enriched_prose = office_figures.enriched_text
-            figure_records = office_figures.figures
-            if office_figures.table_grids:
-                await ingest_grids(
-                    office_figures.table_grids, doc_id, parsed.filename, parsed.doc_type,
-                    acl_groups, category, vector_store, metadata_store,
-                    dataset_id=dataset_id,
-                )
-        except Exception as e:
-            logger.warning(f"Office figure extract failed for {parsed.filename}: {e}")
-            enriched_prose = parsed.text
+    text_sheets, enriched_prose, figure_records = await index_prepared(
+        prepared, doc_id, acl_groups, category, vector_store, metadata_store,
+        dataset_id=dataset_id,
+    )
 
     if enriched_prose and len(enriched_prose) > len(parsed.text or "") + 200:
         try:

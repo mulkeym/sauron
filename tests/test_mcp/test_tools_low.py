@@ -3,6 +3,12 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
 
 
+@pytest.fixture(autouse=True)
+def retrieval_scope(monkeypatch):
+    from src.retrieval.query_scope import QueryScope
+    monkeypatch.setattr("src.retrieval.query_scope.resolve_query_scope_sync", lambda *a, **k: QueryScope(("d1",), "test"))
+
+
 def _make_chunk(text, doc_type="pdf", filename="test.pdf", speaker=None, utterance_type=None):
     return RetrievedChunk(
         text=text,

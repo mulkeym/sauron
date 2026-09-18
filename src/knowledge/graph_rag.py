@@ -660,113 +660,58 @@ def _get_dataset_allowed_entities(ds_id: int) -> set[str] | None:
     return _files_to_allowed_entities(allowed_files)
 
 
-async def _get_allowed_filenames_for_query(user_groups: list[str] | None, dataset_id: int) -> set[str] | None:
-    """Get filenames allowed by both ACL and dataset filters.
-    Returns None if no filtering needed (ALL access, no dataset).
-    """
-    from src.db.metadata import MetadataStore
-
-    store = MetadataStore()
-    await store.init()
-
-    # Get ACL-filtered docs
-    if user_groups and "ALL" not in user_groups:
-        docs = await store.list_documents(user_groups)
-    else:
-        docs = await store.list_documents()
-
-    # Further filter by dataset
-    if dataset_id:
-        docs = [d for d in docs if d.dataset_id == dataset_id]
-
-    return {d.filename for d in docs}
+async def _get_allowed_filenames_for_query(user_groups: list[str] | None, dataset_id: int,
+                                            allowed_doc_ids=None) -> set[str]:
+    """Reject ambiguous filenames until the graph carries immutable source IDs."""
+    from src.api.routes_ingest import get_metadata_store
+    docs = await get_metadata_store().list_documents()
+    allowed_ids = set(allowed_doc_ids) if allowed_doc_ids is not None else None
+    allowed_files, denied_files = set(), set()
+    for d in docs:
+        permitted = (user_groups is not None
+            and ("ALL" in user_groups or set(user_groups).intersection(d.acl_groups))
+            and (not dataset_id or d.dataset_id == dataset_id)
+            and (allowed_ids is None or d.doc_id in allowed_ids))
+        (allowed_files if permitted else denied_files).add(d.filename)
+    return allowed_files - denied_files
 
 
 def _file_path_allowed(file_path: str, allowed_files: set[str] | None) -> bool:
-    """Check if a file_path (possibly SEP-delimited) matches allowed files."""
     if allowed_files is None:
-        return True
-    # LightRAG uses <SEP> for multi-source entities
-    paths = file_path.split("<SEP>") if "<SEP>" in file_path else [file_path]
-    return any(p.strip() in allowed_files for p in paths)
+        return False
+    paths = [p.strip() for p in file_path.split("<SEP>")]
+    return bool(paths) and all(p and p in allowed_files for p in paths)
 
 
-async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None, dataset_id: int = 0) -> dict:
-    """Query the knowledge graph with ACL and dataset filtering.
-
-    Uses aquery_data to get structured results with file_path metadata,
-    then filters entities/chunks by allowed filenames before building context.
-    """
-    rag = await get_lightrag()
-
-    top_k = 20
-    if user_groups and "ALL" not in user_groups:
-        top_k = 10
-
-    # Determine if we need file-based filtering
-    needs_filtering = dataset_id or (user_groups and "ALL" not in user_groups)
-
+async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str] | None = None,
+                      dataset_id: int = 0, allowed_doc_ids=None) -> dict:
+    """Return source-filtered graph data, without an extra answer-generation pass."""
+    empty = {"context": "", "mode": mode}
+    if not user_groups or allowed_doc_ids == []:
+        return empty
     try:
-        if needs_filtering:
-            # Use structured query so we can filter by file_path
-            allowed_files = await _get_allowed_filenames_for_query(user_groups, dataset_id)
-
-            data = await rag.aquery_data(
-                question,
-                param=QueryParam(mode=mode, top_k=top_k),
-            )
-            inner = data.get("data", {})
-
-            # Filter entities and chunks by allowed filenames
-            filtered_entities = []
-            for e in inner.get("entities", []):
-                fp = e.get("file_path", "")
-                if _file_path_allowed(fp, allowed_files):
-                    filtered_entities.append(e)
-
-            filtered_chunks = []
-            for c in inner.get("chunks", []):
-                fp = c.get("file_path", "")
-                if _file_path_allowed(fp, allowed_files):
-                    filtered_chunks.append(c)
-
-            if not filtered_entities and not filtered_chunks:
-                return {"context": "", "mode": mode}
-
-            # Build context from filtered results
-            parts = []
-            if filtered_entities:
-                parts.append("Entities:")
-                for e in filtered_entities:
-                    desc = e.get("description", "").split("<SEP>")[0]
-                    parts.append(f"- {e.get('entity_name', '')} ({e.get('entity_type', '')}): {desc}")
-            if filtered_chunks:
-                parts.append("\nRelevant excerpts:")
-                for c in filtered_chunks:
-                    content = c.get("content", "")[:500]
-                    parts.append(f"- [{c.get('file_path', '')}]: {content}")
-
-            result = "\n".join(parts)
-            logger.info(f"KG filtered: {len(filtered_entities)} entities, {len(filtered_chunks)} chunks from {len(inner.get('entities', []))} / {len(inner.get('chunks', []))}")
-        else:
-            # No filtering needed — use LLM-synthesized response for richer context
-            result = await rag.aquery(
-                question,
-                param=QueryParam(
-                    mode=mode,
-                    only_need_context=False,
-                    top_k=top_k,
-                    response_type="Brief bullet points focusing on specific names, amounts, and relationships",
-                ),
-            )
-
-        if not result or len(result.strip()) < 20:
-            return {"context": "", "mode": mode}
-
-        return {"context": result.strip(), "mode": mode}
+        allowed_files = await _get_allowed_filenames_for_query(user_groups, dataset_id, allowed_doc_ids)
+        if not allowed_files:
+            return empty
+        rag = await get_lightrag()
+        data = await rag.aquery_data(question, param=QueryParam(mode=mode, top_k=20))
+        inner = data.get("data", {})
+        # A merged description is visible only when every contributing source
+        # is visible. Missing or ambiguous provenance never grants access.
+        entities = [e for e in inner.get("entities", [])
+                    if _file_path_allowed(e.get("file_path", ""), allowed_files)]
+        chunks = [c for c in inner.get("chunks", [])
+                  if _file_path_allowed(c.get("file_path", ""), allowed_files)]
+        parts = []
+        for e in entities:
+            parts.append(f"Derived graph relationship [{e.get('file_path')}]: "
+                         f"{e.get('entity_name', '')}: {e.get('description', '')}")
+        for c in chunks:
+            parts.append(f"Source excerpt [{c.get('file_path')}]: {c.get('content', '')}")
+        return {"context": "\n".join(parts), "mode": mode}
     except Exception as e:
         logger.error(f"LightRAG query failed: {e}")
-        return {"context": "", "mode": mode, "error": str(e)}
+        return {**empty, "error": str(e)}
 
 
 async def get_graph_data(question: str, mode: str = "local") -> dict:

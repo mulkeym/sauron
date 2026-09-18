@@ -36,6 +36,13 @@ def _parse_groups(value: str) -> list[str]:
     return list(dict.fromkeys(group.strip() for group in value.split(",") if group.strip()))
 
 
+def _openwebui_groups(headers: dict[str, str]) -> list[str]:
+    groups = _parse_groups(headers.get(settings.mcp_openwebui_groups_header.lower(), ""))
+    if not settings.mcp_openwebui_allow_all_group:
+        groups = [group for group in groups if group != "ALL"]
+    return groups
+
+
 def _decode_openwebui_identity(token: str) -> dict:
     secret = settings.mcp_openwebui_jwt_secret
     if not secret:
@@ -57,60 +64,70 @@ def _decode_openwebui_identity(token: str) -> dict:
         raise MCPAuthenticationError("Invalid OpenWebUI identity token") from exc
 
 
-def _forwarded_groups(headers: dict) -> list[str]:
-    groups_header = settings.mcp_openwebui_groups_header.lower()
-    groups = _parse_groups(headers.get(groups_header, ""))
-    if not settings.mcp_openwebui_allow_all_group:
-        groups = [group for group in groups if group != "ALL"]
-    return groups
-
-
 def extract_mcp_context(headers: dict) -> MCPContext:
     """Resolve the application and user identity for one MCP HTTP request.
 
-    A valid Sauron application API key is always required. Then:
+    Supported user identities:
+    * Sauron's own Bearer JWT, used by direct Sauron clients.
+    * OpenWebUI's signed X-OpenWebUI-User-Jwt forwarding token. OpenWebUI group
+      names arrive in a separately configured templated header because its
+      forwarded JWT intentionally does not contain group claims.
+    * Explicitly enabled trusted OpenWebUI username/group headers, for clients
+      that have not configured signed identity forwarding.
 
-    1. ``Authorization: Bearer`` that verifies as a Sauron JWT (direct clients).
-       An invalid Bearer is an error; it does not fall through to headers.
-    2. Trusted identity headers from OpenWebUI (or another key-holding client):
-       username from ``mcp_openwebui_username_header``, groups from
-       ``mcp_openwebui_groups_header``.
-
-    OpenWebUI's ``X-OpenWebUI-User-Jwt`` is ignored until an IdP is wired.
-    Forwarded group headers are trusted only from a client that also possesses
-    the dedicated application credential.
+    A valid Sauron application API key is required in every case. This means
+    forwarded OpenWebUI group headers are trusted only from a client that also
+    possesses the dedicated application credential.
     """
     headers = _normalise_headers(headers)
     api_key = headers.get("x-api-key", "")
     if not api_key or not validate_api_key(api_key):
         raise MCPAuthenticationError("Invalid or missing API key", status_code=403)
 
-    auth_header = headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header.removeprefix("Bearer ")
-        try:
-            user = decode_token(token)
-        except ValueError as exc:
-            raise MCPAuthenticationError(str(exc)) from exc
+    openwebui_token = headers.get("x-openwebui-user-jwt", "")
+    if "x-openwebui-user-jwt" in headers:
+        payload = _decode_openwebui_identity(openwebui_token)
+        username = payload.get("email") or payload.get("name") or payload["sub"]
         return MCPContext(
-            username=user.username,
-            groups=list(user.groups),
+            username=str(username),
+            groups=_openwebui_groups(headers),
             api_key=api_key,
-            identity_source="sauron-jwt",
+            agent_id=str(payload["sub"]),
+            identity_source="openwebui-jwt",
         )
 
-    username_header = settings.mcp_openwebui_username_header.lower()
-    username = (headers.get(username_header, "") or "").strip()
-    if username:
+    auth_header = headers.get("authorization", "")
+    # A supplied credential must pass validation. Never fall back to unsigned
+    # headers after a missing/expired/invalid signed token in either header.
+    if "authorization" not in headers and settings.mcp_openwebui_trust_headers:
+        username = headers.get(settings.mcp_openwebui_username_header.lower(), "").strip()
+        # Keep existing OpenWebUI connector headers working after the upstream
+        # default changes to X-Sauron-Username. An explicitly configured custom
+        # header is authoritative and never falls back to a different name.
+        if not username and settings.mcp_openwebui_username_header.lower() == "x-sauron-username":
+            username = headers.get("x-openwebui-user-name", "").strip()
+        if not username:
+            raise MCPAuthenticationError("Missing OpenWebUI username header")
         return MCPContext(
             username=username,
-            groups=_forwarded_groups(headers),
+            groups=_openwebui_groups(headers),
             api_key=api_key,
-            agent_id=username,
+            agent_id=headers.get("x-openwebui-user-id", "").strip() or username,
             identity_source="openwebui-headers",
         )
-
-    raise MCPAuthenticationError("Missing user identity")
+    if not auth_header.startswith("Bearer "):
+        raise MCPAuthenticationError("Missing Bearer token")
+    token = auth_header.removeprefix("Bearer ")
+    try:
+        user = decode_token(token)
+    except ValueError as exc:
+        raise MCPAuthenticationError(str(exc)) from exc
+    return MCPContext(
+        username=user.username,
+        groups=list(user.groups),
+        api_key=api_key,
+        identity_source="sauron-jwt",
+    )
 
 
 def mcp_llm_session_kwargs() -> dict:

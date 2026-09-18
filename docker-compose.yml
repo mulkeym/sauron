@@ -34,6 +34,8 @@ services:
   # SAURON API + Admin UI + native MCP Streamable HTTP endpoint
   api:
     image: sauron:local
+    # Reap OCR/rendering grandchildren when an extraction worker is killed.
+    init: true
     build: *sauron-build
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -54,10 +56,15 @@ services:
       - MCP_PATH=${MCP_PATH:-/mcp}
       - MCP_STATELESS_HTTP=${MCP_STATELESS_HTTP:-true}
       - MCP_OPENWEBUI_JWT_SECRET=${MCP_OPENWEBUI_JWT_SECRET:-}
+      - MCP_OPENWEBUI_TRUST_HEADERS=${MCP_OPENWEBUI_TRUST_HEADERS:-true}
+      - MCP_OPENWEBUI_USERNAME_HEADER=${MCP_OPENWEBUI_USERNAME_HEADER:-X-Sauron-Username}
       - MCP_OPENWEBUI_GROUPS_HEADER=${MCP_OPENWEBUI_GROUPS_HEADER:-X-Sauron-User-Groups}
       - MCP_OPENWEBUI_ALLOW_ALL_GROUP=${MCP_OPENWEBUI_ALLOW_ALL_GROUP:-false}
       - SSL_VERIFY=${SSL_VERIFY:-true}
       - DATABASE_URL=sqlite+aiosqlite:///./data/metadata.db
+      - EXTRACTION_TIMEOUT_SECONDS=${EXTRACTION_TIMEOUT_SECONDS:-1200}
+      - EXTRACTION_MEMORY_MB=${EXTRACTION_MEMORY_MB:-4096}
+      - EXTRACTION_MAX_RESULT_MB=${EXTRACTION_MAX_RESULT_MB:-32}
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}

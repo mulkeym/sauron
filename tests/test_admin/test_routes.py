@@ -124,12 +124,12 @@ def test_knowledge_graph_filtered_by_app(client):
         store.list_applications.return_value = []
         mock_get.return_value = store
 
-        with patch("src.admin.routes._load_lightrag_graph") as mock_graph:
+        with patch("src.knowledge.graph_rag.load_graph_for_ui") as mock_graph:
             mock_graph.return_value = (
                 [{"name": "Acme Corp", "type": "organization"}, {"name": "Bob Smith", "type": "person"}],
                 [{"source": "Acme Corp", "target": "Bob Smith", "label": "employs"}],
             )
-            with patch("src.knowledge.graph_rag._get_app_allowed_entities") as mock_app_filter:
+            with patch("src.knowledge.graph_rag._get_dataset_allowed_entities") as mock_app_filter:
                 mock_app_filter.return_value = {"Acme Corp"}
                 resp = client.get("/admin/api/knowledge-graph/filtered?app_id=1")
 
@@ -146,7 +146,7 @@ def test_knowledge_graph_filtered_by_app_and_persona(client):
         store = AsyncMock()
         mock_get.return_value = store
 
-        with patch("src.admin.routes._load_lightrag_graph") as mock_graph:
+        with patch("src.knowledge.graph_rag.load_graph_for_ui") as mock_graph:
             mock_graph.return_value = (
                 [
                     {"name": "Acme Corp", "type": "organization"},
@@ -155,7 +155,7 @@ def test_knowledge_graph_filtered_by_app_and_persona(client):
                 ],
                 [],
             )
-            with patch("src.knowledge.graph_rag._get_app_allowed_entities") as mock_app:
+            with patch("src.knowledge.graph_rag._get_dataset_allowed_entities") as mock_app:
                 mock_app.return_value = {"Acme Corp", "Bob Smith"}  # app has these two
                 with patch("src.knowledge.graph_rag._get_acl_allowed_entities") as mock_acl:
                     mock_acl.return_value = {"Acme Corp", "Secret Project"}  # persona sees these two

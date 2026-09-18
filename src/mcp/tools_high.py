@@ -28,26 +28,12 @@ async def ask(
         **mcp_llm_session_kwargs(),
     )
 
-    citations = [
-        {
-            "doc_id": c.doc_id,
-            "filename": c.filename,
-            "doc_type": c.doc_type,
-            "chunk_index": c.chunk_index,
-            "page": c.page,
-            "snippet": c.snippet,
-            "relevance": c.relevance,
-            "figure_id": c.figure_id,
-            "section_title": c.section_title,
-            "caption": c.caption,
-            "slide": c.slide,
-        }
-        for c in response.citations
-    ]
+    citations = [c.model_dump() for c in response.citations]
 
     return {
         "answer": response.answer,
         "citations": citations,
+        "warnings": response.warnings,
         "retrieval_strategy": depth,
         "_call_args": {"question": full_question},
         "query_type": response.query_type,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from langgraph.graph import StateGraph, END
-from src.agent.state import AgentState, QueryType
+from src.agent.state import AgentState, QueryType, chunk_key
 from src.agent.classifier import _classify_node_factory
 from src.agent.synthesizer import synthesize_answer
 from src.agent.strategies.lookup import retrieve_lookup
@@ -15,6 +15,7 @@ from src.db.schema_registry import SchemaRegistry
 from src.generation.rag_chain import RAGResponse
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
 from src.retrieval.vector_store import VectorStore
+from src.agent.profiles import active_snapshot, profile_for_state, retrieval_limit, structured_enabled
 
 
 def _query_type_str(value) -> str:
@@ -28,6 +29,9 @@ def _skip_enrich(state) -> bool:
     skip_graph, or for METADATA (catalog) queries where graph context is noise."""
     from src.agent.state import QueryType
     if state.get("skip_graph"):
+        return True
+    profile = profile_for_state(state)
+    if profile and not profile.graph_enrichment:
         return True
     return state.get("query_type") == QueryType.METADATA
 
@@ -61,7 +65,7 @@ async def _lookup_then_structured(retry_state, vector_store, schema_registry) ->
     returns {} (no-op) when no table is relevant, so plain lookups are unchanged."""
     import asyncio
     result = await asyncio.to_thread(retrieve_lookup, retry_state, vector_store=vector_store)
-    if not result.get("sql_results"):
+    if structured_enabled(retry_state) and not result.get("sql_results"):
         struct = await retrieve_structured(retry_state, vector_store, schema_registry)
         if struct.get("sql_results"):
             result["sql_results"] = struct["sql_results"]
@@ -73,11 +77,26 @@ async def _lookup_then_structured(retry_state, vector_store, schema_registry) ->
 def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistry, metadata_store: MetadataStore | None = None, include_synthesize: bool = True):
     graph = StateGraph(AgentState)
 
+    async def scope_documents(state):
+        from src.retrieval.query_scope import resolve_query_scope
+        answer_profile = state.get("answer_profile") or active_snapshot()
+        scope = await resolve_query_scope(
+            state.get("user_groups", []), metadata_store,
+            dataset_id=state.get("dataset_id", 0),
+            allowed_doc_ids=state.get("allowed_doc_ids"),
+            mode="vector_only" if state.get("skip_graph") else "full",
+            answer_profile=answer_profile,
+        )
+        return {"allowed_doc_ids": list(scope.doc_ids), "answer_profile": answer_profile}
+
+    graph.add_node("scope", scope_documents)
     graph.add_node("classify", _classify_node_factory(schema_registry))
 
     async def retrieve(state: AgentState) -> dict:
         import logging
         retrieve_logger = logging.getLogger("retrieval")
+        if not state.get("user_groups"):
+            return {"retrieved_chunks": [], "sql_results": []}
         query_type = state.get("query_type", QueryType.LOOKUP)
         attempts = state.get("retrieval_attempts", 0)
 
@@ -96,18 +115,19 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             sweep_result, mr_result, struct_result = await _asyncio.gather(
                 retrieve_sweep(retry_state, vector_store=vector_store),
                 retrieve_map_reduce(retry_state, vector_store=vector_store),
-                retrieve_structured(retry_state, vector_store=vector_store, schema_registry=schema_registry),
+                retrieve_structured(retry_state, vector_store=vector_store, schema_registry=schema_registry)
+                if structured_enabled(retry_state) else _asyncio.sleep(0, result={}),
             )
             # Merge: map-reduce synthetic chunk + sweep raw chunks (deduplicated)
             merged_chunks = mr_result.get("retrieved_chunks", [])
-            seen_keys = {(c.metadata.doc_id, c.metadata.chunk_index) for c in merged_chunks}
+            seen_keys = {chunk_key(c) for c in merged_chunks}
             for c in sweep_result.get("retrieved_chunks", []):
-                key = (c.metadata.doc_id, c.metadata.chunk_index)
+                key = chunk_key(c)
                 if key not in seen_keys:
                     merged_chunks.append(c)
                     seen_keys.add(key)
             for c in struct_result.get("retrieved_chunks", []):
-                key = (c.metadata.doc_id, c.metadata.chunk_index)
+                key = chunk_key(c)
                 if key not in seen_keys:
                     merged_chunks.append(c)
                     seen_keys.add(key)
@@ -195,8 +215,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 return await asyncio.to_thread(
                     vector_store.hybrid_search,
                     vector=vector, text_query=task,
-                    user_groups=state.get("user_groups", ["ALL"]),
-                    top_k=10, tier="small",
+                    user_groups=state.get("user_groups", []),
+                    top_k=retrieval_limit(state, "subtask", 10), tier="small",
                     doc_ids=sub_doc_ids,
                 )
 
@@ -204,12 +224,12 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 *[search_subtask(t, v) for t, v in zip(unique_tasks, task_vectors)]
             )
 
-            existing_keys = {(c.metadata.doc_id, c.metadata.chunk_index)
+            existing_keys = {chunk_key(c)
                             for c in result.get("retrieved_chunks", [])}
             added = 0
             for task_chunks in all_subtask_results:
                 for c in task_chunks:
-                    key = (c.metadata.doc_id, c.metadata.chunk_index)
+                    key = chunk_key(c)
                     if key not in existing_keys:
                         result.setdefault("retrieved_chunks", []).append(c)
                         existing_keys.add(key)
@@ -221,11 +241,11 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         if attempts > 0:
             existing = state.get("retrieved_chunks", [])
             new_chunks = result.get("retrieved_chunks", [])
-            seen = {(c.metadata.doc_id, c.metadata.chunk_index) for c in existing}
+            seen = {chunk_key(c) for c in existing}
             for c in new_chunks:
-                if (c.metadata.doc_id, c.metadata.chunk_index) not in seen:
+                if chunk_key(c) not in seen:
                     existing.append(c)
-                    seen.add((c.metadata.doc_id, c.metadata.chunk_index))
+                    seen.add(chunk_key(c))
             result["retrieved_chunks"] = existing
 
         return result
@@ -247,9 +267,9 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             if not await is_graph_populated():
                 return {}
 
-            user_groups = state.get("user_groups", ["ALL"])
+            user_groups = state.get("user_groups", [])
             ds_id = state.get("dataset_id", 0)
-            result = await query_graph(question, mode="mix", user_groups=user_groups, dataset_id=ds_id)
+            result = await query_graph(question, mode="mix", user_groups=user_groups, dataset_id=ds_id, allowed_doc_ids=state.get("allowed_doc_ids"))
             kg_context = result.get("context", "")
 
             if not kg_context or len(kg_context.strip()) < 20:
@@ -281,7 +301,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
 
     graph.add_node("merge", merge_results)
 
-    graph.set_entry_point("classify")
+    graph.set_entry_point("scope")
+    graph.add_edge("scope", "classify")
     # After classify, run retrieve and enrich IN PARALLEL
     graph.add_edge("classify", "retrieve")
     graph.add_edge("classify", "enrich")
@@ -312,6 +333,7 @@ async def run_agent(question: str, user_groups: list[str], vector_store: VectorS
         answer=result.get("answer", "I could not find any relevant information."),
         citations=result.get("citations", []),
         query_type=_query_type_str(result.get("query_type")),
+        warnings=result.get("warnings", []),
     )
 
 
@@ -322,6 +344,7 @@ async def run_agent_streamed(
     schema_registry: SchemaRegistry,
     metadata_store: MetadataStore | None = None,
     step_callback=None,
+    answer_profile=None,
 ) -> RAGResponse:
     """Run the agent graph once, emitting step_callback(node_name) per node.
 
@@ -334,6 +357,7 @@ async def run_agent_streamed(
         query_type=None, sub_tasks=[], retrieved_chunks=[], sql_results=[],
         retrieval_attempts=0, needs_reretrieval=False, reformulated_query="",
         answer="", citations=[], warnings=[],
+        answer_profile=answer_profile or active_snapshot(),
     )
     # Inject a live progress reporter so nodes (e.g. classify) can emit sub-steps
     # synchronously as work happens — not just the per-node label LangGraph emits
@@ -345,7 +369,10 @@ async def run_agent_streamed(
     async for event in graph.astream(initial_state, stream_mode="updates"):
         for node_name, node_output in event.items():
             if isinstance(node_output, dict):
+                from src.agent.state import _merge_chunks
+                merged = _merge_chunks(final_state.get("retrieved_chunks", []), node_output.get("retrieved_chunks", []))
                 final_state.update(node_output)
+                final_state["retrieved_chunks"] = merged
             # "classify" self-reports finer sub-steps via the injected progress
             # reporter; emitting its post-node label too would duplicate
             # "classifying question" in the timeline. Other nodes keep the label.
@@ -355,6 +382,7 @@ async def run_agent_streamed(
         answer=final_state.get("answer", "I could not find any relevant information."),
         citations=final_state.get("citations", []),
         query_type=_query_type_str(final_state.get("query_type")),
+        warnings=final_state.get("warnings", []),
     )
 
 
@@ -384,6 +412,7 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
     # Stream through nodes to capture step timings
     step_start = time.time()
     prev_node = None
+    result = dict(initial_state)
     async for event in graph.astream(initial_state, stream_mode="updates"):
         now = time.time()
         for node_name, node_output in event.items():
@@ -391,6 +420,9 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
                 trace.steps.append({"step": prev_node, "time": round(now - step_start, 2), "status": "done"})
             prev_node = node_name
             step_start = now
+
+            if isinstance(node_output, dict):
+                result.update(node_output)
 
             # Capture metadata from node outputs
             if node_name == "classify":
@@ -410,7 +442,6 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
     trace.retrieval_attempts = initial_state.get("retrieval_attempts", 1)
 
     # Get the final state from the last event
-    result = await graph.ainvoke(initial_state)
     trace.chunks_retrieved = len(result.get("retrieved_chunks", []))
     trace.retrieval_attempts = result.get("retrieval_attempts", 1)
 
@@ -418,5 +449,6 @@ async def run_agent_with_trace(question: str, user_groups: list[str], vector_sto
         answer=result.get("answer", "I could not find any relevant information."),
         citations=result.get("citations", []),
         query_type=_query_type_str(result.get("query_type") or trace.query_type),
+        warnings=result.get("warnings", []),
     )
     return response, trace

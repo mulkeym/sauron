@@ -43,3 +43,9 @@ class Citation(BaseModel):
     section_title: str | None = None
     caption: str | None = None
     slide: int | None = None
+    evidence_id: str = ""
+    source_kind: str = "document"
+    source_locator: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
+    chunk_size_tier: str = ""

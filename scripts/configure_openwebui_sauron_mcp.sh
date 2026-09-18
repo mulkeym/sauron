@@ -15,15 +15,21 @@ Options:
   --groups CSV       Comma-separated Sauron ACL group names to create and assign
   --id ID            MCP connection ID (default: sauron)
   --name NAME        Display name (default: Sauron)
+  --identity-mode MODE  headers (default, API key + username + groups) or signed
   --help             Show this help
 
 SAURON_API_KEY is read from the environment. If it is unset and stdin is a
 terminal, the script prompts without echo. The key is never passed as a command
 line argument.
 
-Open WebUI must be launched with:
+For signed mode, Open WebUI must be launched with:
   ENABLE_FORWARD_USER_INFO_HEADERS=true
+  FORWARD_USER_INFO_HEADER_JWT_SECRET=<same secret as Sauron's MCP_OPENWEBUI_JWT_SECRET>
   WEBUI_SECRET_KEY=<persistent secret>
+
+For headers mode, enable MCP_OPENWEBUI_TRUST_HEADERS on Sauron (also available
+in Admin -> All Settings). No shared JWT secret or forwarding environment
+variables are required on Open WebUI; leave its JWT forwarding secret unset.
 EOF
 }
 
@@ -33,6 +39,7 @@ connection_id="sauron"
 connection_name="Sauron"
 target_user=""
 group_csv=""
+identity_mode="headers"
 
 while (($#)); do
   case "$1" in
@@ -42,10 +49,16 @@ while (($#)); do
     --groups) group_csv=${2:?missing value for --groups}; shift 2 ;;
     --id) connection_id=${2:?missing value for --id}; shift 2 ;;
     --name) connection_name=${2:?missing value for --name}; shift 2 ;;
+    --identity-mode) identity_mode=${2:?missing value for --identity-mode}; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+case "$identity_mode" in
+  signed|headers) ;;
+  *) printf '%s\n' '--identity-mode must be signed or headers.' >&2; exit 2 ;;
+esac
 
 if ! docker container inspect "$container_name" >/dev/null 2>&1; then
   printf 'Open WebUI container not found: %s\n' "$container_name" >&2
@@ -68,13 +81,22 @@ if [[ -z $target_user && -n $group_csv ]]; then
 fi
 
 forwarding=$(docker exec "$container_name" sh -c 'printf %s "${ENABLE_FORWARD_USER_INFO_HEADERS:-}"')
+identity_secret=$(docker exec "$container_name" sh -c 'if [ -n "${FORWARD_USER_INFO_HEADER_JWT_SECRET:-}" ]; then printf set; fi')
 webui_secret=$(docker exec "$container_name" sh -c 'if [ -n "${WEBUI_SECRET_KEY:-}" ]; then printf set; fi')
 
-if [[ ${forwarding,,} != true || $webui_secret != set ]]; then
+case "$forwarding" in [Tt][Rr][Uu][Ee]) forwarding=true ;; esac
+if [[ $identity_mode == signed && ( $forwarding != true || $identity_secret != set || $webui_secret != set ) ]]; then
   printf '%s\n' \
     'Open WebUI identity forwarding is not fully configured.' \
-    'Set ENABLE_FORWARD_USER_INFO_HEADERS=true and a persistent WEBUI_SECRET_KEY,' \
-    'then recreate the container.' >&2
+    'Set ENABLE_FORWARD_USER_INFO_HEADERS=true, FORWARD_USER_INFO_HEADER_JWT_SECRET,' \
+    'and a persistent WEBUI_SECRET_KEY, then recreate the container.' >&2
+  exit 1
+fi
+if [[ $identity_mode == headers && $forwarding == true && $identity_secret == set ]]; then
+  printf '%s\n' \
+    'Headers mode selected, but Open WebUI is configured to forward signed JWTs.' \
+    'Unset FORWARD_USER_INFO_HEADER_JWT_SECRET or disable automatic user-info' \
+    'forwarding, then recreate Open WebUI. The connection uses custom headers.' >&2
   exit 1
 fi
 
@@ -85,6 +107,7 @@ docker exec \
   -e SETUP_MCP_NAME="$connection_name" \
   -e SETUP_MCP_USER="$target_user" \
   -e SETUP_MCP_GROUPS="$group_csv" \
+  -e SETUP_MCP_IDENTITY_MODE="$identity_mode" \
   -e SETUP_SAURON_API_KEY="$SAURON_API_KEY" \
   "$container_name" python - <<'PY'
 import json
@@ -128,6 +151,12 @@ connections = [
         )
     )
 ]
+headers = {
+    'X-API-Key': os.environ['SETUP_SAURON_API_KEY'],
+    'X-Sauron-User-Groups': '{{USER_GROUPS}}',
+}
+if os.environ['SETUP_MCP_IDENTITY_MODE'] == 'headers':
+    headers['X-Sauron-Username'] = '{{USER_EMAIL}}'
 connections.append({
     'type': 'mcp',
     'url': mcp_url,
@@ -135,11 +164,7 @@ connections.append({
     'spec': '',
     'path': '',
     'auth_type': 'none',
-    'headers': {
-        'X-API-Key': os.environ['SETUP_SAURON_API_KEY'],
-        'X-Sauron-Username': '{{USER_EMAIL}}',
-        'X-Sauron-User-Groups': '{{USER_GROUPS}}',
-    },
+    'headers': headers,
     'key': '',
     'config': {
         'enable': True,

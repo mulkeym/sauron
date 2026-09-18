@@ -31,7 +31,8 @@ async def query(payload: QueryRequest, http: Request, user: UserContext = Depend
         span.cache_hit = bool(result.cached)
         return QueryResponse(
             answer=result.answer,
-            citations=[CitationResponse(doc_id=c.doc_id, filename=c.filename, doc_type=c.doc_type, chunk_index=c.chunk_index, page=c.page, snippet=c.snippet, relevance=c.relevance, figure_id=c.figure_id, section_title=c.section_title, caption=c.caption, slide=c.slide) for c in result.citations],
+            citations=[CitationResponse(**c.model_dump()) for c in result.citations],
+            warnings=result.warnings,
             cached=result.cached,
             cached_query=result.cached_query,
         )
@@ -72,6 +73,7 @@ async def query_async_status(token: str, user: UserContext = Depends(require_aut
         classification=job.classification,
         answer=job.answer,
         citations=[CitationResponse(**c) for c in job.citations],
+        warnings=job.warnings,
         cached=job.cached,
         cached_query=job.cached_query,
         error=job.error,

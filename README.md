@@ -150,6 +150,10 @@ The knowledge graph explorer offers two renderers selectable via a dropdown:
 
 ## Ingestion Pipeline
 
+File parsing, PDF tables, OCR and figure extraction run in disposable subprocesses
+inside the same container. A native parser crash fails that upload while the API
+continues serving. See [extraction isolation and limits](docs/ingestion-isolation.md).
+
 ```
 Parse -> Categorize -> Generate Summary -> Chunk (4 tiers) -> Embed -> Store -> Extract Entities
 ```
@@ -384,22 +388,33 @@ Details:
 | Client | User identity | ACL source |
 |--------|---------------|------------|
 | OpenWebUI | `X-Sauron-Username` (`{{USER_EMAIL}}`) | `X-Sauron-User-Groups` |
+| OpenWebUI with optional signed forwarding | `X-OpenWebUI-User-Jwt` | `X-Sauron-User-Groups` |
 | Direct Sauron client | `Authorization: Bearer <sauron-jwt>` | Signed `groups` claim |
 
 OpenWebUI's login/session token must not be sent as `Authorization: Bearer`.
 
+**Trust OpenWebUI user headers** defaults to enabled and can be changed in
+**Settings → All Settings**. Previously configured `X-OpenWebUI-User-Name`
+connectors remain supported. Supplied JWTs must validate; no shared JWT secret
+is needed when using only the username/group headers.
+
 ## Admin Dashboard
+
+**Settings → Answer Profiles** provides editable answer and routing instructions,
+retrieval depth, clarification/evidence policies, isolated draft previews, and
+published revisions with rollback. Profiles persist in the existing data volume.
+See [the answer-profile guide](docs/answer-profiles.md) for the workflow and limits.
 
 | Page | Purpose |
 |------|---------|
-| Dashboard | KPIs: documents, categories, entities, vectors, proposals |
+| Dashboard | Document/index counters and the 10 most recent queries with identity, strategy, timing, and status |
 | Documents | Upload, edit category/ACL, bulk select/delete, sortable columns |
 | Datasets | Create and manage project workspaces with default ACL groups |
 | Connectors | Web crawler configuration with inline editing, additional URLs, crawl-now button |
 | Queue | Live ingestion progress with entity/relationship counts and active crawl status |
 | Categories | Create, edit, manage document categories with NARA GRS mapping |
 | Proposals | Approve/reject auto-categorization and entity merge proposals |
-| Playground | Query testing with step trace, streaming answers, dataset and persona filters |
+| Playground | Query testing with step trace, validated answers, dataset and persona filters |
 | Knowledge Graph | GPU-accelerated (cosmos.gl) or 3D entity visualization with dataset, persona, and type filtering; click-to-highlight connections |
 | Settings | LLM/embedding endpoints (incl. ignore SSL cert errors for private CAs), Security (ACL, personas, application API keys), backup & restore |
 | Audit Log | JSONL audit trail of all operations |
@@ -507,6 +522,27 @@ Services:
 - **API + Admin UI + native MCP**: http://localhost:8080 (`/mcp` for MCP)
 
 ### OpenWebUI Integration
+
+To connect with an **API key, username, and groups without a shared JWT secret**,
+check **Trust OpenWebUI user headers** in Sauron's **Settings -> All Settings** (enabled by default)
+(or set `MCP_OPENWEBUI_TRUST_HEADERS=true`). In OpenWebUI, use MCP Streamable
+HTTP at `/mcp`, Authentication **None**, and these connection headers:
+
+```json
+{
+  "X-API-Key": "<dedicated-sauron-application-key>",
+  "X-Sauron-Username": "{{USER_EMAIL}}",
+  "X-Sauron-User-Groups": "{{USER_GROUPS}}"
+}
+```
+
+This mode trusts the API-key holder to supply the user's identity and groups.
+It needs no OpenWebUI forwarding environment variables. Leave OpenWebUI's JWT
+forwarding secret unset; supplied signed tokens are still validated. The setting
+also applies to `/v1/chat/completions`. The Docker setup helper accepts
+`--identity-mode headers` for this configuration.
+
+For the **signed identity** alternative:
 
 Use OpenWebUI 0.9.6 or newer and configure these environment variables on the
 OpenWebUI deployment:
@@ -749,3 +785,7 @@ the Sauron route to judge each step independently.
 ## License
 
 MIT
+
+### Answer trust and admin settings
+
+See [Answer trust foundation](docs/answer-trust-foundation.md) for the new Answers & Evidence and All Settings pages, scoped evidence and cache behavior, and the signed-user-identity requirement for OpenAI-compatible clients.
