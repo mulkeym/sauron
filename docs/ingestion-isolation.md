@@ -12,6 +12,11 @@ so the change does not introduce competing writers or stale process-local
 database registries. Both synchronous API uploads and queued uploads (including
 admin uploads and downloaded connector files) use this boundary.
 
+The supervisor starts the child with POSIX spawn rather than forking the
+already-initialized API. This avoids copying LanceDB and other native runtime
+state during child startup, which can otherwise exhaust a tight container or
+LXC memory budget before the worker's own limits take effect.
+
 A native crash, killed process, oversized result or timeout fails that file.
 Queued ingestion records the error, cleans up partial writes and continues to
 the next job. The synchronous API returns HTTP 422 for extraction failure.
@@ -40,10 +45,12 @@ failure handler instead of being swallowed by OCR or layout fallbacks.
 | `EXTRACTION_MAX_RESULT_MB` | `32` | Maximum JSON result accepted by the API |
 | `EXTRACTION_WORK_DIR` | `data/extraction` | Private temporary input/result directories |
 
-On Linux, the memory ceiling is also capped at half of a finite container
-memory limit, leaving room for the API. Address space includes mapped models
-and libraries, so this is stricter than resident RAM. If an OCR model cannot
-fit, the upload fails; adjust the container and extraction budgets together.
+On Linux, the memory ceiling is also capped at half of the available system or
+container memory, leaving room for the API. Sauron checks both the cgroup limit
+and `/proc/meminfo`; the latter covers Docker running inside a memory-limited
+LXC where the inner cgroup can appear unbounded. Address space includes mapped
+models and libraries, so this is stricter than resident RAM. If an OCR model
+cannot fit, the upload fails; adjust the container and extraction budgets together.
 The hard memory ceiling is Linux-specific; macOS development still gets crash
 isolation and timeouts, but does not enforce this ceiling.
 

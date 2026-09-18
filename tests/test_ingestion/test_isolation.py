@@ -63,15 +63,15 @@ async def test_hung_child_times_out_without_blocking_event_loop(tmp_path):
 
 @pytest.mark.asyncio
 async def test_cancelling_upload_reaps_child(tmp_path, monkeypatch):
-    original = asyncio.create_subprocess_exec
+    original = extraction_worker.spawn_process
     children = []
 
-    async def spawn(*args, **kwargs):
-        child = await original(*args, **kwargs)
+    def spawn(*args, **kwargs):
+        child = original(*args, **kwargs)
         children.append(child)
         return child
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(extraction_worker, "spawn_process", spawn)
     task_dir = request_dir(tmp_path / "cancel")
     task = asyncio.create_task(extraction_worker.run_task(task_dir, command=[
         sys.executable, "-c", "import time; time.sleep(30)"]))
@@ -83,6 +83,28 @@ async def test_cancelling_upload_reaps_child(tmp_path, monkeypatch):
     assert children[0].returncode == -signal.SIGKILL
     with pytest.raises(ProcessLookupError):
         os.kill(children[0].pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_fork_free_spawn(tmp_path, monkeypatch):
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("asyncio subprocess would fork the initialized API")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
+    task_dir = request_dir(tmp_path / "spawn")
+    await extraction_worker.run_task(task_dir, command=[sys.executable, "-c", "pass"])
+    assert read_json(task_dir / "status.json", 65536)["state"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_native_exit_includes_bounded_worker_diagnostic(tmp_path):
+    task_dir = request_dir(tmp_path / "diagnostic")
+    await extraction_worker.run_task(task_dir, command=[
+        sys.executable, "-c", "import sys; print('loader failed safely', file=sys.stderr); raise SystemExit(127)"])
+    error = read_json(task_dir / "status.json", 65536)["error"]
+    assert "exit code 127" in error
+    assert "loader failed safely" in error
+    assert str(task_dir) not in error
 
 
 @pytest.mark.asyncio
@@ -182,6 +204,22 @@ def test_linux_memory_ceiling_reserves_half_container_budget(monkeypatch):
     monkeypatch.setattr(resource, "setrlimit", lambda kind, limit: calls.append((kind, limit)))
     extraction_worker.apply_memory_limit(4096)
     assert calls == [(resource.RLIMIT_AS, (1024**3, 1024**3))]
+
+
+def test_linux_memory_ceiling_uses_meminfo_when_nested_cgroup_is_unbounded(monkeypatch):
+    import resource
+    calls = []
+
+    def content(path):
+        if str(path) == "/proc/meminfo":
+            return "MemTotal:        4194304 kB\nMemFree:         123 kB\n"
+        return "max"
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(Path, "read_text", content)
+    monkeypatch.setattr(resource, "setrlimit", lambda kind, limit: calls.append((kind, limit)))
+    extraction_worker.apply_memory_limit(4096)
+    assert calls == [(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))]
 
 
 @pytest.mark.asyncio

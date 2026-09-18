@@ -18,16 +18,72 @@ from src.ingestion.isolation import read_json, write_json
 logger = logging.getLogger(__name__)
 
 
+class SpawnedProcess:
+    """Small asyncio-compatible wrapper around a fork-free POSIX spawn."""
+
+    def __init__(self, pid: int):
+        self.pid = pid
+        self.returncode: int | None = None
+        self._wait_task: asyncio.Task | None = None
+
+    async def wait(self) -> int:
+        if self.returncode is not None:
+            return self.returncode
+        if self._wait_task is None:
+            self._wait_task = asyncio.create_task(asyncio.to_thread(os.waitpid, self.pid, 0))
+        _, status = await asyncio.shield(self._wait_task)
+        self.returncode = os.waitstatus_to_exitcode(status)
+        return self.returncode
+
+
+def spawn_process(command: list[str], log_path: Path, env: dict[str, str]) -> SpawnedProcess:
+    """Start the extractor without forking the initialized API process.
+
+    A normal subprocess fork can make a memory-heavy API briefly exceed its
+    container budget before exec replaces the child. posix_spawn lets libc use
+    a vfork/exec implementation and avoids copying LanceDB/native runtime state.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(log_path, flags, 0o600)
+    try:
+        actions = [
+            (os.POSIX_SPAWN_DUP2, fd, 1),
+            (os.POSIX_SPAWN_DUP2, fd, 2),
+        ]
+        if fd > 2:
+            actions.append((os.POSIX_SPAWN_CLOSE, fd))
+        spawn = os.posix_spawn if os.path.dirname(command[0]) else os.posix_spawnp
+        pid = spawn(command[0], command, env, file_actions=actions, setsid=True)
+    finally:
+        os.close(fd)
+    return SpawnedProcess(pid)
+
+
+def worker_diagnostic(path: Path, task_dir: Path, max_bytes: int = 4096) -> str:
+    """Return a bounded stderr tail without exposing the private task path."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - max_bytes))
+            text = stream.read(max_bytes).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[-12:]).replace(str(task_dir), "<extraction-task>")
+
+
 def fail(task_dir: Path, message: str) -> None:
     write_json(task_dir / "status.json", {"state": "failed", "error": message})
 
 
 async def stop_process(process) -> None:
     # Kill OCR/rendering grandchildren too; they inherit the child's session.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    if process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     await process.wait()
 
 
@@ -44,33 +100,38 @@ async def run_task(task_dir: Path, *, command: list[str] | None = None) -> None:
         timeout = max(1, float(request["timeout"]))
         write_json(task_dir / "status.json", {"state": "running", "progress": "Parsing document in isolated worker"})
         command = command or [sys.executable, "-m", "src.ingestion.extraction_worker", "--child", str(task_dir)]
-        with (task_dir / "worker.log").open("wb") as log:
-            process = await asyncio.create_subprocess_exec(
-                *command, stdout=log, stderr=log, start_new_session=True,
-                env={**os.environ, "PYTHONFAULTHANDLER": "1",
-                     "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
-                     "MKL_NUM_THREADS": "1", "TOKENIZERS_PARALLELISM": "false"},
-            )
-            started = time.monotonic()
-            while process.returncode is None:
-                if (task_dir / "cancel").exists():
-                    await stop_process(process)
-                    fail(task_dir, "Extraction cancelled")
-                    return
-                if time.monotonic() - started > timeout:
-                    await stop_process(process)
-                    fail(task_dir, f"Extraction exceeded its {timeout:g}-second time limit")
-                    return
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=0.25)
-                except asyncio.TimeoutError:
-                    pass
+        log_path = task_dir / "worker.log"
+        process = spawn_process(
+            command,
+            log_path,
+            {**os.environ, "PYTHONFAULTHANDLER": "1",
+             "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
+             "MKL_NUM_THREADS": "1", "TOKENIZERS_PARALLELISM": "false"},
+        )
+        started = time.monotonic()
+        while process.returncode is None:
+            if (task_dir / "cancel").exists():
+                await stop_process(process)
+                fail(task_dir, "Extraction cancelled")
+                return
+            if time.monotonic() - started > timeout:
+                await stop_process(process)
+                fail(task_dir, f"Extraction exceeded its {timeout:g}-second time limit")
+                return
+            try:
+                await asyncio.wait_for(process.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
         if process.returncode:
             reason = f"exit code {process.returncode}"
             if process.returncode < 0:
                 reason = signal.Signals(-process.returncode).name
             logger.error("Extractor %s stopped: %s", task_dir.name, reason)
-            fail(task_dir, f"Document extraction worker stopped ({reason}); the API remains available")
+            detail = worker_diagnostic(log_path, task_dir)
+            message = f"Document extraction worker stopped ({reason}); the API remains available"
+            if detail:
+                message += f"\nWorker diagnostic:\n{detail}"
+            fail(task_dir, message)
         elif not (task_dir / "result.json").exists():
             # Normal Python exceptions publish their own diagnostic status.
             if not (task_dir / "status.json").exists() or read_json(task_dir / "status.json", 65536)["state"] != "failed":
@@ -134,13 +195,26 @@ def apply_memory_limit(memory_mb: int) -> None:
         return
     import resource
     limit = max(128, int(memory_mb)) * 1024 * 1024
+    budgets = []
     for name in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
         try:
             budget = int(Path(name).read_text().strip())
             if 0 < budget < 2**60:
-                limit = min(limit, budget // 2)
+                budgets.append(budget)
         except (OSError, ValueError):
             pass
+    # Docker inside an LXC can report memory.max="max" even though /proc/meminfo
+    # correctly reflects the outer LXC ceiling. Include it so the extractor
+    # cannot claim the API's entire budget in that deployment shape.
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                budgets.append(int(line.split()[1]) * 1024)
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    if budgets:
+        limit = min(limit, min(budgets) // 2)
     resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 
 
