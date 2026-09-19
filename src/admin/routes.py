@@ -4,6 +4,7 @@ import json
 import logging
 import secrets
 import tempfile
+from html import escape as escape_html
 from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Request, Form, UploadFile, File, HTTPException, Depends
@@ -1012,8 +1013,8 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 </div>
                 </div>
                 <div class="result-card">
-                    <div class="result-meta">Groups: {', '.join(user_groups)} | Source: Cache</div>
-                    <div class="result-answer">{cached['answer']}</div>
+                    <div class="result-meta">Groups: {escape_html(', '.join(user_groups))} | Source: Cache</div>
+                    <div class="result-answer">{escape_html(cached['answer'])}</div>
                     <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                     {citations_html or '<p>No citations.</p>'}
                 </div>"""
@@ -1051,7 +1052,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                     </div>
                 </div>
                 <div class="result-card">
-                    <div class="result-meta">Groups: {', '.join(user_groups)} | Source: LightRAG</div>
+                    <div class="result-meta">Groups: {escape_html(', '.join(user_groups))} | Source: LightRAG</div>
                     <div class="result-answer">{html_mod.escape(answer)}</div>
                 </div>"""
                 _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
@@ -1294,7 +1295,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             evidence_warnings = "".join(f'<p class="status-err">{html_mod.escape(w)}</p>' for w in final_state.get("warnings", []))
             result_html = f"""{trace_html}{evidence_warnings}
             <div class="result-card">
-                <div class="result-meta">Groups: {', '.join(user_groups)}</div>
+                <div class="result-meta">Groups: {escape_html(', '.join(user_groups))}</div>
                 <div class="result-answer">{html_mod.escape(answer)}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
@@ -1566,8 +1567,8 @@ async def playground_query(question: str = Form(""), play_user: str = Form("mike
             return HTMLResponse(f"""
             {trace_html}
             <div class="result-card">
-                <div class="result-meta">Groups: {', '.join(user_groups)}</div>
-                <div class="result-answer">{result.answer}</div>
+                <div class="result-meta">Groups: {escape_html(', '.join(user_groups))}</div>
+                <div class="result-answer">{escape_html(result.answer)}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(result.citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
             </div>""")

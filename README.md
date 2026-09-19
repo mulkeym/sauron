@@ -812,3 +812,5 @@ See [Answer trust foundation](docs/answer-trust-foundation.md) for the new Answe
 Sauron retains extracted diagrams as persistent PNGs and returns cited images through native MCP. Use **Diagrams** in the admin portal to search, preview, and backfill images from matching original documents. See [Stored source diagrams](docs/diagrams.md) for controls, APIs, permissions and extraction limitations.
 
 Visio `.vsdx` ingestion uses libvisio/librsvg for persistent page PNGs and indexes native labels, properties, and connections. See [Visio support and rendering limits](docs/visio.md).
+
+The admin Playground renders Markdown answers and authenticated source diagrams with local parsing and sanitization. See [Playground Markdown](docs/playground-markdown.md).

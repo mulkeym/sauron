@@ -168,11 +168,12 @@ def test_knowledge_graph_filtered_by_app_and_persona(client):
     assert data["entities"][0]["name"] == "Acme Corp"
 
 
-def test_playground_query_records_activity(client):
+@pytest.mark.parametrize('answer', ['hi', '## Steps\n\n<img src=x onerror="alert(1)">'])
+def test_playground_query_records_activity(client, answer):
     from src.generation.rag_chain import RAGResponse
     from src.agent.graph import AgentTrace
     rec = AsyncMock()
-    result = RAGResponse(answer="hi", citations=[], query_type="lookup")
+    result = RAGResponse(answer=answer, citations=[], query_type="lookup")
     trace = AgentTrace(query_type="lookup", total_time=1.2)
     store = AsyncMock()
     store.resolve_play_user_groups.return_value = ["finance"]
@@ -187,6 +188,9 @@ def test_playground_query_records_activity(client):
             data={"question": "What is PTO?", "play_user": "mike"},
         )
     assert resp.status_code == 200
+    import html
+    assert html.escape(answer) in resp.text
+    assert '<img' not in resp.text
     rec.assert_awaited()
     kwargs = rec.await_args.kwargs
     assert kwargs["source"] == "playground"

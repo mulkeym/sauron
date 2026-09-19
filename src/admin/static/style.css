@@ -212,3 +212,16 @@ div.inactive-row.api-app-card {
 /* === Theme Toggle === */
 .theme-toggle { cursor: pointer; font-size: 1.2rem; background: none; border: none; color: var(--nav-link); padding: 0; margin-left: 1rem; }
 .theme-toggle:hover { color: white; }
+
+/* Playground Markdown keeps wide code/tables inside the answer card. */
+.result-answer { overflow-wrap: anywhere; min-width: 0; }
+.result-answer h1 { font-size: 1.3rem; }
+.result-answer h4, .result-answer h5, .result-answer h6 { margin: 1rem 0 .5rem; }
+.result-answer pre { background: var(--code-bg); padding: .85rem; border-radius: 4px; overflow-x: auto; white-space: pre; }
+.result-answer pre code { padding: 0; background: none; }
+.result-answer blockquote { margin: .75rem 0; padding-left: 1rem; border-left: 3px solid var(--border); color: var(--text-secondary); }
+.result-answer img { display: block; max-width: 100%; max-height: 650px; height: auto; margin: .75rem 0; }
+.markdown-table-scroll { max-width: 100%; overflow-x: auto; }
+.markdown-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .streaming-cursor { animation: none; } }
+.result-answer a { color: var(--accent); text-decoration: underline; text-underline-offset: .15em; }

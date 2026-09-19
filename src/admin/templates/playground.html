@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Playground - SAURON{% endblock %}
 {% block content %}
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/admin/static/vendor/marked.umd.js"></script>
+<script src="/admin/static/vendor/purify.min.js"></script>
+<script src="/admin/static/playground_markdown.js"></script>
 <h1>Query Playground</h1>
 
 <div class="settings-section">
@@ -149,6 +151,13 @@ function selectedPlayUser() {
     return sel.value;
 }
 
+function showPlaygroundError(target, message) {
+    const error = document.createElement('div');
+    error.className = 'status-err';
+    error.textContent = message;
+    target.replaceChildren(error);
+}
+
 async function runQuery() {
     const question = document.getElementById('play_question').value;
     if (!question.trim()) return;
@@ -171,6 +180,7 @@ async function runQuery() {
 
     const startTime = Date.now();
     let queryId;
+    let evtSource;
     let renderedStepCount = 0;
     const stepStartTimes = { classify: Date.now() };  // per-step start times
 
@@ -209,9 +219,10 @@ async function runQuery() {
                 }
                 stepStartTimes['synthesize'] = Date.now();
                 markStepActive('synthesize', '0');
-                results.innerHTML = `<div class="result-card"><div class="result-meta">Groups: ${user}</div><div class="result-answer" id="stream-output"><span class="streaming-cursor">&#9610;</span></div></div>`;
+                results.innerHTML = '<div class="result-card"><div class="result-meta"></div><div class="result-answer" id="stream-output"></div></div>';
+                results.querySelector('.result-meta').textContent = `Groups: ${user}`;
 
-                const evtSource = new EventSource(`/admin/api/playground/stream/${queryId}`);
+                evtSource = new EventSource(`/admin/api/playground/stream/${queryId}`);
                 const outputDiv = document.getElementById('stream-output');
                 let fullText = '';
 
@@ -219,60 +230,30 @@ async function runQuery() {
                     const data = JSON.parse(e.data);
                     if (data.token) {
                         fullText += data.token;
-                        if (typeof marked !== 'undefined') {
-                            outputDiv.innerHTML = marked.parse(fullText) + '<span class="streaming-cursor">&#9610;</span>';
-                        } else {
-                            outputDiv.textContent = fullText;
-                        }
+                        SauronMarkdown.render(outputDiv, fullText, {streaming: true});
                     }
                     if (data.done) {
                         evtSource.close();
-                        if (typeof marked !== 'undefined') {
-                            outputDiv.innerHTML = marked.parse(data.answer || fullText);
-                        } else {
-                            outputDiv.textContent = data.answer || fullText;
-                        }
+                        SauronMarkdown.render(outputDiv, data.answer ?? fullText);
                     }
                     if (data.error) {
                         evtSource.close();
-                        outputDiv.innerHTML = `<div class="status-err">${data.error}</div>`;
+                        showPlaygroundError(outputDiv, data.error);
                     }
                 };
                 evtSource.onerror = function() { evtSource.close(); };
             } else if (status.step === 'complete') {
                 done = true;
                 progress.style.display = 'none';
-                const currentAnswer = document.getElementById('stream-output');
-                if (currentAnswer) {
-                    const temp = document.createElement('div');
-                    temp.innerHTML = status.result_html;
-                    const trace = temp.querySelector('.trace-panel');
-                    const citationsEl = temp.querySelector('h3');
-                    let citationsHtml = '';
-                    if (citationsEl) {
-                        let node = citationsEl;
-                        while (node) {
-                            citationsHtml += node.outerHTML;
-                            node = node.nextElementSibling;
-                        }
-                    }
-                    results.innerHTML = `${trace ? trace.outerHTML : ''}
-                        <div class="result-card">
-                            <div class="result-meta">Groups: ${user}</div>
-                            <div class="result-answer">${currentAnswer.innerHTML}</div>
-                            ${citationsHtml}
-                        </div>`;
-                } else {
-                    results.innerHTML = status.result_html;
-                    const answerDiv = results.querySelector('.result-answer');
-                    if (answerDiv && typeof marked !== 'undefined') {
-                        answerDiv.innerHTML = marked.parse(answerDiv.textContent);
-                    }
-                }
+                if (evtSource) evtSource.close();
+                // The completed result is authoritative: preserve its citations,
+                // evidence warnings and authenticated figure cards after streaming.
+                results.innerHTML = status.result_html;
+                SauronMarkdown.renderResult(results);
             } else if (status.step === 'error') {
                 done = true;
                 progress.style.display = 'none';
-                results.innerHTML = `<div class="status-err">${status.error}</div>`;
+                showPlaygroundError(results, status.error);
             } else if (!streaming) {
                 // Infer active steps from completed_steps — more robust than relying on backend step field.
                 // After classify completes, retrieve + enrich run in parallel; after both, synthesize runs.
@@ -309,7 +290,9 @@ async function runQuery() {
         }
     } catch (e) {
         progress.style.display = 'none';
-        results.innerHTML = `<div class="status-err">Error: ${e.message}</div>`;
+        showPlaygroundError(results, `Error: ${e.message}`);
+    } finally {
+        if (evtSource) evtSource.close();
     }
 
     btn.disabled = false;
