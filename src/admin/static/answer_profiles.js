@@ -15,11 +15,13 @@
     }
     for (const name of bools) values[name] = values[name] === 'true';
     values.max_subtasks = Number(values.max_subtasks);
+    values.images = form.elements.namedItem('images').value;
+    values.max_images = Number(form.elements.namedItem('max_images').value);
     values.clarification_fields = [...form.querySelectorAll('[name="clarification_fields"]:checked')].map(field => field.value);
     return values;
   }
   const signature = value => JSON.stringify(Object.keys(value).sort().map(k => [k, value[k]]));
-  const dirty = () => signature(config()) !== signature(book.profiles[selected].draft);
+  const dirty = () => signature(config()) !== signature({images: 'inherit', max_images: 2, ...book.profiles[selected].draft});
   function updateControls() {
     for (const button of document.querySelectorAll('#profile-page button')) button.disabled = busy;
     for (const field of document.querySelectorAll('#profile-page input, #profile-page textarea, #profile-page select')) field.disabled = busy;
@@ -43,6 +45,8 @@
       const option = new Option(p.draft.name, id); option.selected = id === selected; return option;
     }));
     const draft = book.profiles[selected].draft;
+    form.elements.namedItem('images').value = draft.images || 'inherit';
+    form.elements.namedItem('max_images').value = draft.max_images ?? 2;
     for (const [name, value] of Object.entries(draft)) {
       if (name === 'clarification_fields') {
         for (const field of form.querySelectorAll('[name="clarification_fields"]')) field.checked = value.includes(field.value);
@@ -164,6 +168,14 @@
         $('preview-status').textContent = 'Preview complete. Nothing was published.';
         $('preview-meta').textContent = `${result.response_kind.replaceAll('_', ' ')} · ${result.query_type} · ${result.elapsed_seconds}s · ${result.chunks_retrieved} retrieved passages`;
         $('preview-answer').textContent = result.answer;
+        $('preview-images').replaceChildren(...(result.images || []).map(ref => {
+          const figure = document.createElement('figure');
+          const image = document.createElement('img'); image.loading = 'lazy'; image.style.maxWidth = '100%';
+          image.src = ref.content_url.replace('/api/v1/documents/', '/admin/api/figure-documents/');
+          image.alt = ref.caption || ref.figure_id;
+          const caption = document.createElement('figcaption'); caption.textContent = `${ref.filename} · ${ref.caption || ref.figure_id}`;
+          figure.append(image, caption); return figure;
+        }));
         $('preview-warnings').replaceChildren(...result.warnings.map(w => { const item = document.createElement('li'); item.textContent = w; return item; }));
         const cited = new Set(result.citations.map(c => c.evidence_id));
         $('preview-evidence').replaceChildren(...result.evidence.map(e => {

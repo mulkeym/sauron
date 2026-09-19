@@ -104,7 +104,9 @@ async def run_preview(profile_id: str, request: PreviewRequest):
         "retrieved_chunks": [], "sql_results": [], "retrieval_attempts": 0,
         "progress": lambda name, detail=None: progress.append(name),
     })
-    return {"answer": result.get("answer", ""), "warnings": result.get("warnings", []),
+    from src.figures.service import answer_images
+    images = await answer_images(request.question, result.get("citations", []), request.user_groups, get_metadata_store(), profile)
+    return {"images": images, "answer": result.get("answer", ""), "warnings": result.get("warnings", []),
             "response_kind": result.get("response_kind", "answer"),
             "citations": [c.model_dump() for c in result.get("citations", [])],
             "evidence": result.get("preview_evidence", []),

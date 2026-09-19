@@ -28,8 +28,8 @@ def create_mcp_server(
         return current_mcp_context().groups
 
     @mcp.tool()
-    async def tool_ask(question: str, depth: str = "thorough", context: str = "") -> dict:
-        """THIS IS THE PRIMARY TOOL — use it for ANY question about document content, contracts, policies, people, companies, awards, or facts. It searches all documents, enriches with knowledge graph data, and generates a comprehensive cited answer. Use this FIRST before trying other tools. Only use tool_list_documents or tool_lookup_document for browsing/reading specific files."""
+    async def tool_ask(question: str, depth: str = "thorough", context: str = ""):
+        """For requests to find or show a diagram without an explanation, use tool_search_diagrams and tool_get_diagram. THIS IS THE PRIMARY TOOL — use it for ANY question about document content, contracts, policies, people, companies, awards, or facts. It searches all documents, enriches with knowledge graph data, and generates a comprehensive cited answer. Use this FIRST before trying other tools. Only use tool_list_documents or tool_lookup_document for browsing/reading specific files."""
         async def _run():
             return await ask(
                 question=question,
@@ -40,10 +40,12 @@ def create_mcp_server(
                 depth=depth,
                 context=context or None,
             )
-        return await run_logged_mcp_tool(tool="ask", query_text=question, fn=_run)
+        result = await run_logged_mcp_tool(tool="ask", query_text=question, fn=_run)
+        from src.figures.service import mcp_result
+        return await mcp_result(result, user_groups(), metadata_store)
 
     @mcp.tool()
-    async def tool_summarize_topic(topic: str, format: str = "brief") -> dict:
+    async def tool_summarize_topic(topic: str, format: str = "brief"):
         """Summarize a specific topic by searching across all documents and generating a summary with source references."""
         async def _run():
             return await summarize_topic(
@@ -54,10 +56,12 @@ def create_mcp_server(
                 metadata_store=metadata_store,
                 format=format,
             )
-        return await run_logged_mcp_tool(tool="summarize_topic", query_text=topic, fn=_run)
+        result = await run_logged_mcp_tool(tool="summarize_topic", query_text=topic, fn=_run)
+        from src.figures.service import mcp_result
+        return await mcp_result(result, user_groups(), metadata_store)
 
     @mcp.tool()
-    async def tool_compare(item_a: str, item_b: str) -> dict:
+    async def tool_compare(item_a: str, item_b: str):
         """Compare and contrast two items, policies, or topics by searching the documents for both and listing differences."""
         async def _run():
             return await compare(
@@ -68,9 +72,9 @@ def create_mcp_server(
                 schema_registry=schema_registry,
                 metadata_store=metadata_store,
             )
-        return await run_logged_mcp_tool(
-            tool="compare", query_text=f"{item_a} vs {item_b}", fn=_run,
-        )
+        result = await run_logged_mcp_tool(tool="compare", query_text=f"{item_a} vs {item_b}", fn=_run)
+        from src.figures.service import mcp_result
+        return await mcp_result(result, user_groups(), metadata_store)
 
     @mcp.tool()
     async def tool_search_documents(query: str, doc_type: str = "", top_k: int = 10) -> list[dict]:
@@ -184,6 +188,28 @@ def create_mcp_server(
             "result": job.get("result"),
             "error": job.get("error"),
         }
+
+    @mcp.tool()
+    async def tool_search_diagrams(query: str, top_k: int = 5, doc_id: str = "", kind: str = "") -> list[dict]:
+        """Find source diagrams, including topologies, Venn diagrams and flowcharts. Returns ranked candidates with figure IDs and provenance, without images. Use tool_get_diagram to show a selected candidate; explain uncertainty if several topologies could apply."""
+        from src.figures.service import search_diagrams
+        async def run():
+            return await search_diagrams(query, user_groups(), vector_store, metadata_store, top_k, doc_id or None, kind or None)
+        return await run_logged_mcp_tool(tool="search_diagrams", query_text=query, fn=run)
+
+    @mcp.tool()
+    async def tool_get_diagram(doc_id: str, figure_id: str, variant: str = "preview"):
+        """Return a source diagram as an image with its caption and provenance. Requires IDs from search or citations. variant is preview or full. No answer generation is required."""
+        from src.figures.service import authorized_figure, reference, mcp_result
+        async def run():
+            doc, figure = await authorized_figure(doc_id, figure_id, user_groups(), metadata_store)
+            ref = reference(doc, figure)
+            if not ref or variant not in figure.get("assets", {}):
+                return {"error": "Figure variant not found", "images": []}
+            ref["variant"] = variant
+            return {"images": [ref]}
+        payload = await run_logged_mcp_tool(tool="get_diagram", query_text=doc_id + "/" + figure_id, fn=run)
+        return await mcp_result(payload, user_groups(), metadata_store)
 
     @mcp.resource("document://{doc_id}")
     async def resource_document(doc_id: str) -> dict:

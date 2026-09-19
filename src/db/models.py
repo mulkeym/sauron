@@ -29,6 +29,13 @@ class DocumentRecord(Base):
     )
 
 
+class FigureAssetRecord(Base):
+    __tablename__ = "figure_assets"
+    doc_id: Mapped[str] = mapped_column(String, primary_key=True)
+    figure_id: Mapped[str] = mapped_column(String, primary_key=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class Dataset(Base):
     __tablename__ = "datasets"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

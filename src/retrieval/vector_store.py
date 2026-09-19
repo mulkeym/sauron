@@ -210,7 +210,7 @@ class VectorStore:
             chunks.append(RetrievedChunk(text=row["text"], score=score, metadata=meta))
         return chunks
 
-    def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> None:
+    def upsert(self, texts: list[str], vectors: list[list[float]], metadatas: list[ChunkMetadata]) -> list[str]:
         # Avoid a second local-model load when creating the first table. The
         # isolated embedding result already provides the exact dimension.
         if vectors and settings.embedding_dimension <= 0:
@@ -228,6 +228,7 @@ class VectorStore:
             record.setdefault("utterance_type", None)
             records.append({k: v for k, v in record.items() if k in schema_names})
         self.table.add(records)
+        return [r["id"] for r in records]
 
     def search(self, vector: list[float], user_groups: list[str], top_k: int = 10, tier: str | None = None, doc_ids: list[str] | None = None) -> list[RetrievedChunk]:
         """Semantic-only vector search."""
@@ -275,6 +276,32 @@ class VectorStore:
         except Exception as e:
             logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
             return self.hybrid_search(vector, text_query, user_groups, top_k, tier, doc_ids)
+
+    def search_figures(self, vector, query, user_groups, doc_ids, top_k=5, kind=None):
+        from lancedb.rerankers import RRFReranker
+        combined = self._build_filter(user_groups, "medium", doc_ids)
+        parts = [combined, "content_type = 'figure'"]
+        if kind:
+            parts.append("figure_kind = '" + kind.replace("'", "''") + "'")
+        where = " AND ".join(p for p in parts if p)
+        try:
+            result = (self.table.search(query_type="hybrid").vector(vector).text(query)
+                      .where(where, prefilter=True).rerank(RRFReranker()).limit(top_k).to_list())
+        except Exception:
+            result = self.table.search(vector).where(where, prefilter=True).limit(top_k).to_list()
+        return self._results_to_chunks(result)
+
+    def figure_row_ids(self, doc_id):
+        where = "doc_id = '" + doc_id.replace("'", "''") + "' AND content_type = 'figure'"
+        return [r["id"] for r in self.table.search().where(where).select(["id"]).limit(10000).to_list()]
+
+    def delete_ids(self, ids):
+        if ids:
+            quoted = ",".join("'" + value.replace("'", "''") + "'" for value in ids)
+            self.table.delete("id IN (" + quoted + ")")
+
+    def delete_figures_by_doc(self, doc_id):
+        self.table.delete("doc_id = '" + doc_id.replace("'", "''") + "' AND content_type = 'figure'")
 
     def rerank_chunks(self, chunks, text_query, top_n, boosts=None):
         """Rerank the top_n highest-scoring non-synthetic chunks with a

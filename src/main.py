@@ -27,6 +27,8 @@ ADMIN_STATIC = Path(__file__).parent / "admin" / "static"
 async def lifespan(app: FastAPI):
     store = get_metadata_store()
     await store.init()
+    from src.figures.storage import FigureStore
+    await FigureStore().reconcile(store)
     # Crash recovery: LightRAG resumes PENDING/PROCESSING/FAILED docs on the
     # next ainsert. Drop any rows that no longer exist in SAURON metadata so a
     # killed mid-KG import cannot resurrect deleted PDFs beside new uploads.
@@ -120,6 +122,9 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(ingest_router)
     app.include_router(query_router)
+    from src.api.routes_figures import router as figures_router, admin_router as admin_figures_router
+    app.include_router(figures_router)
+    app.include_router(admin_figures_router)
     app.include_router(openai_compat_router)
     app.include_router(admin_router)
     if ADMIN_STATIC.exists():

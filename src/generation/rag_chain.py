@@ -29,6 +29,7 @@ class RAGResponse:
     cached_query: str | None = None
     query_type: str = ""
     warnings: list[str] = field(default_factory=list)
+    images: list[dict] = field(default_factory=list)
 
 
 def rag_query(question, user_groups, vector_store, top_k=10):
@@ -77,20 +78,32 @@ async def agent_query_streamed(
     session_headers=None, agent_id: str | None = None, session_id: str | None = None,
 ) -> RAGResponse:
     from src.generation.llm_client import llm_session
+    from src.agent.profiles import active_snapshot
+    answer_profile = active_snapshot()
     with llm_session(headers=session_headers, agent_id=agent_id, session_id=session_id):
-        return await _agent_query_streamed_bound(
+        result = await _agent_query_streamed_bound(
             question=question, user_groups=user_groups, vector_store=vector_store,
             schema_registry=schema_registry, metadata_store=metadata_store,
-            step_callback=step_callback, skip_cache=skip_cache,
+            step_callback=step_callback, skip_cache=skip_cache, answer_profile=answer_profile,
         )
+
+        from src.figures.service import answer_images
+        if metadata_store is None:
+            from src.api.routes_ingest import get_metadata_store
+            metadata_store = get_metadata_store()
+        result.images = await answer_images(question, result.citations, user_groups, metadata_store, answer_profile)
+        from src.figures.service import image_policy
+        if image_policy(question, answer_profile) and any(c.figure_id for c in result.citations) and not result.images:
+            result.warnings.append("The cited diagram image is unavailable; its indexed description is included in the evidence.")
+        return result
 
 
 async def _agent_query_streamed_bound(
     question: str, user_groups: list[str], vector_store, schema_registry,
-    metadata_store=None, step_callback=None, skip_cache: bool = False,
+    metadata_store=None, step_callback=None, skip_cache: bool = False, answer_profile=None,
 ) -> RAGResponse:
     from src.agent.profiles import active_snapshot
-    answer_profile = active_snapshot()
+    answer_profile = answer_profile or active_snapshot()
     # Surface the cache lookup as the first observable step. It runs before the
     # graph, so it is not a graph node — emit it explicitly (the spec's data flow
     # lists "checking cache" as a step callers should see).

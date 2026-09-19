@@ -132,6 +132,7 @@ async def ingest_status(job_id: str):
         "doc_id": job.doc_id or None,
         "chunk_count": job.chunk_count,
         "error": job.error or None,
+        "warnings": job.warnings,
     }
 
 
@@ -148,6 +149,7 @@ async def ingest_queue_list():
             "doc_id": j.doc_id or None,
             "chunk_count": j.chunk_count,
             "error": j.error or None,
+            "warnings": j.warnings,
         }
         for j in ingest_queue.list_jobs()
     ]

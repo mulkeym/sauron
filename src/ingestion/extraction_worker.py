@@ -229,7 +229,14 @@ def child(task_dir: Path) -> None:
         def progress(message):
             write_json(task_dir / "status.json", {"state": "running", "progress": message})
 
-        result = asyncio.run(prepare_document(source, request["filename"], progress))
+        from src.figures.storage import extraction_assets
+        with extraction_assets(task_dir / "figures") as notices:
+            result = asyncio.run(prepare_document(source, request["filename"], progress))
+            result.warnings.extend(notices)
+            figures = result.pdf.figure_records if result.pdf else (result.office.figures if result.office else [])
+            incomplete = sum(f.analysis_status != "complete" for f in figures)
+            if incomplete:
+                result.warnings.append(f"{incomplete} stored figure(s) have no completed visual analysis; source context is searchable.")
         write_json(task_dir / "result.json", encode_prepared(result))
     except Exception as exc:
         logger.exception("Document extraction failed")

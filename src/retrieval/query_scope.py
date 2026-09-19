@@ -70,7 +70,9 @@ async def resolve_query_scope(user_groups, metadata_store=None, *, dataset_id=0,
     if answer_profile is None:
         from src.agent.profiles import active_snapshot
         answer_profile = active_snapshot()
-    payload = {
+    figures = await metadata_store.list_figures(list(doc_ids)) if hasattr(metadata_store, "list_figures") else []
+    figure_revision = sorted((f["doc_id"], f["figure_id"], repr(f.get("assets", {}))) for f in figures)
+    payload = {"figure_revision": figure_revision,
         "format": 2, "documents": sorted(records, key=lambda d: d["doc_id"]),
         "groups": sorted(set(user_groups)), "allowed": doc_ids,
         "dataset_id": dataset_id, "mode": mode,

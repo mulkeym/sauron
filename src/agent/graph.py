@@ -294,9 +294,23 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     graph.add_node("enrich", enrich_with_graph)
 
     # Merge node: combine retrieve + enrich results before synthesis
-    def merge_results(state: AgentState) -> dict:
+    async def merge_results(state: AgentState) -> dict:
         """Final-N rerank over the chunks both branches produced (mutates
         scores in place; the additive reducer means we return {})."""
+        from src.figures.service import visual_question, image_policy, search_chunks
+        if image_policy(state.get("question", ""), state.get("answer_profile")) and visual_question(state.get("question", "")):
+            try:
+                figures = await search_chunks(
+                    state["question"], state.get("user_groups", []), vector_store, metadata_store,
+                    allowed_doc_ids=state.get("allowed_doc_ids"), dataset_id=state.get("dataset_id", 0),
+                )
+                combined = {**state, "retrieved_chunks": state.get("retrieved_chunks", []) + figures}
+                _rerank_merge(combined, vector_store)
+                return {"retrieved_chunks": figures}
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Supplementary figure search failed")
+                return {"warnings": ["Diagram search was unavailable; text retrieval remains available."]}
         return _rerank_merge(state, vector_store)
 
     graph.add_node("merge", merge_results)

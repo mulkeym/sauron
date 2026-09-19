@@ -18,6 +18,7 @@ class PreparedDocument:
     pdf: object = None
     office: object = None
     warnings: list[str] = field(default_factory=list)
+    figure_staging: str = ""
 
 
 async def prepare_document(path: Path, filename: str, progress_cb=None) -> PreparedDocument:

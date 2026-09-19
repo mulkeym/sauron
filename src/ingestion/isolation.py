@@ -88,7 +88,16 @@ async def _extract(file_path, filename, progress_cb, settings):
         result = await asyncio.to_thread(
             read_json, task_dir / "result.json", request["max_result_bytes"]
         )
-        return decode_prepared(result)
+        prepared = decode_prepared(result)
+        from src.figures.storage import FigureStore
+        handoff = asyncio.create_task(asyncio.to_thread(FigureStore().handoff, task_dir / "figures"))
+        try:
+            prepared.figure_staging = await asyncio.shield(handoff)
+        except asyncio.CancelledError:
+            staging = await handoff
+            FigureStore().discard(staging)
+            raise
+        return prepared
     finally:
         if task is not None:
             if not task.done():

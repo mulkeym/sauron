@@ -72,6 +72,7 @@ class QueryResponse(BaseModel):
     warnings: list[str] = []
     answer: str
     citations: list[CitationResponse]
+    images: list[dict] = []
     cached: bool = False
     cached_query: str | None = None
 
@@ -88,6 +89,7 @@ class AsyncQueryStatusResponse(BaseModel):
     classification: dict | None = None     # classify detail: query_type, reason, sub_tasks, strategy_memory
     answer: str | None = None
     citations: list[CitationResponse] = []
+    images: list[dict] = []
     cached: bool = False
     cached_query: str | None = None
     error: str | None = None

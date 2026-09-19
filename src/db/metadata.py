@@ -7,7 +7,7 @@ from src.db.models import (
     Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention,
     EntityMergeProposal, Relationship, AclGroup, Persona, Dataset, WebConnector,
     RegisteredSchema, SchemaHintRecord, ApiApplication, ApiKeyRecord,
-    QueryActivity,
+    QueryActivity, FigureAssetRecord,
 )
 from src.db.schema_registry import TableSchema, ColumnSchema
 from src.db.hint_store import SchemaHint
@@ -175,13 +175,42 @@ class MetadataStore:
             )
             await session.commit()
 
+    async def purge_orphan_figures(self):
+        async with self.session_factory() as session:
+            await session.execute(delete(FigureAssetRecord).where(FigureAssetRecord.doc_id.not_in(select(DocumentRecord.doc_id))))
+            await session.commit()
+
+    async def put_figures(self, doc_id, figures):
+        async with self.session_factory() as session:
+            await session.execute(delete(FigureAssetRecord).where(FigureAssetRecord.doc_id == doc_id))
+            for figure in figures:
+                session.add(FigureAssetRecord(doc_id=doc_id, figure_id=figure["figure_id"], details=figure))
+            await session.commit()
+
+    async def get_figure(self, doc_id, figure_id):
+        async with self.session_factory() as session:
+            row = await session.get(FigureAssetRecord, (doc_id, figure_id))
+            return dict(row.details) if row else None
+
+    async def list_figures(self, doc_ids):
+        if not doc_ids:
+            return []
+        async with self.session_factory() as session:
+            rows = await session.execute(select(FigureAssetRecord).where(FigureAssetRecord.doc_id.in_(doc_ids)))
+            return [{**r.details, "doc_id": r.doc_id} for r in rows.scalars()]
+
     async def delete_document(self, doc_id):
         async with self.session_factory() as session:
+            await session.execute(delete(FigureAssetRecord).where(FigureAssetRecord.doc_id == doc_id))
             await session.execute(delete(DocumentRecord).where(DocumentRecord.doc_id == doc_id))
             # Also clean up entity mentions and relationships for this doc
             await session.execute(delete(EntityMention).where(EntityMention.doc_id == doc_id))
             await session.execute(delete(Relationship).where(Relationship.doc_id == doc_id))
             await session.commit()
+
+        from src.figures.storage import FigureStore
+        import asyncio
+        await asyncio.to_thread(FigureStore().delete_document, doc_id)
 
     async def add_category(self, name, description, acl_groups, routing_keywords, grs_number=""):
         record = Category(name=name, description=description, acl_groups=acl_groups, routing_keywords=routing_keywords, grs_number=grs_number)

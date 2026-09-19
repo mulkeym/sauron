@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Diagrams - SAURON{% endblock %}
+{% block content %}
+<h1>Source diagrams</h1>
+<p>Find stored network topologies, Venn diagrams and other illustrations. Images retain their source document permissions.</p>
+<p><a href="/admin/settings/advanced">Storage and image limits</a> · <a href="/admin/settings/profiles">Answer attachment preferences</a></p>
+<form id="diagram-search" class="settings-section">
+  <div class="form-group"><label for="diagram-query">Search diagrams</label><input id="diagram-query" required maxlength="5000" placeholder="Branch SD-WAN failover topology"></div>
+  <div class="form-group"><label for="diagram-groups">Test as groups</label><input id="diagram-groups" value="ALL" aria-describedby="diagram-groups-help"><p id="diagram-groups-help">Comma-separated groups. ALL tests unrestricted admin access; empty means no access.</p></div>
+  <button type="submit">Search</button>
+</form>
+<p id="diagram-status" role="status" aria-live="polite"></p>
+<div id="diagram-results"></div>
+<section class="settings-section">
+  <h2>Stored images</h2>
+  <p>Documents ingested before image retention need their original source again. Backfill verifies the original file hash and preserves existing text, tables and permissions. It can take several minutes.</p>
+  <div id="diagram-inventory"></div>
+  <form id="diagram-backfill">
+    <div class="form-group"><label for="diagram-document">Document needing images</label><select id="diagram-document" required></select></div>
+    <div class="form-group"><label for="diagram-source">Matching original source file</label><input id="diagram-source" type="file" accept=".pdf,.docx,.pptx,.xlsx,.xlsm" required></div>
+    <button id="diagram-backfill-button" type="submit">Extract and store images</button>
+  </form>
+  <p id="diagram-backfill-status" role="status" aria-live="polite"></p>
+</section>
+<script src="/admin/static/diagrams.js" defer></script>
+{% endblock %}

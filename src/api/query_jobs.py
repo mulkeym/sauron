@@ -54,6 +54,7 @@ class QueryJob:
     answer: str | None = None
     citations: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    images: list[dict] = field(default_factory=list)
     cached: bool = False
     cached_query: str | None = None
     error: str | None = None
@@ -198,6 +199,7 @@ class QueryJobQueue:
                 )
                 citation_dicts = [c.model_dump() for c in result.citations]
                 job.warnings = result.warnings
+                job.images = result.images
                 self.complete(token, answer=result.answer, citations=citation_dicts,
                               cached=result.cached, cached_query=result.cached_query)
                 strategy = result.query_type or ""

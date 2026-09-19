@@ -969,6 +969,8 @@ async def playground_start(request: Request, question: str = Form(""), play_user
 
                 citations = cached.get("citations", [])
                 citations_html = "".join(_citation_html(c, i) for i, c in enumerate(citations, 1))
+                from src.figures.service import answer_images, preview_html
+                citations_html += preview_html(await answer_images(question, citations, user_groups, store, answer_profile))
 
                 result_html = f"""<div class="trace-panel">
                 <div class="trace-header">
@@ -1286,6 +1288,8 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             citations = final_state.get("citations", [])
 
             citations_html = "".join(_citation_html(c.model_dump(), i) for i, c in enumerate(citations, 1))
+            from src.figures.service import answer_images, preview_html
+            citations_html += preview_html(await answer_images(question, citations, user_groups, store, answer_profile))
 
             evidence_warnings = "".join(f'<p class="status-err">{html_mod.escape(w)}</p>' for w in final_state.get("warnings", []))
             result_html = f"""{trace_html}{evidence_warnings}
@@ -2933,6 +2937,10 @@ async def create_backup():
     """Create a tar.gz backup of all data + .env config."""
     import asyncio
 
+    from src.figures.storage import writes_active
+    from src.ingestion.queue import ingest_queue
+    if writes_active() or ingest_queue.has_active_jobs():
+        return HTMLResponse('<span class="status-err">Wait for ingestion or figure backfill before creating a backup.</span>', status_code=409)
     if _backup_status["state"] == "running":
         return HTMLResponse('<span style="color:#f59e0b;">Backup already in progress.</span>')
 
@@ -2949,12 +2957,14 @@ async def create_backup():
         backup_path = backup_dir / backup_name
 
         try:
+            if writes_active() or ingest_queue.has_active_jobs():
+                raise RuntimeError("Ingestion started before backup creation; retry when idle")
             data_dir = Path("data")
 
             # Skip temp/unnecessary files
-            skip_dirs = {"_transactions"}
+            skip_dirs = {"_transactions", ".staging", "extraction"}
             skip_names = {".DS_Store"}
-            skip_suffixes = {".wal", ".shm", "-journal", ".tmp"}
+            skip_suffixes = {".wal", ".shm", "-wal", "-shm", "-journal", ".tmp"}
 
             def should_skip(p):
                 if p.name in skip_names:
@@ -2974,7 +2984,8 @@ async def create_backup():
                 if data_dir.exists():
                     count = 0
                     for f in all_files:
-                        tar.add(str(f), arcname=str(f))
+                        from src.admin.backup import add_backup_file
+                        add_backup_file(tar, f)
                         count += 1
                         if count % 100 == 0:
                             _backup_status["message"] = f"Compressing {count}/{total} files..."
@@ -2990,7 +3001,7 @@ async def create_backup():
             _backup_status["state"] = "error"
             _backup_status["message"] = f"Backup failed: {e}"
 
-    asyncio.create_task(asyncio.to_thread(lambda: asyncio.run(_run_backup())) if False else _run_backup())
+    asyncio.create_task(_run_backup())
     return HTMLResponse('<span style="color:#2563eb;">Backup started...</span>')
 
 
@@ -3120,3 +3131,8 @@ async def restore_backup(backup_file: UploadFile = File(...)):
 # Nested router inherits the parent admin authentication/origin dependencies.
 from src.admin.profile_routes import router as answer_profile_router
 router.include_router(answer_profile_router)
+
+
+@router.get("/diagrams", response_class=HTMLResponse)
+async def diagrams_page(request: Request):
+    return templates.TemplateResponse(request, "diagrams.html", {})

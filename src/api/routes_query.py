@@ -33,6 +33,7 @@ async def query(payload: QueryRequest, http: Request, user: UserContext = Depend
             answer=result.answer,
             citations=[CitationResponse(**c.model_dump()) for c in result.citations],
             warnings=result.warnings,
+            images=result.images,
             cached=result.cached,
             cached_query=result.cached_query,
         )
@@ -65,6 +66,17 @@ async def query_async_status(token: str, user: UserContext = Depends(require_aut
     job = query_queue.get_job(token)
     if job is None or job.username != user.username:
         raise HTTPException(status_code=404, detail="Job not found")
+    from src.figures.service import answer_images
+    from src.figures.service import authorized_figure, reference
+    images = []
+    for ref in job.images:
+        try:
+            doc, figure = await authorized_figure(ref["doc_id"], ref["figure_id"], user.groups, get_metadata_store())
+            current = reference(doc, figure)
+            if current:
+                images.append({**current, "evidence_id": ref.get("evidence_id", "")})
+        except (OSError, ValueError):
+            continue
     return AsyncQueryStatusResponse(
         token=job.token,
         status=str(job.status),
@@ -74,6 +86,7 @@ async def query_async_status(token: str, user: UserContext = Depends(require_aut
         answer=job.answer,
         citations=[CitationResponse(**c) for c in job.citations],
         warnings=job.warnings,
+        images=images,
         cached=job.cached,
         cached_query=job.cached_query,
         error=job.error,

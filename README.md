@@ -806,3 +806,7 @@ MIT
 ### Answer trust and admin settings
 
 See [Answer trust foundation](docs/answer-trust-foundation.md) for the new Answers & Evidence and All Settings pages, scoped evidence and cache behavior, and the signed-user-identity requirement for OpenAI-compatible clients.
+
+### Source diagram retrieval
+
+Sauron retains extracted diagrams as persistent PNGs and returns cited images through native MCP. Use **Diagrams** in the admin portal to search, preview, and backfill images from matching original documents. See [Stored source diagrams](docs/diagrams.md) for controls, APIs, permissions and extraction limitations.

@@ -192,6 +192,17 @@ class Settings(BaseSettings):
     audit_log_path: str = "data/audit.jsonl"
 
     # Embedded figure / image extraction (PDF vision + OCR)
+    figure_store_enabled: bool = Field(default=True, description="Retain extracted PNGs for new ingestions. Existing documents require figure backfill.")
+    figure_store_max_per_doc: int = Field(default=100, ge=1, le=1000)
+    figure_store_max_doc_mb: int = Field(default=100, ge=1, le=1024)
+    figure_max_pixels: int = Field(default=16000000, ge=10000, le=64000000)
+    figure_full_max_mb: int = Field(default=12, ge=1, le=64)
+    figure_preview_max_edge: int = Field(default=2000, ge=256, le=4096)
+    figure_preview_max_mb: int = Field(default=3, ge=1, le=8)
+    figure_mcp_max_mb: int = Field(default=8, ge=1, le=32, description="Maximum total base64 image bytes per MCP result.")
+    figure_render_vector_pages: bool = Field(default=True, description="Render pages with substantial vector drawings; may include surrounding text and tables.")
+    answer_images: Literal["auto", "requested", "off"] = Field(default="auto", description="Automatically attach cited diagrams, attach only when requested, or disable answer attachments.")
+    answer_max_images: int = Field(default=2, ge=0, le=5)
     figure_extraction_enabled: bool = True
     figure_max_per_doc: int = 20
     figure_min_width: int = 80          # skip logos / icons smaller than this

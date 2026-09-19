@@ -49,6 +49,9 @@
           </div>
         </section>
         <section class="settings-section">
+          <h2>Diagrams in answers</h2>
+          <div class="form-group"><label for="profile-images">Attach source diagrams</label><select id="profile-images" name="images"><option value="inherit">Use system setting</option><option value="auto">Automatically include cited diagrams</option><option value="requested">Only for diagram questions</option><option value="off">Disabled</option></select></div>
+          <div class="form-group"><label for="profile-max-images">Maximum diagrams per answer</label><input id="profile-max-images" name="max_images" type="number" min="0" max="5" value="2" required><p class="profile-help">The system maximum still applies. Images must come from permitted cited evidence.</p></div>
           <h2>When details or evidence are missing</h2>
           <div class="form-group"><label for="profile-clarification">Clarification behavior</label><select id="profile-clarification" name="clarification"><option value="when_needed">Ask when missing details affect the procedure</option><option value="answer_with_caveats">Give supported information with caveats</option></select></div>
           <fieldset class="profile-fields"><legend>Details Sauron may ask for</legend>
@@ -82,7 +85,7 @@
       </form>
       <p id="preview-status" role="status" aria-live="polite">No preview yet.</p>
       <section id="preview-result" hidden aria-label="Draft preview result">
-        <p id="preview-meta"></p><div id="preview-answer"></div>
+        <p id="preview-meta"></p><div id="preview-answer"></div><div id="preview-images"></div>
         <ul id="preview-warnings"></ul>
         <h3>Evidence supplied to the model</h3><div id="preview-evidence"></div>
       </section>

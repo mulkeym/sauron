@@ -34,10 +34,10 @@ async def index_prepared(prepared, doc_id, acl_groups, category, vector_store,
                 enriched_prose = ((parsed.text or "") + "\n\n## Embedded figures\n\n"
                                   + prepared.office.enriched_text).strip()
     elif prepared.pdf is not None:
+        figure_records = prepared.pdf.figure_records
         try:
             await store_grids(prepared.pdf.table_grids)
             enriched_prose = "\n\n".join(b.text for b in prepared.pdf.prose_blocks)
-            figure_records = prepared.pdf.figure_records
         except Exception as exc:
             logger.warning("PDF table indexing failed for %s; using flat text: %s", parsed.filename, exc)
     elif prepared.office is not None:
@@ -45,4 +45,8 @@ async def index_prepared(prepared, doc_id, acl_groups, category, vector_store,
         figure_records = prepared.office.figures
         if prepared.office.table_grids:
             await store_grids(prepared.office.table_grids)
+    if prepared.figure_staging:
+        from src.figures.storage import FigureStore
+        figures = await FigureStore().publish_async(doc_id, figure_records, prepared.figure_staging)
+        await metadata_store.put_figures(doc_id, figures)
     return text_sheets, enriched_prose, figure_records

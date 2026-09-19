@@ -14,6 +14,8 @@ class AnswerProfile(BaseModel):
     routing_instructions: str = Field(default="", max_length=6000)
     strategy: Literal["auto", "lookup", "sweep", "analytical", "cross_reference", "temporal", "metadata"] = "auto"
     retrieval_depth: Literal["focused", "balanced", "thorough"] = "balanced"
+    images: Literal["inherit", "auto", "requested", "off"] = "inherit"
+    max_images: int = Field(default=2, ge=0, le=5)
     graph_enrichment: bool = True
     structured_lookup: bool = True
     strategy_memory: bool = False

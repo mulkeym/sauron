@@ -76,6 +76,8 @@ class FigureRecord:
     bbox: tuple[float, float, float, float] | None = None
     source: str = ""
     slide: int | None = None
+    assets: dict = field(default_factory=dict)
+    analysis_status: str = "complete"
 
     def retrieval_text(self) -> str:
         parts = [f"Figure: {self.figure_id}"]
@@ -119,7 +121,22 @@ class FigureEnrichmentResult:
 # Image collection
 # ---------------------------------------------------------------------------
 
+class BoundedRegions(list):
+    """Bound encoded image accumulation before expensive OCR/vision processing."""
+    def append(self, region):
+        limit = settings.figure_store_max_doc_mb * 1024**2
+        if (len(self) >= settings.figure_store_max_per_doc
+                or len(region.image_bytes) + sum(len(r.image_bytes) for r in self) > limit):
+            from src.figures.storage import asset_warning
+            asset_warning("Figure collection limit reached; additional images were omitted.")
+            logger.warning("Figure collection limit reached; additional image omitted")
+            return
+        super().append(region)
+
+
 def _pil_to_png_bytes(img) -> bytes:
+    if img.width * img.height > settings.figure_max_pixels:
+        raise ValueError("Figure exceeds decoded pixel limit")
     buf = io.BytesIO()
     # Normalize mode for JPEG-sourced images etc.
     if img.mode not in ("RGB", "L"):
@@ -156,6 +173,8 @@ def _region_from_image_bytes(
         from PIL import Image
 
         img = Image.open(io.BytesIO(raw))
+        if img.width * img.height > settings.figure_max_pixels:
+            raise ValueError("Figure exceeds decoded pixel limit")
         img.load()
         if _should_skip_size(img.width, img.height):
             return None
@@ -188,7 +207,7 @@ def extract_image_regions_from_zip_media(
     import zipfile
 
     path = Path(path)
-    regions: list[ImageRegion] = []
+    regions: list[ImageRegion] = BoundedRegions()
     seen: set[str] = set()
     if not zipfile.is_zipfile(path):
         return regions
@@ -226,7 +245,7 @@ def extract_image_regions_docx(path: Path) -> list[ImageRegion]:
         from src.ingestion.parser import parse_document
 
         doc = Document(str(path))
-        ordered: list[ImageRegion] = []
+        ordered: list[ImageRegion] = BoundedRegions()
         parsed = parse_document(path)
         placements = [
             b.figure for b in parsed.blocks
@@ -262,7 +281,24 @@ def extract_image_regions_docx(path: Path) -> list[ImageRegion]:
         path, media_prefixes=("word/media/",), source="docx",
     )
     # Compatibility fallback for malformed documents without body anchors.
+    retained = []
+    analyzed_hashes = set()
     for i, region in enumerate(regions):
+        from src.figures.storage import save_region
+        try:
+            assets = save_region(region)
+        except MemoryError:
+            raise
+        except Exception as exc:
+            from src.figures.storage import asset_warning
+            asset_warning("A figure could not be retained: " + str(exc)[:160])
+            logger.warning("Figure storage omitted: %s", exc)
+            assets = {}
+        retained.append((region, assets))
+        analysis_key = region.content_hash or f"placement:{region.page}:{region.index}"
+        if analysis_budget and analysis_key not in analyzed_hashes and len(analyzed_hashes) >= analysis_budget:
+            result.figures_skipped += 1
+            continue
         region.figure_id = f"fig-{i + 1:03d}"
     return regions
 
@@ -270,7 +306,7 @@ def extract_image_regions_docx(path: Path) -> list[ImageRegion]:
 def extract_image_regions_xlsx(path: Path) -> list[ImageRegion]:
     """Embedded images from Excel .xlsx/.xlsm (sheet drawings + xl/media)."""
     path = Path(path)
-    regions: list[ImageRegion] = []
+    regions: list[ImageRegion] = BoundedRegions()
     seen: set[str] = set()
     # 1) openpyxl worksheet drawings (preserves sheet index as "page")
     try:
@@ -325,7 +361,7 @@ def extract_image_regions_pptx(path: Path) -> list[ImageRegion]:
 
         presentation = Presentation(str(path))
         parsed = parse_document(path)
-        ordered: list[ImageRegion] = []
+        ordered: list[ImageRegion] = BoundedRegions()
         placements = [
             block.figure for block in parsed.blocks
             if block.block_type == "figure" and block.figure is not None
@@ -364,7 +400,24 @@ def extract_image_regions_pptx(path: Path) -> list[ImageRegion]:
     regions = extract_image_regions_from_zip_media(
         path, media_prefixes=("ppt/media/",), source="pptx",
     )
+    retained = []
+    analyzed_hashes = set()
     for i, region in enumerate(regions):
+        from src.figures.storage import save_region
+        try:
+            assets = save_region(region)
+        except MemoryError:
+            raise
+        except Exception as exc:
+            from src.figures.storage import asset_warning
+            asset_warning("A figure could not be retained: " + str(exc)[:160])
+            logger.warning("Figure storage omitted: %s", exc)
+            assets = {}
+        retained.append((region, assets))
+        analysis_key = region.content_hash or f"placement:{region.page}:{region.index}"
+        if analysis_budget and analysis_key not in analyzed_hashes and len(analyzed_hashes) >= analysis_budget:
+            result.figures_skipped += 1
+            continue
         region.figure_id = f"s1-fig-{i + 1:03d}"
     return regions
 
@@ -372,10 +425,10 @@ def extract_image_regions_pptx(path: Path) -> list[ImageRegion]:
 def extract_image_regions(path: Path) -> list[ImageRegion]:
     """Collect embedded images and optional full-page renders from a PDF."""
     import pypdfium2 as pdfium
-    from pypdfium2.raw import FPDF_PAGEOBJ_IMAGE
+    from pypdfium2.raw import FPDF_PAGEOBJ_IMAGE, FPDF_PAGEOBJ_PATH
 
     path = Path(path)
-    regions: list[ImageRegion] = []
+    regions: list[ImageRegion] = BoundedRegions()
     seen_hashes: set[str] = set()
 
     try:
@@ -393,10 +446,18 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
             except Exception:
                 page_width = page_height = 0
 
+            vector_bounds = []
             # --- Embedded image objects ---
             try:
                 for obj in page.get_objects():
                     try:
+                        if getattr(obj, "type", None) == FPDF_PAGEOBJ_PATH:
+                            try:
+                                left, bottom, right, top = obj.get_bounds()
+                                if abs(right-left) > 12 and abs(top-bottom) > 12:
+                                    vector_bounds.append((left, bottom, right, top))
+                            except Exception:
+                                pass
                         if getattr(obj, "type", None) != FPDF_PAGEOBJ_IMAGE:
                             continue
                         # PdfImage
@@ -404,11 +465,13 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
                             w, h = obj.get_px_size()
                         except Exception:
                             w = h = 0
+                        if int(w or 0) * int(h or 0) > settings.figure_max_pixels:
+                            continue
                         if _should_skip_size(int(w or 0), int(h or 0)):
                             continue
                         try:
                             bitmap = obj.get_bitmap(render=True)
-                            pil = bitmap.to_pil()
+                            pil = bitmap.to_pil().copy()
                             bitmap.close()
                         except Exception as e:
                             logger.debug(f"figure extract: bitmap failed p{page_idx}: {e}")
@@ -449,23 +512,28 @@ def extract_image_regions(path: Path) -> list[ImageRegion]:
                 logger.debug(f"figure extract: get_objects failed p{page_idx}: {e}")
 
             # --- Sparse digital text → full-page render (diagram-as-page) ---
-            if settings.figure_render_text_sparse_pages:
+            vector_page = settings.figure_render_vector_pages and len(vector_bounds) >= 2
+            if settings.figure_render_text_sparse_pages or vector_page:
                 try:
                     textpage = page.get_textpage()
                     page_text = (textpage.get_text_bounded() or "").strip()
                     textpage.close()
                 except Exception:
                     page_text = ""
-                if len(page_text) < settings.figure_sparse_text_chars:
+                if vector_page or (settings.figure_render_text_sparse_pages and len(page_text) < settings.figure_sparse_text_chars):
                     # Avoid double-counting if we already have a large embedded image
                     has_large = any(
                         r.page == page_idx and r.width * r.height > 200_000
                         for r in regions
                     )
-                    if not has_large:
+                    if vector_page or not has_large:
                         try:
                             scale = settings.figure_page_render_dpi_scale
-                            pil = page.render(scale=scale).to_pil()
+                            if page_width and page_height:
+                                scale = min(scale, (settings.figure_max_pixels / (page_width * page_height)) ** .5)
+                            bitmap = page.render(scale=scale)
+                            pil = bitmap.to_pil().copy()
+                            bitmap.close()
                             if not _should_skip_size(pil.width, pil.height):
                                 png = _pil_to_png_bytes(pil)
                                 digest = hashlib.sha256(png).hexdigest()[:16]
@@ -1580,7 +1648,8 @@ def process_image_regions(
         return result
 
     digital_table_pages = digital_table_pages or set()
-    max_n = max(0, settings.figure_max_per_doc)
+    analysis_budget = settings.figure_max_per_doc
+    max_n = settings.figure_store_max_per_doc
     regions = sorted(regions, key=lambda r: (r.page, r.index))
     # The budget applies to distinct image content, not placements. Repeated
     # figures reuse analysis but remain present everywhere they occur.
@@ -1601,7 +1670,25 @@ def process_image_regions(
         str, tuple[ImageKind, str, list[SheetGrid], list[ProseBlock]]
     ] = {}
 
+    retained = []
+    analyzed_hashes = set()
     for i, region in enumerate(regions):
+        from src.figures.storage import save_region
+        try:
+            assets = save_region(region)
+        except MemoryError:
+            raise
+        except Exception as exc:
+            from src.figures.storage import asset_warning
+            asset_warning("A figure could not be retained: " + str(exc)[:160])
+            logger.warning("Figure storage omitted: %s", exc)
+            assets = {}
+        retained.append((region, assets))
+        analysis_key = region.content_hash or f"placement:{region.page}:{region.index}"
+        if analysis_budget and analysis_key not in analyzed_hashes and len(analyzed_hashes) >= analysis_budget:
+            result.figures_skipped += 1
+            continue
+        analyzed_hashes.add(analysis_key)
         if progress_cb:
             try:
                 progress_cb(f"Extracting figures ({i + 1}/{len(regions)})…")
@@ -1705,6 +1792,24 @@ def process_image_regions(
         else:
             result.figures_skipped += 1
 
+    by_id = {record.figure_id: record for record in result.figure_records}
+    for region, assets in retained:
+        figure_id = region.figure_id or f"p{region.page + 1}-img{region.index + 1}"
+        record = by_id.get(figure_id)
+        if record is not None:
+            record.assets = assets
+        elif assets:
+            result.figure_records.append(FigureRecord(
+                figure_id=figure_id, description=region.ocr_text or region.alt_text or region.caption or "Source figure; visual analysis unavailable.",
+                kind=region.kind.value, content_hash=region.content_hash,
+                body_index=region.body_index, section_path=list(region.section_path),
+                caption=region.caption, alt_text=region.alt_text,
+                previous_text=region.previous_text, following_text=region.following_text,
+                page=region.page if region.source in ("embedded", "page_render") else None,
+                slide=region.page if region.source == "pptx" else None,
+                bbox=region.bbox, source=region.source, assets=assets,
+                analysis_status="unavailable",
+            ))
     logger.info(
         f"figure extract: {path_name or 'document'}: regions={result.figures_seen} "
         f"used={result.figures_used} skipped={result.figures_skipped} "
@@ -1745,7 +1850,7 @@ def enrich_pdf_with_figures(
         digital_table_pages=pages_with_digital_tables(extracted),
         progress_cb=progress_cb,
     )
-    if not enrich.table_grids and not enrich.prose_blocks:
+    if not enrich.table_grids and not enrich.prose_blocks and not enrich.figure_records:
         return extracted
 
     merged_prose = (

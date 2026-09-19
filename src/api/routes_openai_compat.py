@@ -105,6 +105,7 @@ async def chat_completions(
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
+        "sauron_images": result.images,
         "created": int(time.time()),
         "model": payload.model,
         "choices": [

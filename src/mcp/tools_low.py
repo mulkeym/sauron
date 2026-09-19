@@ -33,16 +33,34 @@ def search_documents(
     valid_types = {"pdf", "docx", "xlsx", "transcript", "txt", "markdown"}
     if doc_type and doc_type.lower() in valid_types:
         chunks = [c for c in chunks if c.metadata.doc_type == doc_type.lower()]
+    async def stored_figures():
+        return await metadata_store.list_figures(list(scope.doc_ids)) if metadata_store else []
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        records = asyncio.run(stored_figures())
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            records = pool.submit(asyncio.run, stored_figures()).result()
+    available = {(r["doc_id"], r["figure_id"]) for r in records if r.get("assets")}
     results = []
     for chunk in chunks:
         results.append(
             {
+                "image_available": (chunk.metadata.doc_id, chunk.metadata.figure_id) in available,
                 "text": chunk.text,
                 "source": chunk.metadata.filename,
                 "doc_id": chunk.metadata.doc_id,
                 "doc_type": chunk.metadata.doc_type,
                 "page": chunk.metadata.page,
                 "relevance": chunk.score,
+                "content_type": chunk.metadata.content_type,
+                "figure_id": chunk.metadata.figure_id,
+                "figure_kind": chunk.metadata.figure_kind,
+                "caption": chunk.metadata.caption,
+                "slide": chunk.metadata.slide,
+                "source_locator": chunk.metadata.source_locator,
             }
         )
     return results
@@ -170,6 +188,12 @@ def search_meetings(
                 "meeting": chunk.metadata.filename,
                 "type": chunk.metadata.utterance_type,
                 "relevance": chunk.score,
+                "content_type": chunk.metadata.content_type,
+                "figure_id": chunk.metadata.figure_id,
+                "figure_kind": chunk.metadata.figure_kind,
+                "caption": chunk.metadata.caption,
+                "slide": chunk.metadata.slide,
+                "source_locator": chunk.metadata.source_locator,
             }
         )
     return results

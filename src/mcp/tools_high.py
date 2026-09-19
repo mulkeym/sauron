@@ -32,6 +32,7 @@ async def ask(
 
     return {
         "answer": response.answer,
+        "images": response.images,
         "citations": citations,
         "warnings": response.warnings,
         "retrieval_strategy": depth,
@@ -68,6 +69,7 @@ async def summarize_topic(
 
     return {
         "summary": response.answer,
+        "images": response.images,
         "sources": sources,
         "query_type": response.query_type,
         "cached": response.cached,
@@ -100,6 +102,7 @@ async def compare(
 
     return {
         "comparison": response.answer,
+        "images": response.images,
         "sources": sources,
         "query_type": response.query_type,
         "cached": response.cached,
