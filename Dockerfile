@@ -332,6 +332,9 @@ COPY --from=model-builder /opt/model-layers/13/ /
 COPY --from=model-builder /opt/model-layers/14/ /
 COPY --from=model-builder /opt/model-layers/15/ /
 
+# Keep the operational parser smoke fixture available in the production image.
+COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
+
 ARG EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
 ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 
