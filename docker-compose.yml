@@ -18,7 +18,9 @@ x-sauron-build: &sauron-build
     PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.org files.pythonhosted.org pypi.python.org pythonhosted.org download.pytorch.org}
     TORCH_CPU_INDEX: ${TORCH_CPU_INDEX:-https://download.pytorch.org/whl/cpu}
     # Hugging Face model bake — required for offline runtime (do not skip in prod)
-    SAURON_PREFETCH_INSECURE_SSL: ${SAURON_PREFETCH_INSECURE_SSL:-1}
+    # Enterprise roots are configured explicitly for Hugging Face Hub 1.x.
+    # Keep verification enabled; use =1 only as a short-lived diagnostic.
+    SAURON_PREFETCH_INSECURE_SSL: ${SAURON_PREFETCH_INSECURE_SSL:-0}
     SKIP_PDF_MODEL_PREFETCH: ${SKIP_PDF_MODEL_PREFETCH:-0}
     SKIP_HF_MODEL_PREFETCH: ${SKIP_HF_MODEL_PREFETCH:-0}
     SAURON_PREFETCH_ALLOW_FAIL: ${SAURON_PREFETCH_ALLOW_FAIL:-0}

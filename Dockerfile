@@ -140,8 +140,18 @@ PY
 COPY scripts/inject_system_cas_into_certifi.py /tmp/inject_system_cas_into_certifi.py
 RUN python /tmp/inject_system_cas_into_certifi.py
 
+# A normal `COPY --from=builder /opt/venv /opt/venv` collapses the complete
+# 3+ GiB environment into one image layer. Partition it into deterministic
+# overlay trees; the final stage copies each tree as its own bounded layer.
+COPY scripts/split_layer_tree.py /tmp/split_layer_tree.py
+RUN python /tmp/split_layer_tree.py \
+      --source /opt/venv \
+      --output /opt/venv-layers \
+      --layer-count 16 \
+      --max-bytes 850000000
+
 # Stage 2: Runtime
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime-base
 WORKDIR /app
 
 # System dependencies for document parsing.
@@ -181,24 +191,28 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     https_proxy=${https_proxy} \
     no_proxy=${no_proxy}
 
-# Copy Python virtualenv from builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
 # Copy application code
 COPY src/ src/
 COPY scripts/ scripts/
-RUN chmod +x scripts/entrypoint.sh scripts/inject_system_cas_into_certifi.py
+RUN chmod +x scripts/entrypoint.sh scripts/inject_system_cas_into_certifi.py \
+    scripts/split_layer_tree.py scripts/check_oci_layer_sizes.py
 
-# Re-merge system CAs into certifi on this stage (runtime OS bundle + MITM roots).
-# huggingface_hub / unstructured model downloads use certifi, not only SSL_CERT_FILE.
+# Stage 3: Download and validate offline assets. Large caches stay in this
+# intermediate stage; only the bounded overlay trees are copied into runtime.
+FROM runtime-base AS model-builder
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Re-merge system CAs into certifi and explicitly configure Hugging Face Hub
+# below. The builder and runtime stages can have different OS CA bundles.
 RUN python scripts/inject_system_cas_into_certifi.py
 
 # Bake ALL Hugging Face / local ML weights required at runtime:
 #   nomic embeddings, cross-encoder rerankers, YOLOX layout, table-transformer.
 # Default: hard-fail the build if any download fails (offline-ready image).
 #
-#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1   # MITM TLS
+#   --build-arg SAURON_PREFETCH_INSECURE_SSL=1   # diagnostic only; prefer CA PEM
 #   --build-arg SAURON_PREFETCH_ALLOW_FAIL=1     # do not fail build (not recommended)
 #   --build-arg SKIP_HF_MODEL_PREFETCH=1         # skip bake (runtime needs HF)
 # Optional: pre-seed host cache into the image (air-gap friendly):
@@ -243,6 +257,8 @@ COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
 # Pass HF_ENDPOINT / token only on this RUN (bake). Prefer Artifactory remote URL
 # when public huggingface.co is blocked or slow. Token is not written into final ENV.
 # Do not export empty HF_ENDPOINT= — hub treats that as a blank base URL and fails.
+# Cache partitioning stays in this RUN so the export trees can hard-link the
+# freshly downloaded files instead of copying them in the intermediate stage.
 RUN set -eu; \
     echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH} HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co (default)}"; \
     export SAURON_PREFETCH_INSECURE_SSL="${SAURON_PREFETCH_INSECURE_SSL}" \
@@ -261,10 +277,68 @@ RUN set -eu; \
     python scripts/prefetch_hf_models.py; \
     if [ "${SAURON_PREFETCH_ALLOW_FAIL}" != "1" ] && [ "${SKIP_HF_MODEL_PREFETCH}" != "1" ] && [ "${SKIP_PDF_MODEL_PREFETCH}" != "1" ]; then \
       test -f /app/.pdf_models_ready; \
-    fi
+    fi; \
+    mkdir -p /opt/model-export/root /opt/model-export/app; \
+    if [ -d /root/.cache ]; then cp -al /root/.cache /opt/model-export/root/; fi; \
+    if [ -d /app/.cache ]; then cp -al /app/.cache /opt/model-export/app/; fi; \
+    for marker in /app/.pdf_models_ready /app/.pdf_models_prefetch_failed; do \
+      if [ -f "${marker}" ]; then cp -a "${marker}" /opt/model-export/app/; fi; \
+    done; \
+    python scripts/split_layer_tree.py \
+      --source /opt/model-export \
+      --output /opt/model-layers \
+      --layer-count 16 \
+      --max-bytes 850000000
 
-# Create data directory
-RUN mkdir -p /app/data/lancedb
+# Stage 4: Production image. Each COPY below becomes a separate OCI layer.
+# The splitter leaves 15% headroom below the CI's decimal 1 GB compressed-blob
+# limit for tar metadata and future package/model growth.
+FROM runtime-base AS runtime
+
+COPY --from=builder /opt/venv-layers/00/ /opt/venv/
+COPY --from=builder /opt/venv-layers/01/ /opt/venv/
+COPY --from=builder /opt/venv-layers/02/ /opt/venv/
+COPY --from=builder /opt/venv-layers/03/ /opt/venv/
+COPY --from=builder /opt/venv-layers/04/ /opt/venv/
+COPY --from=builder /opt/venv-layers/05/ /opt/venv/
+COPY --from=builder /opt/venv-layers/06/ /opt/venv/
+COPY --from=builder /opt/venv-layers/07/ /opt/venv/
+COPY --from=builder /opt/venv-layers/08/ /opt/venv/
+COPY --from=builder /opt/venv-layers/09/ /opt/venv/
+COPY --from=builder /opt/venv-layers/10/ /opt/venv/
+COPY --from=builder /opt/venv-layers/11/ /opt/venv/
+COPY --from=builder /opt/venv-layers/12/ /opt/venv/
+COPY --from=builder /opt/venv-layers/13/ /opt/venv/
+COPY --from=builder /opt/venv-layers/14/ /opt/venv/
+COPY --from=builder /opt/venv-layers/15/ /opt/venv/
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN python scripts/inject_system_cas_into_certifi.py
+
+COPY --from=model-builder /opt/model-layers/00/ /
+COPY --from=model-builder /opt/model-layers/01/ /
+COPY --from=model-builder /opt/model-layers/02/ /
+COPY --from=model-builder /opt/model-layers/03/ /
+COPY --from=model-builder /opt/model-layers/04/ /
+COPY --from=model-builder /opt/model-layers/05/ /
+COPY --from=model-builder /opt/model-layers/06/ /
+COPY --from=model-builder /opt/model-layers/07/ /
+COPY --from=model-builder /opt/model-layers/08/ /
+COPY --from=model-builder /opt/model-layers/09/ /
+COPY --from=model-builder /opt/model-layers/10/ /
+COPY --from=model-builder /opt/model-layers/11/ /
+COPY --from=model-builder /opt/model-layers/12/ /
+COPY --from=model-builder /opt/model-layers/13/ /
+COPY --from=model-builder /opt/model-layers/14/ /
+COPY --from=model-builder /opt/model-layers/15/ /
+
+ARG EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
+ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+
+# Create data directory and prove the selected prefetch policy left a marker.
+RUN set -eu; \
+    mkdir -p /app/data/lancedb; \
+    test -f /app/.pdf_models_ready -o -f /app/.pdf_models_prefetch_failed
 
 # HF cache paths + offline by default (models baked above). Entrypoint reinforces
 # offline when /app/.pdf_models_ready exists.
@@ -276,6 +350,8 @@ ENV LANCEDB_PATH=/app/data/lancedb \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
     HF_DATASETS_OFFLINE=1 \
+    EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME} \
+    RERANK_MODEL=${RERANK_MODEL} \
     HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
     HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \

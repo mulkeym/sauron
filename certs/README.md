@@ -96,11 +96,16 @@ The same PEM is installed in the **runtime** image stage so LLM / embedding
 HTTPS through the MITM proxy trusts the inspection CA. Prefer this over
 **Admin → Models → Ignore SSL certificate errors**.
 
-During build, `scripts/prefetch_pdf_models.py` downloads unstructured /
-Hugging Face layout models (e.g. YOLOX ONNX). Those libraries use **certifi**,
-which does **not** automatically include OS/MITM roots. The Dockerfile therefore
-runs `scripts/inject_system_cas_into_certifi.py` so certifi’s bundle includes
-`/etc/ssl/certs/ca-certificates.crt` (with your inspection CA).
+During build, `scripts/prefetch_hf_models.py` downloads embeddings, rerankers,
+and unstructured layout/table models. Hugging Face Hub 1.x uses **httpx** and
+does not use the older requests backend configuration. Sauron installs an
+explicit Hub 1.x client factory whose verified `SSLContext` is built from
+`/etc/ssl/certs/ca-certificates.crt`. It also refreshes certifi from that bundle
+for older libraries. Look for this build message:
+
+```text
+prefetch_hf_models: huggingface_hub 1.x httpx client factory verify=/etc/ssl/certs/ca-certificates.crt
+```
 
 If prefetch still fails with `SSL: CERTIFICATE_VERIFY_FAILED` against
 `huggingface.co`, rebuild with:
@@ -109,8 +114,9 @@ If prefetch still fails with `SSL: CERTIFICATE_VERIFY_FAILED` against
 docker build -t sauron --build-arg SAURON_PREFETCH_INSECURE_SSL=1 .
 ```
 
-That disables TLS verify **only** for the prefetch step (models are still
-baked into the image; runtime stays on normal verify + your CA).
+That disables TLS verify **only** for the prefetch step. Treat it as a
+diagnostic: if it succeeds, the supplied PEM is missing the inspection root or
+an issuing intermediate. Restore verified builds after correcting the bundle.
 
 If you see errors mentioning **`xet-read-token`**, **`cas-bridge`**,
 **`xet-bridge-us`**, **`us.aws.cdn.hf.co`**, or **`hf-xet`**, that is Hugging
@@ -123,16 +129,17 @@ Face’s XET/CDN storage path (often broken or 503 behind MITM). The image:
 If Hugging Face is still unreachable from the build network (persistent **503**
 on `us.aws.cdn.hf.co` / `xet-bridge`):
 
-**Default behavior:** prefetch is **allowed to fail** (`SAURON_PREFETCH_ALLOW_FAIL=1`).
-The image still builds; hi_res OCR models are not baked in. The entrypoint leaves
-HF online so runtime can download later if the network allows.
+**Default behavior:** prefetch is strict (`SAURON_PREFETCH_ALLOW_FAIL=0`) so a
+nominally offline image cannot publish without its required assets. You can
+temporarily allow a partial image for diagnosis, but runtime may then require
+network access.
 
 ```bash
 # Skip HF retries entirely (faster build when you know CDN is blocked):
 docker build -t sauron --build-arg SKIP_PDF_MODEL_PREFETCH=1 .
 
-# Old strict behavior (fail the image build if models cannot be baked):
-docker build -t sauron --build-arg SAURON_PREFETCH_ALLOW_FAIL=0 .
+# Diagnostic partial build (not recommended for production):
+docker build -t sauron --build-arg SAURON_PREFETCH_ALLOW_FAIL=1 .
 ```
 
 `Trusted_Root_CAs.pem` is gitignored so environment-specific CAs are not

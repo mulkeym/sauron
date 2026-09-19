@@ -94,9 +94,44 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Final-image layers are reusable. Avoid exporting the deliberately
+          # disposable unsplit builder/model stages to GitHub's cache.
+          cache-to: type=gha,mode=min
           provenance: mode=max
           sbom: true
+
+      - name: Enforce sub-1 GB OCI layers
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="$(printf '%s\n' "$IMAGE_TAGS" | sed -n '1p')"
+          root_manifest=/tmp/sauron-oci-root.json
+          image_manifest=/tmp/sauron-oci-image.json
+          docker buildx imagetools inspect --raw \
+            "${image_ref}@${IMAGE_DIGEST}" > "$root_manifest"
+          platform_digest="$(python - "$root_manifest" <<'PY'
+          import json
+          import sys
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          for item in manifest.get("manifests", []):
+              platform = item.get("platform") or {}
+              if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
+                  print(item["digest"])
+                  break
+          PY
+          )"
+          if [ -n "$platform_digest" ]; then
+            docker buildx imagetools inspect --raw \
+              "${image_ref}@${platform_digest}" > "$image_manifest"
+          else
+            cp "$root_manifest" "$image_manifest"
+          fi
+          python scripts/check_oci_layer_sizes.py \
+            "$image_manifest" --max-bytes 1000000000
 
       - name: Image summary
         if: github.event_name != 'pull_request'

@@ -11,7 +11,8 @@ Run BEFORE HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE are forced on for production
 images. On success writes /app/.pdf_models_ready (name kept for entrypoint).
 
 Corporate MITM:
-  SAURON_PREFETCH_INSECURE_SSL=1  — disable TLS verify for this step only
+  certs/Trusted_Root_CAs.pem       — preferred; verification remains enabled
+  SAURON_PREFETCH_INSECURE_SSL=1  — emergency diagnostic override only
   HF_HUB_DISABLE_XET=1 (default)  — avoid xet-bridge CDN
   SAURON_PREFETCH_ALLOW_FAIL=0    — default: fail the build if bake fails
   SKIP_PDF_MODEL_PREFETCH=1       — skip entirely (NOT recommended)
@@ -139,17 +140,27 @@ def _disable_ssl_verify_everywhere() -> None:
         print(f"prefetch_hf_models: httpx patch skipped: {e}", flush=True)
 
     try:
-        from huggingface_hub import configure_http_backend
-        import httpx as _httpx
-
-        configure_http_backend(
-            backend_factory=lambda: _httpx.Client(
-                verify=False, follow_redirects=True, timeout=300.0
-            )
-        )
-        print("prefetch_hf_models: huggingface_hub backend verify=False", flush=True)
+        try:
+            from scripts.configure_hf_tls import configure_huggingface_tls
+        except ModuleNotFoundError:
+            from configure_hf_tls import configure_huggingface_tls
+        backend = configure_huggingface_tls(insecure=True)
+        print(f"prefetch_hf_models: {backend} verify=False", flush=True)
     except Exception as e:
-        print(f"prefetch_hf_models: hub backend patch skipped: {e}", flush=True)
+        raise RuntimeError(f"could not configure insecure Hugging Face client: {e}") from e
+
+
+def _configure_verified_huggingface(ca_bundle: str) -> None:
+    """Force Hub 1.x/0.x clients to use the merged enterprise CA bundle."""
+    try:
+        from scripts.configure_hf_tls import configure_huggingface_tls
+    except ModuleNotFoundError:
+        from configure_hf_tls import configure_huggingface_tls
+    backend = configure_huggingface_tls(ca_bundle, insecure=False)
+    print(
+        f"prefetch_hf_models: {backend} verify={ca_bundle}",
+        flush=True,
+    )
 
 
 def _retry(label: str, fn, attempts: int = 8, base_delay: float = 2.0):
@@ -394,10 +405,7 @@ def main() -> int:
         _disable_ssl_verify_everywhere()
     else:
         ca = "/etc/ssl/certs/ca-certificates.crt"
-        if os.path.isfile(ca):
-            os.environ.setdefault("SSL_CERT_FILE", ca)
-            os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
-            os.environ.setdefault("CURL_CA_BUNDLE", ca)
+        _configure_verified_huggingface(ca)
 
     # Prefer a stable cache location inside the image
     os.environ.setdefault("HF_HOME", "/root/.cache/huggingface")
@@ -434,7 +442,8 @@ def main() -> int:
             return 0
         print(
             "hint: ensure network can reach huggingface.co (not just pypi). "
-            "MITM: certs/Trusted_Root_CAs.pem + SAURON_PREFETCH_INSECURE_SSL=1. "
+            "MITM: install the inspection root in certs/Trusted_Root_CAs.pem. "
+            "Use SAURON_PREFETCH_INSECURE_SSL=1 only to diagnose CA-chain problems. "
             "Or pre-seed hf-cache/ and COPY into the image.",
             file=sys.stderr,
         )

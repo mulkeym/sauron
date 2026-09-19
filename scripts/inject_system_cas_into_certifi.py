@@ -27,14 +27,27 @@ def main() -> int:
         return 1
 
     certifi_path = pathlib.Path(certifi.where())
-    existing = certifi_path.read_bytes()
-    system = SYSTEM_BUNDLE.read_bytes()
-
-    if MARKER in existing:
-        print(f"inject_system_cas_into_certifi: already merged into {certifi_path}")
+    if certifi_path.resolve() == SYSTEM_BUNDLE.resolve():
+        print(
+            "inject_system_cas_into_certifi: certifi already uses the system CA bundle"
+        )
         return 0
 
-    certifi_path.write_bytes(existing + b"\n" + MARKER + b"\n" + system + b"\n")
+    existing = certifi_path.read_bytes()
+    system = SYSTEM_BUNDLE.read_bytes()
+    # Refresh the managed section on every build. This matters when an existing
+    # venv is copied into a runtime stage whose OS bundle contains newer or
+    # site-specific roots.
+    certifi_base = existing.split(MARKER, 1)[0].rstrip()
+    merged = certifi_base + b"\n" + MARKER + b"\n" + system + b"\n"
+    if existing == merged:
+        print(
+            "inject_system_cas_into_certifi: current system bundle already "
+            f"merged into {certifi_path}"
+        )
+        return 0
+
+    certifi_path.write_bytes(merged)
     print(
         f"inject_system_cas_into_certifi: appended {SYSTEM_BUNDLE} "
         f"({len(system)} bytes) -> {certifi_path} "

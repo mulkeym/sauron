@@ -464,7 +464,7 @@ docker compose up -d
 # PIP_INDEX_URL=https://pypi.internal.example/simple
 # PIP_TRUSTED_HOST=pypi.internal.example files.internal.example
 # TORCH_CPU_INDEX=https://pypi.internal.example/simple
-# SAURON_PREFETCH_INSECURE_SSL=1
+# SAURON_PREFETCH_INSECURE_SSL=0  # default; enterprise CA remains verified
 ```
 
 ```bash
@@ -495,7 +495,7 @@ before `docker compose build`:
 ```bash
 HF_ENDPOINT=https://artifactory.example.com/artifactory/api/huggingfaceml/huggingface-remote
 HF_TOKEN=your-token
-SAURON_PREFETCH_INSECURE_SSL=1   # if the proxy uses a private CA (also use certs/Trusted_Root_CAs.pem)
+SAURON_PREFETCH_INSECURE_SSL=0   # enterprise CA verification stays enabled
 ```
 
 `huggingface_hub` honors `HF_ENDPOINT` + `HF_TOKEN` during the bake step. After
@@ -515,6 +515,12 @@ docker compose build
 docker pull ghcr.io/mulkeym/sauron:latest
 # Tags also include sha-<short> and release versions (e.g. 1.0.0 from tag v1.0.0)
 ```
+
+The Python environment and offline model caches are emitted as deterministic
+overlay layers capped at 850 MB of uncompressed file payload. After publishing,
+CI reads the linux/amd64 OCI manifest from GHCR and fails the workflow if any
+compressed layer is 1,000,000,000 bytes or larger. This improves pull retries
+and extraction behavior; it does not reduce the image's total size.
 
 Kubernetes / Run:ai: use the Helm chart under [`charts/sauron`](charts/sauron) (defaults to the GHCR image).
 
@@ -644,6 +650,8 @@ At **image build** time the Dockerfile:
 1. Copies `certs/` into the image (the directory always exists; the `.pem` is optional)
 2. If `Trusted_Root_CAs.pem` is present and non-empty, installs it via `update-ca-certificates`
 3. Sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, and `PIP_CERT` to the system CA bundle so **OS tools, pip, and Python** trust those roots
+4. Configures Hugging Face Hub 1.x through its supported `set_client_factory`
+   API with an explicit `SSLContext` created from that merged system bundle
 
 This runs in both the **builder** (pip → PyPI / pytorch.org through the proxy)
 and **runtime** (LLM / embedding HTTPS through the same proxy). If the file is
@@ -669,8 +677,17 @@ Builder `pip` also defaults `--trusted-host` for `pypi.org`,
 inspection cannot break package downloads even when the CA chain is incomplete.
 Override with `--build-arg PIP_TRUSTED_HOST="..."`.
 
-Hugging Face model prefetch uses **certifi**; the image merges the system CA
-bundle into certifi so MITM roots apply there too. If prefetch still fails TLS:
+Hugging Face model prefetch uses **httpx** in Hub 1.x. Sauron configures that
+client explicitly with the merged system bundle and also refreshes certifi for
+libraries that still use it. The build log should contain:
+
+```text
+prefetch_hf_models: huggingface_hub 1.x httpx client factory verify=/etc/ssl/certs/ca-certificates.crt
+```
+
+If prefetch still fails, use the insecure option only for one diagnostic build.
+Success with this option proves that the enterprise bundle is missing the
+correct inspection root or intermediate; fix the PEM before production builds:
 
 ```bash
 docker build -t sauron --build-arg SAURON_PREFETCH_INSECURE_SSL=1 .
