@@ -62,7 +62,12 @@ class ParsedDocument:
 
 def parse_document(path: Path) -> ParsedDocument:
     suffix = path.suffix.lower()
-    if suffix == ".pdf":
+    if suffix == ".vsdx":
+        from src.ingestion.visio import parse_visio
+        return parse_visio(path)
+    elif suffix in (".vsd", ".vdx", ".vsdm"):
+        raise ValueError("Only modern .vsdx Visio documents are supported in this release")
+    elif suffix == ".pdf":
         return _parse_pdf(path)
     elif suffix == ".docx":
         return _parse_docx(path)

@@ -11,7 +11,7 @@
     const docs = await json('/admin/api/figures/inventory');
     $('diagram-inventory').replaceChildren(...docs.map(doc => {
       const p = document.createElement('p');
-      p.textContent = `${doc.filename}: ${doc.figures} stored figures, ${doc.analyzed} analyzed, ${(doc.bytes / 1048576).toFixed(1)} MiB${doc.warnings.length ? ' — ' + doc.warnings.join(' ') : ''}`;
+      p.textContent = `${doc.filename}: ${doc.figures} stored figures, ${doc.analyzed} visually analyzed, ${doc.source_extracted || 0} with native source extraction, ${(doc.bytes / 1048576).toFixed(1)} MiB${doc.warnings.length ? ' — ' + doc.warnings.join(' ') : ''}`;
       return p;
     }));
     const pending = docs.filter(doc => doc.can_backfill);
@@ -36,7 +36,8 @@
         const caption = document.createElement('figcaption');
         caption.textContent = `${ref.filename} · ${ref.figure_id}${ref.page ? ' · page ' + ref.page : ''}${ref.slide ? ' · slide ' + ref.slide : ''} · ${ref.caption || ref.kind}`;
         const description = document.createElement('p'); description.textContent = ref.description;
-        figure.append(link, caption, description); return figure;
+        const notices = document.createElement('p'); notices.textContent = (ref.render_warnings || []).join(' ');
+        figure.append(link, caption, description, notices); return figure;
       }));
       $('diagram-status').textContent = refs.length ? `${refs.length} candidate diagrams. Check the source and site/version before applying a topology.` : 'No stored diagrams matched in the permitted documents.';
     } catch (error) { $('diagram-status').textContent = error.message; }

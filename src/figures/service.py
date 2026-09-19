@@ -46,6 +46,7 @@ def reference(doc, figure, relevance=None, variant=None):
             "description": figure.get("description", ""), "source_url": doc.source_url or "",
             "page": figure["page"] + 1 if figure.get("page") is not None else None,
             "slide": figure["slide"] + 1 if figure.get("slide") is not None else None,
+            "render_warnings": figure.get("render_warnings", []), "source_page_id": figure.get("source_page_id", ""),
             "source": figure.get("source", ""), "analysis_status": figure.get("analysis_status", "complete"),
             "width": asset["width"], "height": asset["height"], "bytes": asset["bytes"],
             "mime_type": "image/png", "sha256": asset["sha256"], "variant": variant,
@@ -168,5 +169,8 @@ def preview_html(images):
             label += f" (page {ref['page']})"
         if ref.get("slide"):
             label += f" (slide {ref['slide']})"
+        notices = " ".join(ref.get("render_warnings", []))
+        if notices:
+            label += " — " + notices
         result.append(f'<figure><a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener"><img loading="lazy" style="max-width:100%;max-height:650px" src="{html.escape(url, quote=True)}" alt="{html.escape(label, quote=True)}"></a><figcaption>{html.escape(label)}</figcaption></figure>')
     return "".join(result)

@@ -174,7 +174,8 @@
           image.src = ref.content_url.replace('/api/v1/documents/', '/admin/api/figure-documents/');
           image.alt = ref.caption || ref.figure_id;
           const caption = document.createElement('figcaption'); caption.textContent = `${ref.filename} · ${ref.caption || ref.figure_id}`;
-          figure.append(image, caption); return figure;
+          const notices = document.createElement('p'); notices.textContent = (ref.render_warnings || []).join(' ');
+          figure.append(image, caption, notices); return figure;
         }));
         $('preview-warnings').replaceChildren(...result.warnings.map(w => { const item = document.createElement('li'); item.textContent = w; return item; }));
         const cited = new Set(result.citations.map(c => c.evidence_id));

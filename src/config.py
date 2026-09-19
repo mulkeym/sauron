@@ -191,6 +191,15 @@ class Settings(BaseSettings):
     # Audit
     audit_log_path: str = "data/audit.jsonl"
 
+    # Visio conversion remains in the disposable ingestion worker.
+    visio_enabled: bool = Field(default=True, description="Ingest modern .vsdx source text and rendered diagram pages.")
+    visio_max_pages: int = Field(default=100, ge=1, le=1000)
+    visio_max_shapes: int = Field(default=20000, ge=1, le=100000, description="Maximum shapes per Visio page.")
+    visio_max_unpacked_mb: int = Field(default=256, ge=1, le=1024)
+    visio_converter_max_mb: int = Field(default=64, ge=1, le=256, description="Maximum converter output bytes, in MiB.")
+    visio_timeout_seconds: int = Field(default=120, ge=1, le=900, description="Timeout for each Visio converter process; the overall extraction timeout also applies.")
+    visio_render_max_edge: int = Field(default=4096, ge=256, le=8192, description="Longest edge of the full Visio PNG; figure pixel and storage limits also apply.")
+
     # Embedded figure / image extraction (PDF vision + OCR)
     figure_store_enabled: bool = Field(default=True, description="Retain extracted PNGs for new ingestions. Existing documents require figure backfill.")
     figure_store_max_per_doc: int = Field(default=100, ge=1, le=1000)

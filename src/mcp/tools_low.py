@@ -30,7 +30,7 @@ def search_documents(
     chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k,
                                  doc_ids=list(scope.doc_ids))
     # Only filter by doc_type if it's a known type (pdf, docx, xlsx, transcript)
-    valid_types = {"pdf", "docx", "xlsx", "transcript", "txt", "markdown"}
+    valid_types = {"vsdx", "pdf", "docx", "xlsx", "transcript", "txt", "markdown"}
     if doc_type and doc_type.lower() in valid_types:
         chunks = [c for c in chunks if c.metadata.doc_type == doc_type.lower()]
     async def stored_figures():

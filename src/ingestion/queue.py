@@ -396,17 +396,18 @@ class IngestQueue:
                     chunks = tier_chunks  # use medium tier for entity extraction
                     job.chunk_count = total_chunks  # show count in UI immediately
 
-            # Preserve one complete, context-rich record per figure in the same tier
-            # used by normal lookup. The inline copy supports surrounding-text queries;
-            # this atomic copy supports questions answered entirely by the diagram.
+            # Index figure evidence in the normal lookup tier. Large Visio pages
+            # use multiple bounded chunks that retain the same source image reference.
             if figure_records:
+                from src.ingestion.prepared_index import figure_index_entries
+                figure_entries = list(figure_index_entries(figure_records))
                 self.update_step(
                     job.job_id, IngestStep.EMBEDDING,
-                    f"Embedding {len(figure_records)} dedicated figure chunks",
+                    f"Embedding {len(figure_entries)} dedicated figure chunks",
                 )
                 figure_texts = [
-                    f"{doc_context}\n\n{record.retrieval_text()}"
-                    for record in figure_records
+                    f"{doc_context}\n\n{text}"
+                    for record, text in figure_entries
                 ]
                 figure_metas = [
                     ChunkMetadata(
@@ -427,7 +428,7 @@ class IngestQueue:
                             + (f", {' > '.join(record.section_path)}" if record.section_path else "")
                         ),
                     )
-                    for i, record in enumerate(figure_records)
+                    for i, (record, _) in enumerate(figure_entries)
                 ]
                 figure_vectors = await asyncio.to_thread(
                     embed_texts, figure_texts, "passage", TIER_BATCH_SIZES["medium"],
@@ -437,7 +438,7 @@ class IngestQueue:
                         vector_store.upsert,
                         texts=figure_texts, vectors=figure_vectors, metadatas=figure_metas,
                     )
-                    total_chunks += len(figure_records)
+                    total_chunks += len(figure_entries)
                     job.chunk_count = total_chunks
 
             # Embed the summary as a dedicated "summary" tier for fast document discovery

@@ -78,6 +78,8 @@ class FigureRecord:
     slide: int | None = None
     assets: dict = field(default_factory=dict)
     analysis_status: str = "complete"
+    render_warnings: list[str] = field(default_factory=list)
+    source_page_id: str = ""
 
     def retrieval_text(self) -> str:
         parts = [f"Figure: {self.figure_id}"]

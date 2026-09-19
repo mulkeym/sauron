@@ -50,3 +50,15 @@ async def index_prepared(prepared, doc_id, acl_groups, category, vector_store,
         figures = await FigureStore().publish_async(doc_id, figure_records, prepared.figure_staging)
         await metadata_store.put_figures(doc_id, figures)
     return text_sheets, enriched_prose, figure_records
+
+
+def figure_index_entries(records):
+    """Keep all labels on large Visio pages searchable with the same PNG citation."""
+    from src.ingestion.chunker import chunk_text
+    for record in records:
+        if record.source != 'visio_page_render':
+            yield record, record.retrieval_text()
+            continue
+        header = f"Figure: {record.figure_id}\nVisio page: {record.caption}\nSource page ID: {record.source_page_id}\n"
+        for chunk in chunk_text(record.description, chunk_size=1400, chunk_overlap=150):
+            yield record, header + chunk.text

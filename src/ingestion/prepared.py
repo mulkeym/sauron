@@ -50,7 +50,11 @@ async def prepare_document(path: Path, filename: str, progress_cb=None) -> Prepa
         result.warnings.append(message)
         logger.warning(message)
 
-    if parsed.doc_type in ("xlsx", "xls", "csv", "tsv"):
+    if parsed.doc_type == "vsdx":
+        from src.ingestion.visio import render_visio
+        result.office, notices = render_visio(path, parsed, progress)
+        result.warnings.extend(notices)
+    elif parsed.doc_type in ("xlsx", "xls", "csv", "tsv"):
         progress("Reading spreadsheet tables")
         try:
             result.spreadsheet_grids = read_sheets(path)

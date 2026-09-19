@@ -17,6 +17,7 @@ cryptography>=48.0.1
 joserfc>=1.6.8
 
 # Ingestion
+lxml>=6.0.2  # bounded VSDX/XML and generated SVG parsing
 unstructured[pdf,docx,xlsx]>=0.22.0
 pdfplumber>=0.11.0  # digital PDF table + prose extraction
 pypdf>=6.14.2

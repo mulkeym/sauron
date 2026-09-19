@@ -41,13 +41,15 @@ async def backfill_figures(doc_id, source, metadata_store, vector_store):
                 record.figure_id = "stored-" + record.figure_id
             if not records:
                 return {"doc_id": doc_id, "stored": 0, "warnings": prepared.warnings + ["No retainable figures were detected."]}
-            texts = [f"Document: {doc.filename}\n\n{r.retrieval_text()}" for r in records]
+            from src.ingestion.prepared_index import figure_index_entries
+            entries = list(figure_index_entries(records))
+            texts = [f"Document: {doc.filename}\n\n{text}" for r, text in entries]
             vectors = await asyncio.to_thread(embed_texts, texts)
             metas = [ChunkMetadata(doc_id=doc_id, filename=doc.filename, doc_type=doc.doc_type,
                 chunk_index=doc.chunk_count + i, start_char=0, acl_groups=list(doc.acl_groups),
                 category=doc.category, content_type="figure", figure_id=r.figure_id, figure_kind=r.kind,
                 page=r.page + 1 if r.page is not None else None, slide=r.slide + 1 if r.slide is not None else None,
-                caption=r.caption, source_locator=f"Figure {r.figure_id}") for i, r in enumerate(records)]
+                caption=r.caption, source_locator=f"Figure {r.figure_id}") for i, (r, _) in enumerate(entries)]
             # Add new entries before retiring older text-only figure entries.
             # If indexing fails, no new asset metadata is published or accessible.
             indexing = asyncio.create_task(asyncio.to_thread(vector_store.upsert, texts, vectors, metas))

@@ -1,8 +1,8 @@
 # Stored source diagrams
 
-Sauron retains PNGs extracted from newly ingested PDFs, Word documents, PowerPoint pictures and Excel images. It stores source images and page renders, including network topologies and Venn diagrams. It does not generate replacement illustrations.
+Sauron retains PNGs extracted from newly ingested PDFs, Word documents, PowerPoint pictures, Excel images and rendered Visio `.vsdx` pages. See [Visio ingestion](visio.md) for conversion behavior and fidelity limits. It stores source images and page renders, including network topologies and Venn diagrams. It does not generate replacement illustrations.
 
-Images live under `/app/data/figures` in the existing persistent data volume. No new mount, service, model or parsing library is required. Figures retain their source document's access restrictions. PNG bytes are absent from vector embeddings, query caches, extraction JSON, and answer text.
+Images live under `/app/data/figures` in the existing persistent data volume. No new mount, service or model is required. Visio rendering adds the native tools described in [Visio ingestion](visio.md). Figures retain their source document's access restrictions. PNG bytes are absent from vector embeddings, query caches, extraction JSON, and answer text.
 
 ## Use
 

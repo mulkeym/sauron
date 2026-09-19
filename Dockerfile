@@ -160,6 +160,7 @@ WORKDIR /app
 # ca-certificates: default public roots + optional custom roots (below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tesseract-ocr libmagic1 poppler-utils curl libgl1 libglib2.0-0 \
+    libvisio-tools librsvg2-bin fonts-dejavu-core fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).

@@ -64,6 +64,7 @@ async def inventory():
         unique = {a["key"]: a["bytes"] for r in own for a in r.get("assets", {}).values()}
         result.append({"doc_id": doc.doc_id, "filename": doc.filename, "figures": len(own),
                        "bytes": sum(unique.values()), "analyzed": sum(r.get("analysis_status") == "complete" for r in own),
+                       "source_extracted": sum(r.get("analysis_status") == "source_extracted" for r in own),
                        "can_backfill": bool(doc.content_hash) and not own,
                        "warnings": (doc.metadata_tags or {}).get("ingestion_warnings", [])})
     return result

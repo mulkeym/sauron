@@ -176,9 +176,11 @@ async def ingest_document(
                 chunks = tier_chunks  # use medium tier for entity extraction
 
         if figure_records:
+            from src.ingestion.prepared_index import figure_index_entries
+            figure_entries = list(figure_index_entries(figure_records))
             figure_texts = [
-                f"{doc_context}\n\n{record.retrieval_text()}"
-                for record in figure_records
+                f"{doc_context}\n\n{text}"
+                for record, text in figure_entries
             ]
             figure_metas = [
                 ChunkMetadata(
@@ -199,14 +201,14 @@ async def ingest_document(
                         + (f", {' > '.join(record.section_path)}" if record.section_path else "")
                     ),
                 )
-                for i, record in enumerate(figure_records)
+                for i, (record, _) in enumerate(figure_entries)
             ]
             figure_vectors = embed_texts(figure_texts) if figure_texts else []
             if figure_vectors:
                 vector_store.upsert(
                     texts=figure_texts, vectors=figure_vectors, metadatas=figure_metas,
                 )
-                total_chunks += len(figure_records)
+                total_chunks += len(figure_entries)
         await metadata_store.add_document(
             doc_id=doc_id,
             filename=parsed.filename,
