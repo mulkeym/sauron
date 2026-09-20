@@ -127,7 +127,8 @@ jobs:
         run: |
           docker run --rm --network none --entrypoint bash \
             -v "$GITHUB_WORKSPACE:/release:ro" sauron-ci:checked -euc '
-              mkdir -p /tmp/release-tests
+              mkdir -p /tmp/release-tests /app/tests
+              cp -a /release/tests/. /app/tests/
               cd /tmp/release-tests
               cp -a /release/tests /release/test_fixtures /release/docs /release/.github .
               cp /release/Dockerfile /release/.env.example /release/requirements.txt /release/constraints-security.txt .
