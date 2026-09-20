@@ -67,16 +67,17 @@ def test_submit_requires_auth(client):
 def test_poll_returns_completed_answer(client, auth_headers):
     query_queue._jobs["tok-1"] = QueryJob(
         token="tok-1", question="q", username="mike", groups=["finance"],
-        status=QueryStatus.COMPLETE, step="complete", answer="done!",
+        status=QueryStatus.COMPLETE, step="complete", answer="done [Eabc123]!",
         citations=[{"doc_id": "d1", "filename": "p.pdf", "doc_type": "pdf",
-                    "chunk_index": 0, "page": 3, "snippet": "s", "relevance": 0.9}],
+                    "chunk_index": 0, "page": 3, "snippet": "s", "relevance": 0.9, "evidence_id": "Eabc123"}],
         completed_at=time.time(),
     )
     resp = client.get("/api/v1/query/async/tok-1", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "complete"
-    assert data["answer"] == "done!"
+    assert data["answer"] == "done [p.pdf — page 3]!"
+    assert query_queue._jobs["tok-1"].answer == "done [Eabc123]!"
     assert data["citations"][0]["filename"] == "p.pdf"
 
 

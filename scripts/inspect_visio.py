@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a local VSDX through Sauron's disposable worker, without indexing it."""
+"""Render a local VSDX or EMF through Sauron's disposable worker, without indexing it."""
 import argparse
 import asyncio
 import dataclasses
@@ -35,7 +35,8 @@ async def inspect(source, destination):
                 asset['file'] = filename
             records.append(record)
         report = {'source': source.name, 'warnings': result.warnings, 'figures': records,
-                  'renderer': 'libvisio + librsvg', 'fidelity': 'Converted preview; inspect warnings and visual layout.'}
+                  'source_pages': result.parsed.metadata.get('visio_pages', []),
+                  'renderer': 'Inkscape' if source.suffix.lower() == '.emf' else 'libvisio + Inkscape (embedded EMF) + librsvg', 'fidelity': 'Converted preview; inspect warnings and visual layout.'}
         (destination / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
         print(json.dumps({'output': str(destination.resolve()), 'pages_rendered': len(records), 'warnings': result.warnings}, indent=2))
         return 0 if records else 2
@@ -46,6 +47,6 @@ if __name__ == '__main__':
     parser.add_argument('source', type=Path)
     parser.add_argument('--output', required=True, type=Path)
     arguments = parser.parse_args()
-    if arguments.source.suffix.lower() != '.vsdx':
-        parser.error('Only .vsdx is supported')
+    if arguments.source.suffix.lower() not in ('.vsdx', '.emf'):
+        parser.error('Only .vsdx and .emf are supported')
     raise SystemExit(asyncio.run(inspect(arguments.source, arguments.output)))

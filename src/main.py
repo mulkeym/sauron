@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
@@ -29,6 +30,15 @@ async def lifespan(app: FastAPI):
     await store.init()
     from src.figures.storage import FigureStore
     await FigureStore().reconcile(store)
+    # Restore row ACLs after old admin edits or an interrupted permission update,
+    # before accepting queries. No re-embedding or document re-ingestion needed.
+    repaired = 0
+    for doc in await store.list_documents():
+        repaired += await asyncio.to_thread(get_vector_store().synchronize_document_acl,
+                                           doc.doc_id, doc.acl_groups or [])
+    if repaired:
+        import logging
+        logging.getLogger(__name__).info("Repaired vector permissions for %s documents", repaired)
     # Crash recovery: LightRAG resumes PENDING/PROCESSING/FAILED docs on the
     # next ainsert. Drop any rows that no longer exist in SAURON metadata so a
     # killed mid-KG import cannot resurrect deleted PDFs beside new uploads.
@@ -66,6 +76,8 @@ async def lifespan(app: FastAPI):
     finally:
         from src.ingestion.queue import ingest_queue
         await ingest_queue.stop_worker()
+        from src.ingestion.embedding_isolation import shutdown_embedding_worker
+        await asyncio.to_thread(shutdown_embedding_worker)
 
 def create_app() -> FastAPI:
     mcp_http_app = None
@@ -123,6 +135,8 @@ def create_app() -> FastAPI:
     app.include_router(ingest_router)
     app.include_router(query_router)
     from src.api.routes_figures import router as figures_router, admin_router as admin_figures_router
+    from src.api.routes_sources import router as sources_router
+    app.include_router(sources_router)
     app.include_router(figures_router)
     app.include_router(admin_figures_router)
     app.include_router(openai_compat_router)

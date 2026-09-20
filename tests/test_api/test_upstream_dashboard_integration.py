@@ -68,7 +68,8 @@ def test_queries_keep_evidence_and_reappear_on_dashboard_after_restart(tmp_path,
         })
         assert response.status_code == 200
         answer = response.json()["choices"][0]["message"]["content"]
-        assert citation.evidence_id in answer and result.warnings[0] in answer
+        assert citation.evidence_id not in answer and result.warnings[0] in answer
+        assert "[runbook.pdf — page 4](https://docs.test/runbook)" in answer
         assert run.await_args.kwargs["user_groups"] == ["engineering"]
         assert run.await_args.kwargs["session_headers"]["x-switchyard-session-id"] == "chat-openwebui"
         assert run.await_args.kwargs["metadata_store"] is store

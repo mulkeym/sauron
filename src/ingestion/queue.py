@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -232,16 +233,7 @@ class IngestQueue:
                 pass
             return
 
-        # Also check by filename (catches pre-hash duplicates)
-        all_docs = await metadata_store.list_documents(None)
-        filename_match = [d for d in all_docs if d.filename == job.filename]
-        if filename_match:
-            self.fail_job(job.job_id, f"Duplicate: a document named '{job.filename}' already exists (doc_id: {filename_match[0].doc_id[:8]}...). Delete it first to re-ingest.")
-            try:
-                file_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            return
+        # A changed source may retain its filename; edition selection handles coexistence.
 
         # Step 1: All file parsing runs outside the API process.
         self.update_step(job.job_id, IngestStep.PARSING, f"Parsing {job.filename}")
@@ -308,8 +300,6 @@ class IngestQueue:
             total_chunks = 0
             chunks = []  # ensure defined even if all sheets de-dup to zero text chunks
 
-            # Smaller batch sizes for larger tiers to prevent OOM kills
-            TIER_BATCH_SIZES = {"small": 4, "medium": 4, "large": 2, "xlarge": 1}
 
             # Structured handling for spreadsheets: clean sheets -> DuckDB + schema +
             # row narratives; messy sheets -> deterministic region narratives. Returns
@@ -368,24 +358,28 @@ class IngestQueue:
                                 tier_chunks.append(
                                     Chunk(text=c.text, index=base_i + j, start_char=c.start_char)
                                 )
+                elif settings.technical_structure_enabled and parsed.doc_type in ('pdf', 'docx', 'vsdx', 'markdown', 'text'):
+                    from src.ingestion.technical_chunks import build_technical_chunks
+                    tier_chunks = build_technical_chunks(prepared, tier_size)
                 elif is_pdf or is_docx or is_pptx or enriched_prose:
                     tier_chunks = chunk_text(chunk_source_text or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
                 else:
                     tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
 
                 self.update_step(job.job_id, IngestStep.EMBEDDING, f"Embedding {len(tier_chunks)} {tier_name} chunks")
-                texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
+                from src.ingestion.technical_chunks import index_text
+                texts = [index_text(doc_context, c) for c in tier_chunks]
+                from src.ingestion.technical_chunks import chunk_metadata, index_text
                 metadatas = [
                     ChunkMetadata(
                         doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
                         chunk_index=c.index, start_char=c.start_char,
                         acl_groups=job.acl_groups, category=category,
-                        chunk_size_tier=tier_name,
+                        chunk_size_tier=tier_name, **chunk_metadata(c),
                     )
                     for c in tier_chunks
                 ]
-                batch_size = TIER_BATCH_SIZES.get(tier_name, 32)
-                vectors = await asyncio.to_thread(embed_texts, texts, "passage", batch_size) if texts else []
+                vectors = await asyncio.to_thread(embed_texts, texts, "passage") if texts else []
 
                 self.update_step(job.job_id, IngestStep.STORING, f"Storing {tier_name} chunks")
                 if vectors:
@@ -431,7 +425,7 @@ class IngestQueue:
                     for i, (record, _) in enumerate(figure_entries)
                 ]
                 figure_vectors = await asyncio.to_thread(
-                    embed_texts, figure_texts, "passage", TIER_BATCH_SIZES["medium"],
+                    embed_texts, figure_texts, "passage",
                 )
                 if figure_vectors:
                     await asyncio.to_thread(
@@ -458,12 +452,14 @@ class IngestQueue:
                         texts=[summary_text], vectors=summary_vector, metadatas=[summary_meta],
                     )
 
+            from src.sources.storage import OriginalStore
+            await asyncio.to_thread(OriginalStore().retain, file_path, doc_id, content_hash, parsed.filename)
             await metadata_store.add_document(
                 doc_id=doc_id, filename=parsed.filename, doc_type=parsed.doc_type,
                 acl_groups=job.acl_groups, chunk_count=total_chunks,
                 uploaded_by=job.uploaded_by, category=category,
                 content_hash=content_hash, dataset_id=job.dataset_id,
-                source_url=job.source_url, summary=doc_summary, metadata_tags={**job.metadata_tags, "ingestion_warnings": prepared.warnings},
+                source_url=job.source_url, summary=doc_summary, metadata_tags={**job.metadata_tags, "document_identity": parsed.metadata.get("document_identity", {}), "ingestion_warnings": prepared.warnings},
             )
             if category and category != "uncategorized":
                 existing = await metadata_store.get_category(category)

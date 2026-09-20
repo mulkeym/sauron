@@ -207,3 +207,25 @@ def test_raw_search_does_not_reuse_stale_vector_acl(monkeypatch):
     vs = MagicMock()
     assert search_documents("deploy", ["team"], vs, metadata_store=store) == []
     vs.search.assert_not_called()
+
+
+def test_model_aliases_only_cover_budgeted_authorized_passages(monkeypatch):
+    from src.config import settings
+    a = chunk("top passage", "allowed")
+    b = chunk("x" * 2000, "too-large")
+    hidden = chunk("secret", "denied")
+    monkeypatch.setattr(settings, "llm_max_context", 250)
+    pack = build_evidence_pack({"question": "test", "retrieved_chunks": [a, b, hidden],
+        "allowed_doc_ids": ["allowed", "too-large"], "edition_decisions": {
+            "allowed": {"source_revision": "a" * 64},
+        }})
+    assert len(pack.aliases) == len(pack.citations) == 1
+    assert pack.model_context.startswith("[E1] Source:")
+    assert "secret" not in pack.model_context and "x" * 2000 not in pack.model_context
+    assert pack.citations[0].source_revision == "a" * 64
+    assert len(pack.model_context) <= settings.llm_max_context
+    assert any("excluded 1" in w for w in pack.warnings)
+    result = finalize_answer({}, "Known [E1].", pack, aliases=pack.aliases)
+    assert result["citations"][0].doc_id == "allowed"
+    assert result["citations"][0].source_revision == "a" * 64
+    assert finalize_answer({}, "Omitted [E2].", pack, aliases=pack.aliases)["response_kind"] == "insufficient_evidence"

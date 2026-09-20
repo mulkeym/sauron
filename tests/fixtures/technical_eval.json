@@ -1,0 +1,1203 @@
+{
+  "synthetic": true,
+  "cases": [
+    {
+      "name": "newest compatible revision",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "out of order ingestion",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "upload timestamps are not authority",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "uploaded": "2026-09-01"
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "uploaded": "2024-01-01"
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "missing revision uses explicit publication dates",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": null,
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": null,
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "ambiguous slash dates retain both",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "02/03/2024",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "03/02/2024",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "revision and publication conflict",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2021-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "missing dates and revisions retain both",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": null,
+          "publication_date": null,
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": null,
+          "publication_date": null,
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "older firmware keeps older edition",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.9",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "new firmware uses its applicable edition",
+      "kind": "editions",
+      "question": "Deploy a branch running 20.9",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.9",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "missing firmware asks only material detail",
+      "kind": "editions",
+      "question": "How do I deploy a branch?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.9",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": [
+        "software_version"
+      ]
+    },
+    {
+      "name": "same applicability needs no extra clarification",
+      "kind": "editions",
+      "question": "How do I deploy a branch?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "unverified applicability does not supersede",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": null,
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "explicit firmware range",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6 through 20.8",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "different environment retains prod edition",
+      "kind": "editions",
+      "question": "Deploy a branch in production on firmware 20.6",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "environment": "production"
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "environment": "lab"
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "missing environment asks focused question",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "environment": "production"
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "environment": "lab"
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": [
+        "environment"
+      ]
+    },
+    {
+      "name": "historical revision remains accessible",
+      "kind": "editions",
+      "question": "Show the procedure in revision 1",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "version comparison keeps both editions",
+      "kind": "editions",
+      "question": "Compare revisions 1 and 2 for branch deployment",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "as-of edition selection",
+      "kind": "editions",
+      "question": "Branch deployment as of 2022-06-01",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "future effective edition is not current",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "effective_date": "2099-01-01"
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "deletion of latest has no stale pointer",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "ACL before edition choice",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "secret"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "dataset before edition choice",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 2
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "exact duplicate bytes collapse",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "hash": "same"
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "hash": "same"
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "similar topic different document ID stays separate",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-02",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "source title product and headings identify editions",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": null,
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": null,
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "insufficient family evidence retains candidates",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": null,
+          "title": "Branch Deployment Guide",
+          "product": null,
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": null,
+          "title": "Branch Deployment Guide",
+          "product": null,
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "explicit supersession names former document",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-02",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "supersedes": "WAN-DEP-01 revision 1"
+        }
+      ],
+      "expected_docs": [
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "circular supersession remains unresolved",
+      "kind": "editions",
+      "question": "How do I deploy a branch on firmware 20.6?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "supersedes": "WAN-DEP-02 revision 2"
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-02",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1,
+          "supersedes": "WAN-DEP-01 revision 1"
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": []
+    },
+    {
+      "name": "follow-up retains user firmware context",
+      "kind": "editions",
+      "question": "What is the next step?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.9",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1"
+      ],
+      "expected_missing": [],
+      "conversation": [
+        {
+          "role": "user",
+          "content": "We are running 20.6; how do I deploy the branch?"
+        }
+      ]
+    },
+    {
+      "name": "assistant speculation is not applicability evidence",
+      "kind": "editions",
+      "question": "What is the next step?",
+      "documents": [
+        {
+          "id": "a1",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "1",
+          "publication_date": "2022-01-01",
+          "applicability": "Firmware 20.6",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        },
+        {
+          "id": "a2",
+          "identifier": "WAN-DEP-01",
+          "title": "Branch Deployment Guide",
+          "product": "Acme SD-WAN",
+          "revision": "2",
+          "publication_date": "2023-01-01",
+          "applicability": "Firmware 20.9",
+          "acl": [
+            "network"
+          ],
+          "dataset": 1
+        }
+      ],
+      "expected_docs": [
+        "a1",
+        "a2"
+      ],
+      "expected_missing": [
+        "software_version"
+      ],
+      "conversation": [
+        {
+          "role": "assistant",
+          "content": "You might be running 20.9."
+        }
+      ]
+    },
+    {
+      "name": "List configuration steps for a branch",
+      "kind": "intent",
+      "question": "List configuration steps for a branch",
+      "expected_intent": "procedure"
+    },
+    {
+      "name": "How do I configure SD-WAN failover?",
+      "kind": "intent",
+      "question": "How do I configure SD-WAN failover?",
+      "expected_intent": "procedure"
+    },
+    {
+      "name": "How to roll back the WAN policy?",
+      "kind": "intent",
+      "question": "How to roll back the WAN policy?",
+      "expected_intent": "procedure"
+    },
+    {
+      "name": "The tunnel is down; how do I diagnose it?",
+      "kind": "intent",
+      "question": "The tunnel is down; how do I diagnose it?",
+      "expected_intent": "troubleshooting"
+    },
+    {
+      "name": "Packet loss persists after checking the uplink",
+      "kind": "intent",
+      "question": "Packet loss persists after checking the uplink",
+      "expected_intent": "troubleshooting"
+    },
+    {
+      "name": "Troubleshoot a site that cannot connect",
+      "kind": "intent",
+      "question": "Troubleshoot a site that cannot connect",
+      "expected_intent": "troubleshooting"
+    },
+    {
+      "name": "What is the exact show tunnel command syntax?",
+      "kind": "intent",
+      "question": "What is the exact show tunnel command syntax?",
+      "expected_intent": "command_reference"
+    },
+    {
+      "name": "Explain the network topology",
+      "kind": "intent",
+      "question": "Explain the network topology",
+      "expected_intent": "architecture"
+    },
+    {
+      "name": "Compare firmware versions 20.6 and 20.9",
+      "kind": "intent",
+      "question": "Compare firmware versions 20.6 and 20.9",
+      "expected_intent": "version_comparison"
+    },
+    {
+      "name": "List all contracts",
+      "kind": "intent",
+      "question": "List all contracts",
+      "expected_intent": ""
+    }
+  ]
+}

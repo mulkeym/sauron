@@ -28,11 +28,32 @@ class Settings(BaseSettings):
     vllm_request_timeout: int = 300  # seconds - increase for thinking/local models
     ssl_verify: bool = True  # set to False for self-signed certs
 
+    llm_answer_temperature: float = Field(
+        default=0.1, ge=0.0, le=2.0, title="Final answer temperature",
+        description="Sampling temperature for final answers, repairs and previews (0–2). Higher values increase output variation. For Gemma 4 thinking, start at 1.0 and evaluate answer accuracy. Models with fixed sampling omit this parameter.")
+    llm_answer_thinking: Literal["default", "enabled", "disabled"] = Field(
+        default="default", title="Final answer reasoning (thinking)",
+        description="Thinking preference for final answers and answer previews. Provider default omits the control. Reasoning shares the output token budget and can add latency/cost. Classification, ingestion and the separate SQL option are unchanged.")
+    llm_reasoning_adapter: Literal["auto", "vllm_template"] = Field(
+        default="auto", title="Reasoning request adapter",
+        description="Auto verifies OpenRouter model metadata. Select vLLM template only when your server and chat template support enable_thinking; this cannot override server restrictions.")
+
     # Embeddings
     embedding_mode: Literal["local", "api"] = "local"  # local model or external endpoint
     embedding_api_url: str = "http://localhost:8000/v1"  # OpenAI-compatible /v1/embeddings endpoint (only used when mode=api)
     embedding_model_name: str = "nomic-ai/nomic-embed-text-v1"  # local default; set to API model name when mode=api
-    embedding_batch_size: int = 4  # max batch size for isolated local embedding (CPU)
+    embedding_batch_size: int = Field(default=4, ge=1, le=512, title="Local embedding batch size",
+        description="Maximum passages per local model batch. Applies to all chunk tiers; larger batches use more memory. Changes apply on the next request.")
+    embedding_cpu_threads: int = Field(default=0, ge=0, le=256, title="Embedding CPU threads",
+        description="CPU threads per model operation. 0 detects available CPUs, respecting container quota and affinity. Explicit values are capped to available CPUs. Changes recycle the worker on the next request.")
+    embedding_cpu_interop_threads: int = Field(default=1, ge=1, le=256, title="Embedding inter-op threads",
+        description="Parallel model operations. Start at 1; increasing this can oversubscribe CPUs. Capped to available CPUs; changes recycle the worker.")
+    embedding_worker_memory_mb: int = Field(default=4096, ge=128, title="Embedding memory budget (MiB)",
+        description="Worker memory budget with additional container headroom protection. A limit breach stops the worker, not the API. Lower batch size if requests exceed this budget.")
+    embedding_worker_timeout_seconds: int = Field(default=1200, ge=1, title="Embedding request timeout (seconds)",
+        description="Time limit per embedding request, including model loading on a cold worker. Queue waiting does not count.")
+    embedding_worker_idle_seconds: int = Field(default=300, ge=1, title="Embedding idle timeout (seconds)",
+        description="Keep the model loaded between requests for this long, then free its memory. The next request starts a new worker.")
     embedding_dimension: int = 0  # auto-detect from first embedding call if 0
 
     # LanceDB
@@ -163,7 +184,7 @@ class Settings(BaseSettings):
     prf_max_terms: int = 10  # max terms to append to expanded query
 
     # Strategy memory
-    strategy_memory_enabled: bool = True
+    strategy_memory_enabled: bool = False
     strategy_memory_min_runs: int = 3   # min recorded runs before memory may override routing
     strategy_memory_margin: float = 0.15  # min normalized composite margin to override
 
@@ -191,14 +212,40 @@ class Settings(BaseSettings):
     # Audit
     audit_log_path: str = "data/audit.jsonl"
 
+    # Staged technical-document rollout; metadata capture is independent of selection.
+    revision_selection_enabled: bool = Field(default=True, description="Select established newest applicable editions after ACL/dataset checks. Ambiguous editions remain available.")
+    technical_structure_enabled: bool = Field(default=False, description="Use section-aware technical chunks for new ingestions; existing sources require reprocessing.")
+    procedure_retrieval_enabled: bool = Field(default=False, description="Enable bounded procedure evidence retrieval and automatic/explicit procedure routing.")
+    troubleshooting_retrieval_enabled: bool = Field(default=False, description="Enable troubleshooting evidence retrieval after procedure evaluation.")
+    technical_section_max_chars: int = Field(default=16000, ge=1000, le=64000)
+    technical_followup_top_k: int = Field(default=12, ge=1, le=30)
+
     # Visio conversion remains in the disposable ingestion worker.
     visio_enabled: bool = Field(default=True, description="Ingest modern .vsdx source text and rendered diagram pages.")
+    visio_repair_text_layout: bool = Field(default=True, description="Restore saved Visio text-box wrapping and alignment, including styled runs and translation-only groups; unsupported layouts remain native.")
+    visio_text_min_scale: float = Field(default=0.5, ge=0.25, le=1.0, description="Smallest preview font scale used to fit Visio labels into their saved boxes; a 4-point floor also applies. Source text is unchanged.")
     visio_max_pages: int = Field(default=100, ge=1, le=1000)
     visio_max_shapes: int = Field(default=20000, ge=1, le=100000, description="Maximum shapes per Visio page.")
     visio_max_unpacked_mb: int = Field(default=256, ge=1, le=1024)
     visio_converter_max_mb: int = Field(default=64, ge=1, le=256, description="Maximum converter output bytes, in MiB.")
     visio_timeout_seconds: int = Field(default=120, ge=1, le=900, description="Timeout for each Visio converter process; the overall extraction timeout also applies.")
     visio_render_max_edge: int = Field(default=4096, ge=256, le=8192, description="Longest edge of the full Visio PNG; figure pixel and storage limits also apply.")
+
+    # Native metafile conversion shares the disposable extraction worker.
+    emf_enabled: bool = Field(default=True, description="Convert standalone and Visio-embedded EMF images to PNG using Inkscape.")
+    emf_max_input_mb: int = Field(default=32, ge=1, le=256)
+    emf_max_conversions_per_doc: int = Field(default=256, ge=1, le=1000, description="Maximum distinct embedded EMFs per document; repeated images reuse a conversion.")
+    emf_timeout_seconds: int = Field(default=120, ge=1, le=900, description="Total native EMF conversion time per document, within the extraction worker timeout.")
+    emf_render_max_edge: int = Field(default=4096, ge=256, le=8192, description="Standalone EMF PNG resolution; figure pixel limits also apply.")
+    emf_embedded_max_edge: int = Field(default=1024, ge=256, le=4096, description="Resolution of embedded EMF icons before composing a Visio page.")
+    emf_ocr_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    emf_vision_enabled: bool = Field(default=True, description="Analyze rendered EMF diagrams with the configured vision-capable LLM; OCR and images survive model failures.")
+
+    # Original bytes are retained only when a private directory is explicitly configured.
+    source_originals_dir: str = Field(default="", title="Private original-document storage", description="Persistent directory for exact uploaded files. Blank disables retention. Changes apply to new uploads; existing documents need their exact originals backfilled.")
+    source_originals_max_mb: int = Field(default=2048, ge=1, le=102400, description="Maximum size in MiB for retaining one original document.")
+    source_download_jwt_secret: str = Field(default="", title="Original-download signing secret", description="Dedicated secret of at least 32 characters, shared with OpenWebUI original-download settings. Separate from MCP authentication. Leave blank when editing to keep the saved value.")
+    source_download_webui_url: str = Field(default="", title="OpenWebUI public URL", description="Browser-facing OpenWebUI URL used in original-document links, including any reverse-proxy prefix.")
 
     # Embedded figure / image extraction (PDF vision + OCR)
     figure_store_enabled: bool = Field(default=True, description="Retain extracted PNGs for new ingestions. Existing documents require figure backfill.")

@@ -36,16 +36,21 @@ def mock_chunks():
     ]
 
 
-def test_rag_query_returns_response_with_citations(mock_chunks):
+def test_rag_query_returns_response_with_citations(mock_chunks, monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, 'llm_answer_temperature', 1.0)
+    monkeypatch.setattr(settings, 'llm_answer_thinking', 'disabled')
     with patch("src.generation.rag_chain.embed_query", return_value=[0.1] * 1024):
         mock_vector_store = MagicMock()
         mock_vector_store.search.return_value = mock_chunks
-        with patch("src.generation.rag_chain.generate", return_value="Expenses over $500 need approval [1]."):
+        with patch("src.generation.rag_chain.generate", return_value="Expenses over $500 need approval [1].") as generate:
             result = rag_query(
                 question="What is the expense policy?",
                 user_groups=["finance"],
                 vector_store=mock_vector_store,
             )
+    assert generate.call_args.kwargs['temperature'] == 1.0
+    assert generate.call_args.kwargs['reasoning_mode'] == 'disabled'
     assert isinstance(result, RAGResponse)
     assert len(result.citations) == 2
     assert result.citations[0].filename == "finance_policy.pdf"

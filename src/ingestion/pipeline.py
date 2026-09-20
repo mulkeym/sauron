@@ -6,6 +6,8 @@ from pathlib import Path
 from src.ingestion.isolation import extract_in_worker
 from src.ingestion.prepared_index import index_prepared
 from src.ingestion.chunker import chunk_text
+from src.ingestion.technical_chunks import build_technical_chunks, chunk_metadata, index_text
+from src.config import settings
 from src.ingestion.embedder import embed_texts
 from src.ingestion.tabular_ingest import SPREADSHEET_DOC_TYPES
 from src.ingestion.tabular_chunker import build_tier_chunks
@@ -150,11 +152,13 @@ async def ingest_document(
                             tier_chunks.append(
                                 Chunk(text=c.text, index=base_i + j, start_char=c.start_char)
                             )
+            elif settings.technical_structure_enabled and parsed.doc_type in ('pdf', 'docx', 'vsdx', 'markdown', 'text'):
+                tier_chunks = build_technical_chunks(prepared, tier_size)
             elif is_pdf or is_docx or is_pptx or enriched_prose:
                 tier_chunks = chunk_text(chunk_source or "", chunk_size=tier_size, chunk_overlap=tier_overlap)
             else:
                 tier_chunks = chunk_text(parsed.text, chunk_size=tier_size, chunk_overlap=tier_overlap)
-            texts = [f"{doc_context}\n\n{c.text}" for c in tier_chunks]
+            texts = [index_text(doc_context, c) for c in tier_chunks]
             metadatas = [
                 ChunkMetadata(
                     doc_id=doc_id,
@@ -164,7 +168,7 @@ async def ingest_document(
                     start_char=c.start_char,
                     acl_groups=acl_groups,
                     category=category,
-                    chunk_size_tier=tier_name,
+                    chunk_size_tier=tier_name, **chunk_metadata(c),
                 )
                 for c in tier_chunks
             ]
@@ -209,6 +213,9 @@ async def ingest_document(
                     texts=figure_texts, vectors=figure_vectors, metadatas=figure_metas,
                 )
                 total_chunks += len(figure_entries)
+        from src.sources.storage import OriginalStore
+        import asyncio
+        await asyncio.to_thread(OriginalStore().retain, file_path, doc_id, content_hash, parsed.filename)
         await metadata_store.add_document(
             doc_id=doc_id,
             filename=parsed.filename,
@@ -218,7 +225,7 @@ async def ingest_document(
             uploaded_by=uploaded_by,
             category=category, content_hash=content_hash,
             dataset_id=dataset_id or 0,
-            metadata_tags={"ingestion_warnings": prepared.warnings},
+            metadata_tags={"document_identity": parsed.metadata.get("document_identity", {}), "ingestion_warnings": prepared.warnings},
         )
         # (Spreadsheet structured ingest + de-dup happened in the chunking loop above.)
         # Ensure category exists in categories table

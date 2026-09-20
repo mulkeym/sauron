@@ -145,7 +145,7 @@ class MetadataStore:
         """Find an existing document with the same content hash."""
         async with self.session_factory() as session:
             result = await session.execute(
-                select(DocumentRecord).where(DocumentRecord.content_hash == content_hash)
+                select(DocumentRecord).where(DocumentRecord.content_hash == content_hash).order_by(DocumentRecord.doc_id).limit(1)
             )
             return result.scalar_one_or_none()
 
@@ -211,6 +211,8 @@ class MetadataStore:
         from src.figures.storage import FigureStore
         import asyncio
         await asyncio.to_thread(FigureStore().delete_document, doc_id)
+        from src.sources.storage import OriginalStore
+        await asyncio.to_thread(OriginalStore().delete_document, doc_id)
 
     async def add_category(self, name, description, acl_groups, routing_keywords, grs_number=""):
         record = Category(name=name, description=description, acl_groups=acl_groups, routing_keywords=routing_keywords, grs_number=grs_number)

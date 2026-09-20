@@ -708,7 +708,10 @@ async def query_graph(question: str, mode: str = "hybrid", user_groups: list[str
                          f"{e.get('entity_name', '')}: {e.get('description', '')}")
         for c in chunks:
             parts.append(f"Source excerpt [{c.get('file_path')}]: {c.get('content', '')}")
-        return {"context": "\n".join(parts), "mode": mode}
+        return {"context": "\n".join(parts), "mode": mode,
+                "retrieval_hints": [{"term": e.get('entity_name', ''),
+                    "filenames": [p.strip() for p in e['file_path'].split('<SEP>')]}
+                    for e in entities[:40]]}
     except Exception as e:
         logger.error(f"LightRAG query failed: {e}")
         return {**empty, "error": str(e)}

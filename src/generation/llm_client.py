@@ -2,12 +2,14 @@ import json
 import logging
 import re
 import uuid
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 import requests
 
 from src.config import settings
+from src.generation.http_deadline import post_json
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +115,8 @@ class LLMError(RuntimeError):
 
 
 class LLMTimeoutError(LLMError):
-    """The LLM request exceeded vllm_request_timeout. Deterministic for a given
-    payload size — re-running it only wastes another full timeout."""
+    """The buffered LLM request exceeded its whole-response deadline.
+    A deadline failure is not automatically retried."""
 
 
 class LLMConnectionError(LLMError):
@@ -137,16 +139,17 @@ def _is_reasoning_model(model: str) -> bool:
 def _is_openai_endpoint(base_url: str) -> bool:
     """True for the hosted OpenAI API. `chat_template_kwargs` is a vLLM-only
     extension that OpenAI rejects on every model, so it must never be sent here."""
-    return "api.openai.com" in (base_url or "")
+    from urllib.parse import urlsplit
+    return urlsplit(base_url or "").hostname == "api.openai.com"
 
 
 def _build_payload(messages: list, model: str, temperature: float, max_tokens: int,
-                   *, thinking: bool = False, stream: bool = False) -> dict:
+                   *, thinking: bool = False, stream: bool = False, reasoning_mode: str | None = None) -> dict:
     """Build a chat-completions payload adapted to the target model/endpoint.
 
     Standard models (gpt-4*, vLLM/Gemma) keep the historical fields. Reasoning
-    models get `max_completion_tokens` and no `temperature`/`seed`. The vLLM-only
-    `chat_template_kwargs` thinking toggle is only attached for non-OpenAI endpoints.
+    models get `max_completion_tokens` and no `temperature`/`seed`. Explicit reasoning uses verified OpenRouter metadata or an operator-selected
+    vLLM template adapter. Provider-default requests omit reasoning controls.
     """
     payload = {"model": model, "messages": messages}
     if stream:
@@ -159,38 +162,63 @@ def _build_payload(messages: list, model: str, temperature: float, max_tokens: i
         payload["max_tokens"] = max_tokens
         payload["seed"] = settings.llm_seed
 
-    if thinking and not _is_openai_endpoint(settings.vllm_base_url):
-        payload["chat_template_kwargs"] = {"enable_thinking": True}
+    from src.generation.reasoning import reasoning_parameters, ReasoningConfigurationError
+    if reasoning_mode not in {None, "default", "enabled", "disabled"}:
+        raise LLMError("Invalid reasoning mode")
+    if reasoning_mode in {"enabled", "disabled"} or thinking:
+        try:
+            payload.update(reasoning_parameters(reasoning_mode != "disabled", model=model))
+        except ReasoningConfigurationError as exc:
+            if reasoning_mode in {"enabled", "disabled"}:
+                raise LLMError(str(exc)) from exc
+            # The historical SQL hint was best effort. Do not invent a request
+            # extension or break SQL on endpoints with no verified support.
+            logger.warning("SQL thinking hint omitted: %s", exc)
 
     return payload
 
 
 def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
-              *, thinking: bool = False) -> str:
-    """Call LLM via requests to an OpenAI-compatible endpoint. When ``thinking``
-    is set, enable the model's reasoning (chat-template toggle) and raise the
-    token budget. If the served template ignores the toggle, generation simply
-    proceeds non-thinking — never an error."""
+              *, thinking: bool = False, reasoning_mode: str | None = None) -> str:
+    """Call the configured endpoint. ``thinking`` is the legacy SQL hint;
+    explicit answer ``reasoning_mode`` uses the caller's unchanged token budget."""
     if thinking:
         max_tokens = settings.sql_thinking_max_tokens
-    logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}, thinking={thinking}")
+    logger.info(f"LLM call: model={model}, temperature={temperature}, max_tokens={max_tokens}, thinking={thinking}, answer_reasoning={reasoning_mode or 'default'}")
 
-    payload = _build_payload(messages, model, temperature, max_tokens, thinking=thinking)
+    payload = _build_payload(messages, model, temperature, max_tokens, thinking=thinking, reasoning_mode=reasoning_mode)
 
     headers = _request_headers()
 
+    started = time.monotonic()
+    deadline = started + settings.vllm_request_timeout
+    call_id = uuid.uuid4().hex[:10]
+    logger.info("Model request %s started; total deadline=%ss", call_id, settings.vllm_request_timeout)
     try:
-        resp = requests.post(
-            f'{settings.vllm_base_url}/chat/completions',
-            json=payload,
-            headers=headers,
-            timeout=settings.vllm_request_timeout,
-            verify=settings.ssl_verify,
-        )
+        for attempt in range(2):
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise requests.Timeout()
+                resp = post_json(
+                    f'{settings.vllm_base_url}/chat/completions',
+                    json=payload,
+                    headers=headers,
+                    timeout=remaining,
+                    verify=settings.ssl_verify,
+                )
+                break
+            except requests.exceptions.ChunkedEncodingError as e:
+                # The provider closed an incomplete HTTP response. Discard it;
+                # retry the same request once, never parse partial model output.
+                if attempt:
+                    raise LLMConnectionError("LLM response ended prematurely after one transport retry") from e
+                logger.warning("LLM response ended prematurely; retrying transport once")
         resp.raise_for_status()
         response = resp.json()
     except requests.Timeout:
-        raise LLMTimeoutError(f"LLM request timed out after {settings.vllm_request_timeout}s")
+        logger.warning("Model request %s timed out after %.1fs", call_id, time.monotonic() - started)
+        raise LLMTimeoutError(f"Model generation exceeded the {settings.vllm_request_timeout}-second total deadline. The provider did not complete its response. Retry, turn off answer thinking, or increase the model timeout.")
     except requests.ConnectionError as e:
         raise LLMConnectionError(f"LLM connection failed: {e}")
     except requests.HTTPError as e:
@@ -204,52 +232,31 @@ def _call_llm(messages: list, model: str, temperature: float, max_tokens: int,
             pass
         raise LLMError(f"LLM HTTP error: {e}" + (f"; body: {body}" if body else ""))
     except json.JSONDecodeError as e:
-        raise RuntimeError(f"Invalid JSON from LLM: {e}\nResponse: {resp.text[:500]}")
+        raise LLMError("LLM endpoint returned invalid JSON.") from e
+
+    usage = response.get("usage") or {}
+    logger.info("Model request %s completed in %.1fs; provider=%s; completion_tokens=%s; reasoning_tokens=%s",
+                call_id, time.monotonic() - started, response.get("provider", "unknown"), usage.get("completion_tokens"),
+                (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
 
     if 'error' in response:
         raise RuntimeError(f"LLM error: {response['error']}")
 
     if 'choices' not in response or not response['choices']:
-        raise RuntimeError(f"No choices in LLM response: {resp.text[:200]}")
+        raise LLMError("LLM endpoint returned no choices.")
 
-    message = response['choices'][0]['message']
-    content = message.get('content', '').strip() if message.get('content') else ''
-
-    # Fallback 1: reasoning_content field (thinking models like Gemma via llama.cpp)
+    from src.generation.reasoning import final_text
+    choice = response['choices'][0]
+    if choice.get('finish_reason') == 'length':
+        raise LLMError('LLM output token budget exhausted before completion; increase the answer output limit.')
+    content = final_text(choice.get('message', {}).get('content'))
     if not content:
-        reasoning = message.get('reasoning_content') or message.get('reasoning') or ''
-        if reasoning:
-            logger.info(f"Using reasoning field as content fallback, length: {len(reasoning)}")
-            content = reasoning.strip()
-
-    # Fallback 2: extract from <think> blocks
-    if not content and message.get('content'):
-        raw = message['content']
-        think_match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
-        if think_match:
-            content = think_match.group(1).strip()
-            after = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
-            if after and len(after) > len(content):
-                content = after
-
-    # Fallback 3: other field names
-    if not content:
-        for field in ['text', 'output', 'result']:
-            val = message.get(field, '')
-            if isinstance(val, str) and val.strip():
-                content = val.strip()
-                break
-
-    if not content:
-        logger.error(f"LLM returned empty content. Keys: {list(message.keys())}")
-        logger.error(f"Message: {json.dumps(message, indent=2)[:1000]}")
-        raise RuntimeError(f"LLM returned empty content. Message keys: {list(message.keys())}")
-
+        raise LLMError('LLM returned no final answer; reasoning text is not an answer.')
     return content
 
 
 def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048,
-                    session_id: str | None = None, agent_id: str | None = None):
+                    session_id: str | None = None, agent_id: str | None = None, *, reasoning_mode: str | None = None):
     """Stream tokens from the LLM. Yields content strings as they arrive.
 
     ``session_id`` / ``agent_id`` attach Switchyard headers for this POST
@@ -261,7 +268,7 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        settings.vllm_model_name, temperature, max_tokens, stream=True,
+        settings.vllm_model_name, temperature, max_tokens, stream=True, reasoning_mode=reasoning_mode,
     )
 
     if session_id:
@@ -286,42 +293,47 @@ def generate_stream(system_prompt, user_prompt, temperature=0.1, max_tokens=2048
     )
     resp.raise_for_status()
 
-    buffer = ""
-    for line in resp.iter_lines(decode_unicode=True):
-        if not line or not line.startswith("data: "):
-            continue
-        data = line[6:]
-        if data == "[DONE]":
-            break
-        try:
-            chunk = json.loads(data)
-            # Switchyard / OpenAI emit a final usage chunk with choices=[].
-            # dict.get("choices", [{}]) still returns [] when the key is present.
-            choices = chunk.get("choices") or [{}]
-            delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
-            content = delta.get("content") or ""
-            if content:
-                buffer += content
-                # Strip thinking blocks in real-time
-                while "<think>" in buffer and "</think>" in buffer:
-                    start = buffer.index("<think>")
-                    end = buffer.index("</think>") + len("</think>")
-                    buffer = buffer[:start] + buffer[end:]
-                if "<think>" in buffer and "</think>" not in buffer:
-                    continue
-                if buffer:
-                    yield buffer
-                    buffer = ""
-        except json.JSONDecodeError:
-            continue
+    from src.generation.reasoning import FinalTextFilter
+    parser = FinalTextFilter()
+    emitted = False
+    finish_reason = None
+    try:
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if chunk.get('error'):
+                raise LLMError('Provider returned a streaming error.')
+            choices = chunk.get('choices') or [{}]
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            finish_reason = choice.get('finish_reason') or finish_reason
+            content = choice.get('delta', {}).get('content')
+            if isinstance(content, str):
+                visible = parser.feed(content)
+                if visible:
+                    emitted = emitted or bool(visible.strip())
+                    yield visible
+        tail = parser.feed('', final=True)
+        if tail:
+            emitted = emitted or bool(tail.strip())
+            yield tail
+        if finish_reason == 'length':
+            raise LLMError('LLM output token budget exhausted before completion.')
+        if not emitted:
+            raise LLMError('LLM returned no final answer; reasoning text is not an answer.')
+    finally:
+        close = getattr(resp, 'close', None)
+        if close:
+            close()
 
-    if buffer:
-        buffer = re.sub(r"<think>.*?</think>", "", buffer, flags=re.DOTALL).strip()
-        if buffer:
-            yield buffer
 
-
-def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048, *, thinking=False):
+def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048, *, thinking=False, reasoning_mode=None):
     """Generate text using the LLM. ``thinking`` enables model reasoning for this call."""
     original_content = _call_llm(
         messages=[
@@ -332,24 +344,13 @@ def generate(system_prompt, user_prompt, temperature=0.1, max_tokens=2048, *, th
         temperature=temperature,
         max_tokens=max_tokens,
         thinking=thinking,
+        **({"reasoning_mode": reasoning_mode} if reasoning_mode is not None else {}),
     )
 
-    # Strip <think> blocks, preserve content outside them
-    content = re.sub(r"<think>.*?</think>", "", original_content, flags=re.DOTALL).strip()
-
-    # If stripping left nothing, extract from the thinking block
+    from src.generation.reasoning import final_text
+    content = final_text(original_content)
     if not content:
-        think_match = re.search(r'<think>(.*?)</think>', original_content, re.DOTALL)
-        if think_match:
-            content = think_match.group(1).strip()
-
-    # Last resort: return original
-    if not content:
-        content = original_content.strip()
-
-    if not content:
-        raise RuntimeError("LLM returned completely empty response")
-
+        raise LLMError("LLM returned no final answer; reasoning text is not an answer.")
     return content
 
 
@@ -393,7 +394,7 @@ def generate_vision(
 
     req_timeout = timeout if timeout is not None else settings.vllm_request_timeout
     try:
-        resp = requests.post(
+        resp = post_json(
             f"{settings.vllm_base_url}/chat/completions",
             json=payload,
             headers=headers,
@@ -415,9 +416,11 @@ def generate_vision(
         raise LLMError(f"Vision LLM HTTP error: {e} {body}") from e
 
     try:
+        if response["choices"][0].get("finish_reason") == "length":
+            raise LLMError("Vision LLM output token budget exhausted before completion.")
         original_content = response["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as e:
-        raise LLMError(f"Vision LLM returned unexpected payload: {response!r}") from e
+        raise LLMError("Vision LLM returned an unexpected response structure.") from e
 
     if isinstance(original_content, list):
         # Some servers return content as a list of parts
@@ -429,11 +432,10 @@ def generate_vision(
                 parts.append(part)
         original_content = "".join(parts)
 
-    content = re.sub(r"<think>.*?</think>", "", str(original_content), flags=re.DOTALL).strip()
+    from src.generation.reasoning import final_text
+    content = final_text(original_content)
     if not content:
-        content = str(original_content).strip()
-    if not content:
-        raise RuntimeError("Vision LLM returned completely empty response")
+        raise LLMError("Vision LLM returned no final answer; reasoning text is not an answer.")
     return content
 
 
@@ -442,15 +444,10 @@ def parse_json_response(text: str) -> dict:
     if not text:
         raise ValueError("Empty response text")
 
-    original_text = text
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
+    from src.generation.reasoning import final_text
+    text = final_text(text)
     if not text:
-        think_match = re.search(r'<think>(.*?)</think>', original_text, re.DOTALL)
-        if think_match:
-            text = think_match.group(1).strip()
-        else:
-            raise ValueError("No valid content found after stripping thinking blocks")
+        raise ValueError("No final content found after stripping reasoning")
 
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
-from typing import Optional
-from pydantic import BaseModel
+from typing import Optional, Literal
+from pydantic import BaseModel, Field
 
 class LoginRequest(BaseModel):
     username: str
@@ -43,12 +43,21 @@ class DatasetInfo(BaseModel):
     default_acl_groups: list[str] = []
     active: bool = True
 
+class ConversationTurn(BaseModel):
+    role: Literal['user', 'assistant']
+    content: str = Field(max_length=4000)
+
+
 class QueryRequest(BaseModel):
+    conversation: list[ConversationTurn] = Field(default_factory=list, max_length=8)
     question: str
     # When true, skip query-cache lookup (still may store a fresh result after the run).
     skip_cache: bool = False
 
 class CitationResponse(BaseModel):
+    display_label: str = ""
+    edition: dict = {}
+    source_revision: str = ""
     doc_id: str
     filename: str
     doc_type: str

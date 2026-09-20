@@ -37,8 +37,16 @@ def sign_in(client):
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "invalid"}])
 def test_every_registered_endpoint_denies_anonymous_requests(client, headers):
     checked = 0
-    for route in client.app.routes:
-        path = getattr(route, "path", "")
+    def endpoints(routes, prefix=""):
+        for route in routes:
+            # FastAPI 0.141 keeps included routers as lazy branches.
+            if hasattr(route, "original_router"):
+                yield from endpoints(route.original_router.routes,
+                                     prefix + route.include_context.prefix)
+            else:
+                yield route, prefix + getattr(route, "path", "")
+
+    for route, path in endpoints(client.app.routes):
         if path == "/admin/login" or path == "/admin/static":
             continue
         path = re.sub(r"\{[^}]+\}", "1", path)

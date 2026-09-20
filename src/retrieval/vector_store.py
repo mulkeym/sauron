@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import logging
 import uuid
 
@@ -93,6 +94,9 @@ class VectorStore:
             pa.field("caption", pa.string()),
             pa.field("source_locator", pa.string()),
             pa.field("slide", pa.int32()),
+            pa.field("section_id", pa.string()),
+            pa.field("section_path", pa.string()),
+            pa.field("evidence_role", pa.string()),
         ])
 
     def _ensure_table(self):
@@ -118,6 +122,7 @@ class VectorStore:
                 "caption": "CAST(NULL AS STRING)",
                 "source_locator": "CAST(NULL AS STRING)",
                 "slide": "CAST(NULL AS INT)",
+                "section_id": "''", "section_path": "''", "evidence_role": "''",
             }
             missing = {name: expr for name, expr in expressions.items() if name not in existing}
             if missing:
@@ -202,6 +207,8 @@ class VectorStore:
                 caption=row.get("caption"),
                 source_locator=row.get("source_locator"),
                 slide=row.get("slide"),
+                section_id=row.get("section_id") or "", section_path=row.get("section_path") or "",
+                evidence_role=row.get("evidence_role") or "",
             )
             # LanceDB returns _distance (lower=better) or _relevance_score
             score = row.get("_relevance_score", 0.0)
@@ -277,9 +284,18 @@ class VectorStore:
             logger.warning(f"Reranked search failed, falling back to hybrid: {e}")
             return self.hybrid_search(vector, text_query, user_groups, top_k, tier, doc_ids)
 
-    def search_figures(self, vector, query, user_groups, doc_ids, top_k=5, kind=None):
+    def search_figures(self, vector, query, user_groups, doc_ids, top_k=5, kind=None, *, authorized_doc_ids=None):
         from lancedb.rerankers import RRFReranker
-        combined = self._build_filter(user_groups, "medium", doc_ids)
+        # Only callers that resolved the authoritative catalog ACL may supply this
+        # scope. Intersect it with the requested documents and fail closed when empty.
+        # Ingestion-time row ACLs can lag behind later document permission edits.
+        if authorized_doc_ids is not None:
+            doc_ids = [d for d in (doc_ids or []) if d in set(authorized_doc_ids)]
+            if not user_groups or not doc_ids:
+                return []
+            combined = self._build_filter(["ALL"], "medium", doc_ids)
+        else:
+            combined = self._build_filter(user_groups, "medium", doc_ids)
         parts = [combined, "content_type = 'figure'"]
         if kind:
             parts.append("figure_kind = '" + kind.replace("'", "''") + "'")
@@ -294,6 +310,31 @@ class VectorStore:
     def figure_row_ids(self, doc_id):
         where = "doc_id = '" + doc_id.replace("'", "''") + "' AND content_type = 'figure'"
         return [r["id"] for r in self.table.search().where(where).select(["id"]).limit(10000).to_list()]
+
+    def synchronize_document_acl(self, doc_id: str, groups: list[str]) -> bool:
+        """Repair ingestion-time row permissions from the authoritative catalog.
+
+        Check all tiers in bounded batches; update only when permissions differ.
+        Existing vectors, text, figure captions, and source IDs remain unchanged.
+        """
+        if self.table_name not in self.db.table_names():
+            return False
+        where = "doc_id = '" + doc_id.replace("'", "''") + "'"
+        desired = sorted(set(groups))
+        offset = 0
+        while True:
+            rows = (self.table.search().where(where).select(["acl_groups"])
+                    .offset(offset).limit(1000).to_list())
+            if any(set(r.get("acl_groups") or []) != set(desired) for r in rows):
+                if desired:
+                    self.table.update(where=where, values={"acl_groups": desired})
+                else:
+                    # Lance cannot infer the element type of an empty Python list.
+                    self.table.update(where=where, values_sql={"acl_groups": "array_except(acl_groups, acl_groups)"})
+                return True
+            if len(rows) < 1000:
+                return False
+            offset += len(rows)
 
     def delete_ids(self, ids):
         if ids:
@@ -352,6 +393,17 @@ class VectorStore:
         except Exception as e:
             logger.warning(f"get_chunks_by_doc failed: {e}")
             return []
+
+    def read_citation_candidates(self, doc_id: str, user_groups: list[str], *, chunk_index: int,
+                                 chunk_size_tier: str, start_char: int):
+        """Exact indexed location, ACL-filtered; caller additionally verifies the evidence hash."""
+        import re
+        if chunk_index < 0 or start_char < 0 or not re.fullmatch(r"[a-z_]{1,32}", chunk_size_tier):
+            return []
+        where = self._build_filter(user_groups, doc_ids=[doc_id])
+        where += (f" AND chunk_index = {int(chunk_index)} AND start_char = {int(start_char)}"
+                  f" AND chunk_size_tier = '{chunk_size_tier}'")
+        return self._results_to_chunks(self.table.search().where(where).limit(32).to_list())
 
     def read_document_page(self, doc_id: str, user_groups: list[str], *, offset=0, limit=100):
         """Read indexed passages directly, with explicit pagination and no embedding."""
@@ -419,6 +471,8 @@ class VectorStore:
                         body_index=row.get("body_index"), section_title=row.get("section_title"),
                         caption=row.get("caption"), source_locator=row.get("source_locator"),
                         slide=row.get("slide"),
+                section_id=row.get("section_id") or "", section_path=row.get("section_path") or "",
+                evidence_role=row.get("evidence_role") or "",
                     )
                     new_chunks.append(RetrievedChunk(text=row["text"], score=0.4, metadata=meta))
             except Exception as e:
@@ -430,6 +484,62 @@ class VectorStore:
         all_chunks = chunks + new_chunks
         all_chunks.sort(key=lambda c: (c.metadata.doc_id, c.metadata.chunk_index))
         return all_chunks
+
+    def expand_figure_source_pages(self, chunks, user_groups, doc_ids, max_chars=16000):
+        """Recover original prose around PDF figure hits for technical answers.
+
+        Generated figure descriptions can win semantic ranking; their synthetic
+        chunk indexes cannot locate neighboring original passages. Use source
+        page numbers instead, retaining ACL and selected-edition scope.
+        """
+        from src.agent.state import chunk_key
+        from src.agent.quote_support import primary_text
+        allowed = set(doc_ids or [])
+        result = [c for c in chunks if c.metadata.doc_id in allowed]
+        if not user_groups or not allowed:
+            return result
+        seen = {chunk_key(c) for c in result}
+        anchors = {}
+        for c in sorted(result, key=lambda c: -c.score):
+            m = c.metadata
+            if m.doc_type == 'pdf' and m.content_type == 'figure' and m.page is not None:
+                anchors.setdefault((m.doc_id, m.page), c.score)
+        remaining = max_chars
+        for (doc_id, page), score in list(anchors.items())[:3]:
+            where = self._build_filter(user_groups, tier='medium', doc_ids=[doc_id])
+            where += f" AND content_type = 'text' AND page >= {max(1, page-1)} AND page <= {page+2}"
+            rows = self.table.search().where(where).limit(64).to_list()
+            candidates = sorted(self._results_to_chunks(rows),
+                key=lambda c: (abs((c.metadata.page or page)-page), (c.metadata.page or page) < page, c.metadata.chunk_index))
+            for c in candidates:
+                body = re.sub(r'^Section:[^\n]+\n*', '', primary_text(c.text)).strip()
+                if chunk_key(c) in seen or len(c.text) > remaining or not re.search(r'[A-Za-z]{2}', body):
+                    continue
+                remaining -= len(c.text)
+                c.score = score
+                seen.add(chunk_key(c)); result.append(c)
+        return result
+
+    def expand_sections(self, chunks, user_groups, doc_ids, max_chars=16000):
+        """Bounded containing-section expansion with ACL/doc scope applied on every read."""
+        from src.agent.state import chunk_key
+        allowed = set(doc_ids or [])
+        result = [c for c in chunks if c.metadata.doc_id in allowed]
+        seen = {chunk_key(c) for c in result}
+        sections = list(dict.fromkeys((c.metadata.doc_id, c.metadata.section_id,
+            c.metadata.chunk_size_tier) for c in result if c.metadata.section_id))[:6]
+        remaining = max_chars
+        for doc_id, section, tier in sections:
+            where = self._build_filter(user_groups, tier=tier, doc_ids=[doc_id])
+            where += " AND section_id = '" + section.replace("'", "''") + "'"
+            rows = self.table.search().where(where).limit(128).to_list()
+            for chunk in sorted(self._results_to_chunks(rows), key=lambda c: c.metadata.chunk_index):
+                if chunk_key(chunk) in seen or len(chunk.text) > remaining:
+                    continue
+                remaining -= len(chunk.text)
+                chunk.score = max((c.score for c in result if c.metadata.doc_id == doc_id), default=.4)
+                seen.add(chunk_key(chunk)); result.append(chunk)
+        return result
 
     def delete_by_doc_id(self, doc_id: str) -> None:
         """Delete all chunks for a given document."""

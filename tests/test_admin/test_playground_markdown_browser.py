@@ -179,3 +179,22 @@ def test_untrusted_markdown_and_image_urls(browser_page):
     page.evaluate('window.DOMPurify = undefined; SauronMarkdown.render(document.querySelector("#play-results"), "<img src=x onerror=alert(1)>")')
     assert page.locator('#play-results img').count() == 0
     assert '<img' in page.locator('#play-results').inner_text()
+
+
+def test_readable_reference_opens_its_supporting_passage(browser_page):
+    from src.admin.routes import _citation_html
+    from src.citations import render_citations
+    page, requests, status = browser_page
+    citation = {'filename': 'sdwan-for-gov.pdf', 'page': 7, 'section_title': 'Security and Compliance',
+                'evidence_id': 'E6c6a058d49b3', 'snippet': 'FIPS mode is enabled.'}
+    answer = render_citations('FIPS mode is enabled [E6c6a058d49b3].', [citation], local_links=True)
+    status['result_html'] = ('<div class="result-card"><div class="result-answer">' + html.escape(answer)
+                             + '</div>' + _citation_html(citation, 1) + '</div>')
+    page.fill('#play_question', 'What is special about government SD-WAN?')
+    page.click('#ask-btn')
+    link = page.locator('.result-answer a[href="#citation-1"]')
+    assert link.inner_text() == 'sdwan-for-gov.pdf — page 7, Security and Compliance'
+    link.click()
+    assert page.locator('#citation-1 details').get_attribute('open') is not None
+    assert page.locator('#citation-1 pre').is_visible()
+    assert 'E6c6a058d49b3' not in page.locator('.result-card').inner_text()

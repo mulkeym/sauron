@@ -47,6 +47,7 @@ class QueryJob:
     username: str
     groups: list[str]
     skip_cache: bool = False
+    conversation: list[dict] = field(default_factory=list)
     session_id: str | None = None
     agent_id: str | None = None
     status: QueryStatus = QueryStatus.QUEUED
@@ -100,7 +101,7 @@ class QueryJobQueue:
 
     def enqueue(self, question: str, username: str, groups: list[str],
                 skip_cache: bool = False, session_id: str | None = None,
-                agent_id: str | None = None) -> str:
+                agent_id: str | None = None, conversation=None) -> str:
         self._evict_expired()
         # Cap total tracked jobs so an authenticated caller can't grow the queue
         # without bound (only terminal jobs are TTL-evicted; queued/processing are not).
@@ -109,7 +110,7 @@ class QueryJobQueue:
         token = str(uuid.uuid4())
         self._jobs[token] = QueryJob(
             token=token, question=question, username=username, groups=groups,
-            skip_cache=skip_cache, session_id=session_id, agent_id=agent_id,
+            skip_cache=skip_cache, session_id=session_id, agent_id=agent_id, conversation=conversation or [],
         )
         if self._queue is not None:
             self._queue.put_nowait(token)
@@ -192,7 +193,7 @@ class QueryJobQueue:
                         vector_store=vector_store, schema_registry=schema_registry,
                         metadata_store=metadata_store,
                         step_callback=lambda node, detail=None, _t=token: self.update_step(_t, node, detail),
-                        skip_cache=job.skip_cache,
+                        skip_cache=job.skip_cache, conversation=job.conversation,
                         session_id=job.session_id, agent_id=job.agent_id,
                     ),
                     timeout=self._job_timeout,

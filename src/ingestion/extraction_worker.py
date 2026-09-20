@@ -234,9 +234,9 @@ def child(task_dir: Path) -> None:
             result = asyncio.run(prepare_document(source, request["filename"], progress))
             result.warnings.extend(notices)
             figures = result.pdf.figure_records if result.pdf else (result.office.figures if result.office else [])
-            incomplete = sum(f.analysis_status not in ("complete", "source_extracted") for f in figures)
+            incomplete = sum(f.analysis_status not in ("complete", "source_extracted", "visual_interpretation") for f in figures)
             if incomplete:
-                result.warnings.append(f"{incomplete} stored figure(s) have no completed visual analysis; source context is searchable.")
+                result.warnings.append(f"{incomplete} stored figure(s) have no completed visual analysis; available source text and OCR remain searchable.")
         write_json(task_dir / "result.json", encode_prepared(result))
     except Exception as exc:
         logger.exception("Document extraction failed")

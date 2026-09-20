@@ -462,3 +462,30 @@ async def test_pdf_table_failure_preserves_figure_publication(tmp_path, figures_
     assert records == [record]
     ms.put_figures.assert_awaited_once()
     assert (figures_root / 'doc-1' / record.assets['preview']['key']).exists()
+
+
+@pytest.mark.asyncio
+async def test_figure_search_uses_current_document_acl(tmp_path, figures_root, monkeypatch):
+    from src.retrieval.vector_store import VectorStore
+    from src.retrieval.models import ChunkMetadata
+    from src.ingestion import embedder
+    monkeypatch.setattr(settings, "lancedb_path", str(tmp_path / "vectors"))
+    monkeypatch.setattr(settings, "embedding_dimension", 3)
+    monkeypatch.setattr(embedder, "embed_query", lambda _: [1., 0., 0.])
+    ms, record = await populated(tmp_path)
+    vs = VectorStore()
+    meta = ChunkMetadata(doc_id="doc-1", filename="topology.pdf", doc_type="pdf",
+                         chunk_index=0, start_char=0, acl_groups=["network"],
+                         content_type="figure", figure_id=record.figure_id)
+    vs.upsert(["Branch topology diagram"], [[1., 0., 0.]], [meta])
+    try:
+        await ms.update_document("doc-1", acl_groups=["engineering"])
+        result = await service.search_diagrams("topology", ["engineering"], vs, ms)
+        assert len(result) == 1 and result[0]["figure_id"] == record.figure_id
+        assert await service.search_diagrams("topology", ["network"], vs, ms) == []
+        assert await service.search_chunks("topology", ["engineering"], vs, ms, allowed_doc_ids=[]) == []
+        assert vs.search_figures([1., 0., 0.], "topology", ["engineering"], ["doc-1"], authorized_doc_ids=[]) == []
+        assert vs.search_figures([1., 0., 0.], "topology", ["engineering"], ["doc-1"], authorized_doc_ids=["other"]) == []
+        assert vs.search_figures([1., 0., 0.], "topology", [], ["doc-1"], authorized_doc_ids=["doc-1"]) == []
+    finally:
+        await ms.engine.dispose()

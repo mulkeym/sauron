@@ -28,7 +28,8 @@ def _skip_enrich(state) -> bool:
     """True when knowledge-graph enrichment should be skipped: explicitly via
     skip_graph, or for METADATA (catalog) queries where graph context is noise."""
     from src.agent.state import QueryType
-    if state.get("skip_graph"):
+    from src.agent.synthesizer import edition_clarification
+    if edition_clarification(state) or state.get("skip_graph") or state.get("diagram_discovery"):
         return True
     profile = profile_for_state(state)
     if profile and not profile.graph_enrichment:
@@ -47,9 +48,10 @@ def _rerank_merge(state, vector_store) -> dict:
     if not chunks:
         return {}
     boosts = state.get("feedback_boosts", {}) or {}
+    from src.agent.strategies.technical import retrieval_subject
     try:
         vector_store.rerank_chunks(
-            chunks, state.get("question", ""), settings.rerank_final_top_n, boosts=boosts,
+            chunks, retrieval_subject(state.get("question", "")), settings.rerank_final_top_n, boosts=boosts,
         )
     except Exception as e:
         logging.getLogger("retrieval").warning(f"Final rerank skipped: {e}")
@@ -85,18 +87,49 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             dataset_id=state.get("dataset_id", 0),
             allowed_doc_ids=state.get("allowed_doc_ids"),
             mode="vector_only" if state.get("skip_graph") else "full",
-            answer_profile=answer_profile,
+            answer_profile=answer_profile, question=state.get("question", ""), conversation=state.get("conversation", []),
         )
-        return {"allowed_doc_ids": list(scope.doc_ids), "answer_profile": answer_profile}
+        from src.figures.service import diagram_discovery_question
+        return {"diagram_discovery": diagram_discovery_question(state.get("question", "")),
+                "allowed_doc_ids": list(scope.doc_ids), "answer_profile": answer_profile,
+                "edition_decisions": scope.edition_decisions, "revision_missing_details": list(scope.missing_details),
+                "warnings": list(scope.warnings)}
 
     graph.add_node("scope", scope_documents)
-    graph.add_node("classify", _classify_node_factory(schema_registry))
+    classify_text = _classify_node_factory(schema_registry)
+
+    async def classify(state):
+        if state.get("diagram_discovery"):
+            return {"query_type": QueryType.LOOKUP, "sub_tasks": [],
+                    "reason": "Direct stored-diagram discovery; no catalog SQL or answer generation needed."}
+        return await classify_text(state)
+
+    graph.add_node("classify", classify)
 
     async def retrieve(state: AgentState) -> dict:
         import logging
         retrieve_logger = logging.getLogger("retrieval")
-        if not state.get("user_groups"):
+        from src.agent.synthesizer import edition_clarification
+        if edition_clarification(state) or not state.get("user_groups"):
             return {"retrieved_chunks": [], "sql_results": []}
+        if state.get("diagram_discovery"):
+            from src.figures.service import search_chunks, authorized_figure, reference
+            candidates = await search_chunks(
+                state["question"], state.get("user_groups", []), vector_store, metadata_store,
+                top_k=10, allowed_doc_ids=state.get("allowed_doc_ids"), dataset_id=state.get("dataset_id", 0))
+            figures, seen = [], set()
+            for chunk in candidates:
+                key = (chunk.metadata.doc_id, chunk.metadata.figure_id)
+                if key in seen:
+                    continue
+                try:
+                    doc, figure = await authorized_figure(*key, state.get("user_groups", []), metadata_store)
+                    if reference(doc, figure):
+                        figures.append(chunk)
+                        seen.add(key)
+                except (FileNotFoundError, ValueError, OSError):
+                    continue
+            return {"retrieved_chunks": figures, "sql_results": []}
         query_type = state.get("query_type", QueryType.LOOKUP)
         attempts = state.get("retrieval_attempts", 0)
 
@@ -107,7 +140,10 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         else:
             retry_state = state
 
-        if query_type == QueryType.LOOKUP:
+        if query_type in (QueryType.PROCEDURE, QueryType.TROUBLESHOOTING):
+            from src.agent.strategies.technical import retrieve_technical
+            result = await retrieve_technical(retry_state, vector_store, str(query_type))
+        elif query_type == QueryType.LOOKUP:
             result = await _lookup_then_structured(retry_state, vector_store, schema_registry)
         elif query_type == QueryType.SWEEP:
             # Run both sweep (raw chunks) and map-reduce (per-doc extraction), merge results
@@ -202,7 +238,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
         # content vector chunks would only add noise/citations.
         sub_tasks = state.get("sub_tasks", [])
         unique_tasks = [t for t in sub_tasks if t != state["question"]] if sub_tasks else []
-        if unique_tasks and query_type != QueryType.METADATA:
+        if unique_tasks and query_type not in (QueryType.METADATA, QueryType.PROCEDURE, QueryType.TROUBLESHOOTING):
             from src.ingestion.embedder import embed_texts
             import asyncio
 
@@ -285,7 +321,7 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                     doc_type="graph", chunk_index=0, start_char=0, acl_groups=["ALL"],
                 ),
             )
-            return {"retrieved_chunks": [kg_chunk]}
+            return {"retrieved_chunks": [kg_chunk], "graph_retrieval_hints": result.get("retrieval_hints", [])}
         except Exception as e:
             import logging
             logging.getLogger("knowledge_graph").warning(f"Graph enrichment failed: {e}")
@@ -297,6 +333,19 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
     async def merge_results(state: AgentState) -> dict:
         """Final-N rerank over the chunks both branches produced (mutates
         scores in place; the additive reducer means we return {})."""
+        if state.get("diagram_discovery"):
+            return {}
+        from src.agent.strategies.graph_sources import retrieve_graph_sources
+        recovered = {}
+        try:
+            recovered = await retrieve_graph_sources(state, vector_store, metadata_store)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Graph-guided source search unavailable; retaining initial retrieval")
+        if recovered:
+            from src.agent.state import _merge_chunks
+            state = {**state, **recovered, "retrieved_chunks": _merge_chunks(
+                state.get('retrieved_chunks', []), recovered.get('retrieved_chunks', []))}
         from src.figures.service import visual_question, image_policy, search_chunks
         if image_policy(state.get("question", ""), state.get("answer_profile")) and visual_question(state.get("question", "")):
             try:
@@ -306,12 +355,13 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
                 )
                 combined = {**state, "retrieved_chunks": state.get("retrieved_chunks", []) + figures}
                 _rerank_merge(combined, vector_store)
-                return {"retrieved_chunks": figures}
+                return {**recovered, "retrieved_chunks": recovered.get("retrieved_chunks", []) + figures}
             except Exception:
                 import logging
                 logging.getLogger(__name__).exception("Supplementary figure search failed")
-                return {"warnings": ["Diagram search was unavailable; text retrieval remains available."]}
-        return _rerank_merge(state, vector_store)
+                return {**recovered, "warnings": ["Diagram search was unavailable; text retrieval remains available."]}
+        _rerank_merge(state, vector_store)
+        return recovered
 
     graph.add_node("merge", merge_results)
 
@@ -358,7 +408,7 @@ async def run_agent_streamed(
     schema_registry: SchemaRegistry,
     metadata_store: MetadataStore | None = None,
     step_callback=None,
-    answer_profile=None,
+    answer_profile=None, conversation=None,
 ) -> RAGResponse:
     """Run the agent graph once, emitting step_callback(node_name) per node.
 
@@ -371,7 +421,7 @@ async def run_agent_streamed(
         query_type=None, sub_tasks=[], retrieved_chunks=[], sql_results=[],
         retrieval_attempts=0, needs_reretrieval=False, reformulated_query="",
         answer="", citations=[], warnings=[],
-        answer_profile=answer_profile or active_snapshot(),
+        answer_profile=answer_profile or active_snapshot(), conversation=conversation or [],
     )
     # Inject a live progress reporter so nodes (e.g. classify) can emit sub-steps
     # synchronously as work happens — not just the per-node label LangGraph emits

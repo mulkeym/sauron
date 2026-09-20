@@ -71,15 +71,16 @@ def _get_local_model():
     import os
     from sentence_transformers import SentenceTransformer
 
-    # Maximize CPU thread usage
+    # Apply explicit, container-aware worker thread settings
     import torch
-    cores = os.cpu_count() or 4
+    from src.ingestion.embedding_isolation import effective_cpu_threads
+    cores, interop = effective_cpu_threads()
     torch.set_num_threads(cores)
     try:
-        torch.set_num_interop_threads(cores)
+        torch.set_num_interop_threads(interop)
     except RuntimeError:
         pass  # already set or parallel work started
-    logger.info(f"CPU threading: {cores} cores")
+    logger.info(f"CPU threading: {cores} intra-op, {interop} inter-op")
 
     # Prefer baked HF cache (image build). Offline / local_files_only avoids
     # runtime downloads of nomic-ai/* (and nomic-bert-2048 remote code).
@@ -139,7 +140,7 @@ def _truncate_for_embedding(texts: list[str]) -> list[str]:
 def embed_texts(
     texts: list[str],
     mode: str = "passage",
-    batch_size: int = 32,
+    batch_size: int = 0,
 ) -> list[list[float]]:
     if not texts:
         return []

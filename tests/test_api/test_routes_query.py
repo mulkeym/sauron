@@ -15,10 +15,11 @@ def auth_headers():
 def client():
     return TestClient(create_app())
 
-def test_query_returns_answer_with_citations(client, auth_headers):
+@pytest.mark.parametrize('cached', [False, True])
+def test_query_returns_answer_with_citations(client, auth_headers, cached):
     mock_response = RAGResponse(
-        answer="Expenses over $500 need approval [1].",
-        citations=[Citation(doc_id="doc-1", filename="policy.pdf", doc_type="pdf", chunk_index=0, page=12, snippet="All expenses over $500...", relevance=0.95)],
+        answer="Expenses over $500 need approval [Eabc123].", cached=cached,
+        citations=[Citation(doc_id="doc-1", filename="policy.pdf", doc_type="pdf", chunk_index=0, page=12, evidence_id="Eabc123", snippet="All expenses over $500...", relevance=0.95)],
     )
     with patch("src.api.routes_query.agent_query", new_callable=AsyncMock, return_value=mock_response):
         with patch("src.api.routes_query.get_vector_store", return_value=MagicMock()):
@@ -28,6 +29,10 @@ def test_query_returns_answer_with_citations(client, auth_headers):
     data = resp.json()
     assert len(data["citations"]) == 1
     assert data["citations"][0]["filename"] == "policy.pdf"
+    assert data['answer'] == 'Expenses over $500 need approval [policy.pdf — page 12].'
+    assert data['citations'][0]['evidence_id'] == 'Eabc123'
+    assert data['citations'][0]['display_label'] == 'policy.pdf — page 12'
+    assert mock_response.answer.endswith('[Eabc123].')
 
 def test_query_requires_auth(client):
     resp = client.post("/api/v1/query", json={"question": "test"})

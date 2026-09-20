@@ -163,6 +163,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvisio-tools librsvg2-bin fonts-dejavu-core fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# Keep the native EMF renderer separate from the other system dependencies.
+# No additional Python ML models or services are required.
+RUN apt-get update && apt-get install -y --no-install-recommends inkscape \
+    && rm -rf /var/lib/apt/lists/*
+
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).
 COPY certs/ /tmp/certs/
 COPY scripts/install_trusted_root_cas.sh /tmp/install_trusted_root_cas.sh

@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 30) -> dict:
     """Lookup uses medium chunks — balanced precision and context."""
-    question = state["question"]
+    from src.agent.strategies.technical import retrieval_question
+    question = retrieval_question(state)
     from src.agent.profiles import retrieval_limit
     top_k = retrieval_limit(state, "lookup", top_k)
     user_groups = state["user_groups"]
@@ -18,7 +19,8 @@ def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 3
 
     # Check for date-specific query — restrict to date-matched docs if found
     from src.agent.strategies.sweep import _extract_date_filter
-    date_doc_ids = _extract_date_filter(question, vector_store, user_groups)
+    has_editions = any(d.get("revision") for d in state.get("edition_decisions", {}).values())
+    date_doc_ids = None if has_editions else _extract_date_filter(question, vector_store, user_groups)
     if date_doc_ids:
         doc_ids = [d for d in date_doc_ids if doc_ids is None or d in doc_ids]
 
@@ -37,7 +39,12 @@ def retrieve_lookup(state: AgentState, vector_store: VectorStore, top_k: int = 3
         if len(chunks) < before_count:
             logger.info(f"Lookup: score cutoff ({score_threshold:.3f}) reduced {before_count} → {len(chunks)} chunks")
 
-    chunks = vector_store.expand_window(chunks, window=retrieval_limit(state, "window", 2))
+    from src.config import settings
+    if settings.technical_structure_enabled and any(c.metadata.section_id for c in chunks):
+        chunks = vector_store.expand_sections(chunks, user_groups, doc_ids,
+            max_chars=settings.technical_section_max_chars)
+    else:
+        chunks = vector_store.expand_window(chunks, window=retrieval_limit(state, "window", 2))
     return {
         "retrieved_chunks": chunks,
         "retrieval_attempts": state.get("retrieval_attempts", 0) + 1,

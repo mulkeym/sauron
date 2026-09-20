@@ -62,7 +62,10 @@ class ParsedDocument:
 
 def parse_document(path: Path) -> ParsedDocument:
     suffix = path.suffix.lower()
-    if suffix == ".vsdx":
+    if suffix == ".emf":
+        from src.ingestion.emf import parse_emf
+        return parse_emf(path)
+    elif suffix == ".vsdx":
         from src.ingestion.visio import parse_visio
         return parse_visio(path)
     elif suffix in (".vsd", ".vdx", ".vsdm"):
@@ -295,8 +298,9 @@ def _docx_paragraph_units(para) -> list[tuple[str, str, str]]:
     """
     style = getattr(getattr(para, "style", None), "name", "") or ""
     if not _docx_image_refs(para._p):
-        text = (para.text or "").strip()
-        return [("text", text, style)] if text else []
+        text = para.text or ""
+        # Retain indentation and repeated configuration lines; order is source order.
+        return [("text", text, style)] if text.strip() else []
 
     units: list[tuple[str, str, str]] = []
     buffered: list[str] = []
@@ -389,10 +393,8 @@ def _parse_docx(path: Path) -> ParsedDocument:
             return
         # Collapse whitespace for de-dupe (cover page often repeats title)
         key = " ".join(text.split())
-        if key in seen_norm:
-            return
         seen_norm.add(key)
-        clean = text.strip()
+        clean = text if re.search(r'code|command|configuration', style, re.I) else text.strip()
         level = _docx_heading_level(style)
         if level is not None:
             section_path = section_path[:level - 1]

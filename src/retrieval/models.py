@@ -20,6 +20,9 @@ class ChunkMetadata(BaseModel):
     body_index: int | None = None
     section_title: str | None = None
     caption: str | None = None
+    section_id: str = ""
+    section_path: str = ""
+    evidence_role: str = ""
     source_locator: str | None = None
     slide: int | None = None
 
@@ -31,6 +34,8 @@ class RetrievedChunk(BaseModel):
 
 
 class Citation(BaseModel):
+    edition: dict = {}
+    source_revision: str = ""
     doc_id: str
     filename: str
     doc_type: str

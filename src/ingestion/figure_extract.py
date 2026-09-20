@@ -80,6 +80,9 @@ class FigureRecord:
     analysis_status: str = "complete"
     render_warnings: list[str] = field(default_factory=list)
     source_page_id: str = ""
+    source_text: str = ""
+    ocr_text: str = ""
+    vision_description: str = ""
 
     def retrieval_text(self) -> str:
         parts = [f"Figure: {self.figure_id}"]
