@@ -100,7 +100,6 @@ jobs:
           # Build once. Release tags are written only after every check passes.
           push: false
           outputs: type=oci,dest=${{ runner.temp }}/sauron-oci,tar=false,compression=gzip
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           # Final-image layers are reusable. Avoid exporting the deliberately
