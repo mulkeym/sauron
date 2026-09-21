@@ -11,7 +11,7 @@ from src.config import Settings, settings
 
 SETTINGS_PATH = Path("data/settings.json")
 SECRET_FIELDS = {"admin_password", "api_keys", "vllm_api_key", "jwt_secret_key",
-                 "mcp_openwebui_jwt_secret", "sharepoint_client_secret", "registered_databases", "database_url"}
+                 "mcp_openwebui_jwt_secret", "source_download_jwt_secret", "sharepoint_client_secret", "registered_databases", "database_url"}
 RESTART_FIELDS = {
     "database_url", "lancedb_path", "lancedb_table_name", "tabular_duckdb_path",
     "embedding_mode", "embedding_model_name", "embedding_dimension", "embedding_api_url",
@@ -95,9 +95,11 @@ def settings_catalog():
     values = configured_values()
     groups = {}
     for name, info in Settings.model_fields.items():
-        group = ("Models and embeddings" if name.startswith(("vllm_", "embedding_", "llm_", "rerank_"))
+        group = ("Original document downloads" if name.startswith("source_")
+                 else "Technical answers" if name.startswith(("revision_selection_", "technical_", "procedure_retrieval_", "troubleshooting_retrieval_"))
+                 else "Models and embeddings" if name.startswith(("vllm_", "embedding_", "llm_", "rerank_"))
                  else "Retrieval and answers" if name.startswith(("query_cache_", "answer_", "feedback_", "prf_", "strategy_", "sql_", "map_"))
-                 else "Document processing" if name.startswith(("extraction_", "figure_", "kg_", "chunk_", "metadata_", "entity_"))
+                 else "Document processing" if name.startswith(("extraction_", "figure_", "visio_", "emf_", "kg_", "chunk_", "metadata_", "entity_"))
                  else "System, access and integrations")
         choices = list(get_args(info.annotation)) if get_origin(info.annotation) is Literal else []
         limits = {key: getattr(m, key) for m in info.metadata

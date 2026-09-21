@@ -149,12 +149,127 @@ def _properties(shape):
     return values
 
 
+_LINE_END_CELLS = ('BeginArrow', 'EndArrow', 'BeginArrowSize', 'EndArrowSize')
+
+
+def _line_end_cell(shape, base, styles, default_style, name):
+    """Read saved values; resolve absent cells through masters/line styles.
+
+    V is Visio's saved value, including for formula/inherited cells. No formulas
+    are evaluated. Custom line ends remain unresolved for this evidence reader.
+    """
+    inherited_cache = []
+    def read(owner, origin):
+        if owner is None:
+            return None
+        cell = owner.find(f'v:Cell[@N="{name}"]', NS)
+        if cell is None:
+            return None
+        raw, formula = cell.get('V', ''), cell.get('F', '')
+        result = {'value': None, 'raw': raw, 'formula': formula, 'origin': origin}
+        if re.search(r'\bUSE\s*\(', formula, re.I):
+            result['status'] = 'custom_line_end'
+            return result
+        if re.fullmatch(r'\d+', raw):
+            value = int(raw)
+            maximum = 6 if name.endswith('Size') else 45
+            if 0 <= value <= maximum:
+                result.update(value=value, status='saved_value')
+                if formula.lower() == 'inh':
+                    inherited_cache.append(result)
+                    return None
+                return result
+        if formula.lower() == 'inh' and not raw:
+            return None
+        result['status'] = 'unresolved'
+        return result
+
+    for owner, origin in ((shape, 'shape'), (base, 'master')):
+        result = read(owner, origin)
+        if result is not None:
+            return result
+    sid = shape.get('LineStyle')
+    if sid is None and base is not None:
+        sid = base.get('LineStyle')
+    sid = sid if sid is not None else default_style
+    seen = set()
+    while sid is not None and sid not in seen:
+        seen.add(sid)
+        style = styles.get(sid)
+        if style is None:
+            break
+        result = read(style, 'line_style:' + sid)
+        if result is not None:
+            return result
+        sid = style.get('LineStyle')
+    if inherited_cache:
+        return inherited_cache[0]
+    if sid is None and not name.endswith('Size'):
+        return {'value': 0, 'raw': '', 'formula': '', 'origin': 'visio_default', 'status': 'default'}
+    return {'value': None, 'raw': '', 'formula': '', 'origin': 'unresolved', 'status': 'unresolved'}
+
+
+def _connector_evidence(shape, base, line_ends):
+    coordinates = {}
+    for name in ('BeginX', 'BeginY', 'EndX', 'EndY'):
+        cell = shape.find(f'v:Cell[@N="{name}"]', NS)
+        # Instance endpoint coordinates must not be replaced by master geometry.
+        if cell is not None:
+            try:
+                value = float(cell.get('V', ''))
+                if math.isfinite(value):
+                    coordinates[name] = value
+            except ValueError:
+                pass
+    one_d = shape.get('OneD')
+    if one_d is None and base is not None:
+        one_d = base.get('OneD')
+    if one_d != '1' and not coordinates:
+        return None
+    return {'coordinates': coordinates, 'coordinate_space': 'containing_shape',
+            'begin': {'attachments': [], 'arrow': line_ends['BeginArrow'], 'arrow_size': line_ends['BeginArrowSize']},
+            'end': {'attachments': [], 'arrow': line_ends['EndArrow'], 'arrow_size': line_ends['EndArrowSize']}}
+
+
+def _describe_connectors(shapes, connections):
+    """Keep endpoint attachment separate from line-end decoration/meaning."""
+    for connection in connections:
+        shape = shapes.get(connection['FromSheet'])
+        connector = shape.get('connector') if shape else None
+        endpoint = {'BeginX': 'begin', 'BeginY': 'begin', 'EndX': 'end', 'EndY': 'end'}.get(connection['FromCell'])
+        if connector is not None and endpoint:
+            target = shapes.get(connection['ToSheet'])
+            connector[endpoint]['attachments'].append({
+                'shape_id': connection['ToSheet'], 'cell': connection['ToCell'],
+                'shape_name': (target['text'] or target['name']) if target else '',
+                'resolved': target is not None})
+    lines = []
+    for shape in shapes.values():
+        connector = shape.get('connector')
+        if connector is None:
+            continue
+        parts = []
+        for endpoint in ('begin', 'end'):
+            info = connector[endpoint]
+            value = info['arrow']['value']
+            marker = ('none' if value == 0 else f'Visio line-end style {value}') if value is not None else 'unresolved'
+            attached = ', '.join('shape ' + a['shape_id'] + ' (' + a['shape_name'] + ')' for a in info['attachments']) or 'no explicit attachment recorded'
+            parts.append(f"{endpoint}: {attached}; line end: {marker}; source: {info['arrow']['origin']}")
+        lines.append(f"Connector {shape['id']}: " + '; '.join(parts) + '.')
+    return lines
+
+
 def parse_visio(path, render_copy=None):
     from src.ingestion.parser import ParsedDocument, DocumentBlock
     if not settings.visio_enabled:
         raise ValueError("Visio ingestion is disabled in admin settings")
     with zipfile.ZipFile(path) as archive:
         package = Package(archive)
+        document = package.xml('visio/document.xml')
+        styles = {s.get('ID'): s for s in document.findall('v:StyleSheets/v:StyleSheet', NS)}
+        defaults = document.find('v:DocumentSettings', NS)
+        default_line = defaults.get('DefaultLineStyle', '0') if defaults is not None else '0'
+        default_text = defaults.get('DefaultTextStyle', '0') if defaults is not None else '0'
         masters = {}
         if 'visio/masters/masters.xml' in package.names:
             rels = package.rels('visio/masters/masters.xml')
@@ -178,7 +293,15 @@ def parse_visio(path, render_copy=None):
                 raise ValueError("Visio page relationship is missing")
             root = package.xml(target)
             shapes, count = {}, [0]
-            def visit(element, parent='', inherited_master=None):
+            from src.ingestion.visio_text import source_layout, group_origin
+            page_height_cell = declaration.find('v:PageSheet/v:Cell[@N="PageHeight"]', NS)
+            try:
+                page_height = float(page_height_cell.get('V')) if page_height_cell is not None else None
+                scale_cells = {c.get('N'): c.get('V') for c in declaration.findall('v:PageSheet/v:Cell', NS)}
+                page_scale = float(scale_cells.get('PageScale', 1)) / float(scale_cells.get('DrawingScale', 1))
+            except (ValueError, TypeError, ZeroDivisionError):
+                page_height, page_scale = None, None
+            def visit(element, parent='', inherited_master=None, parent_offset=(0, 0)):
                 count[0] += 1
                 if count[0] > settings.visio_max_shapes:
                     raise ValueError("Visio page exceeds the shape limit")
@@ -191,6 +314,19 @@ def parse_visio(path, render_copy=None):
                     master_id = element.get('MasterShape')
                     candidates = master.findall('.//v:Shape', NS)
                     base = next((s for s in candidates if s.get('ID') == master_id), None) if master_id else next(iter(candidates), None)
+                line_ends = {name: _line_end_cell(element, base, styles, default_line, name) for name in _LINE_END_CELLS}
+                connector = _connector_evidence(element, base, line_ends)
+                if render_copy is not None:
+                    # Materialize only known saved line-end values. Preserve native
+                    # geometry and unknown/custom formulas for libvisio to interpret.
+                    for name, evidence in line_ends.items():
+                        if evidence['value'] is None or evidence['status'] == 'default':
+                            continue
+                        cell = element.find(f'v:Cell[@N="{name}"]', NS)
+                        if cell is not None:
+                            continue  # Native parser retains existing formulas and overrides.
+                        cell = ET.Element('{' + V + '}Cell', N=name, V=str(evidence['value']))
+                        element.insert(0, cell)
                 resolved_text = _resolved_text(element, base)
                 text = ''.join(resolved_text.itertext()).strip() if resolved_text is not None else ''
                 if render_copy is not None and resolved_text is not None:
@@ -204,9 +340,11 @@ def parse_visio(path, render_copy=None):
                 props.update(_properties(element))
                 shapes[shape_id] = {'id': shape_id, 'name': element.get('NameU') or element.get('Name') or '',
                     'text': text or '', 'parent': parent, 'properties': list(props.values()),
+                    'text_layout': source_layout(element, base, styles, default_text, parent, page_height, parent_offset, page_scale) if text else None,
+                    'connector': connector, 'line_ends': line_ends,
                     'foreign_type': (element.find('v:ForeignData', NS).get('ForeignType', '') if element.find('v:ForeignData', NS) is not None else '')}
                 for child in element.findall('v:Shapes/v:Shape', NS):
-                    visit(child, shape_id, master)
+                    visit(child, shape_id, master, group_origin(element, base, parent_offset))
             for element in root.findall('v:Shapes/v:Shape', NS):
                 visit(element)
             if render_copy is not None:
@@ -231,6 +369,7 @@ def parse_visio(path, render_copy=None):
                     sid = connection[key]
                     return f"shape {sid} ({shapes.get(sid, {}).get('text') or shapes.get(sid, {}).get('name') or 'unlabeled'})"
                 lines.append(f"Documented attachment: {label('FromSheet')} {connection['FromCell']} connects to {label('ToSheet')} {connection['ToCell']}.")
+            lines.extend(_describe_connectors(shapes, connections))
             lines.append('Connector attachments describe drawing structure; traffic direction, protocols and failover behavior are not inferred.')
             pages.append({'id': page_id, 'name': name, 'page': number,
                 'background': declaration.get('Background', '0').lower() in ('1', 'true'),
@@ -258,10 +397,10 @@ def parse_visio(path, render_copy=None):
                               metadata={'visio_pages': pages}, blocks=blocks)
 
 
-def _run(argv, output, timeout, max_bytes):
+def _run(argv, output, timeout, max_bytes, env=None):
     """Bound native output on disk as well as elapsed time, without PIPE RAM growth."""
     with output.open('wb') as stdout, tempfile.TemporaryFile() as stderr:
-        process = subprocess.Popen(argv, stdout=stdout, stderr=stderr, cwd=output.parent)
+        process = subprocess.Popen(argv, stdout=stdout, stderr=stderr, cwd=output.parent, env=env)
         deadline = time.monotonic() + timeout
         try:
             while process.poll() is None:
@@ -289,6 +428,8 @@ def _safe_svg(svg):
             raise ValueError('Unsupported active content in converted SVG')
         for key, value in element.attrib.items():
             if ET.QName(key).localname in ('href', 'src') and not (value.startswith('#') or re.match(r'^data:image/(png|jpeg|gif|bmp);base64,', value)):
+                if value.startswith('data:'):
+                    raise ValueError('Unsupported embedded image format in converted SVG (for example EMF/WMF); a compatible image renderer is required')
                 raise ValueError('External image reference in converted SVG')
         css = ' '.join(element.attrib.values()) + (element.text or '')
         if '@import' in css.lower() or any(not u.strip(' \t\"\'').startswith('#') for u in re.findall(r'url\((.*?)\)', css, re.I)):
@@ -331,10 +472,12 @@ def render_visio(path, parsed, progress=None):
     limit = settings.visio_converter_max_mb * 1024**2
     with tempfile.TemporaryDirectory(prefix='visio-', dir=path.parent) as temporary:
         work = Path(temporary)
+        from src.ingestion.emf import EmfConverter, replace_embedded_emfs, analyze_diagram
+        emf_converter = EmfConverter(work / 'emf')
         output = work / 'pages.xhtml'
         try:
-            # libvisio can omit inherited data-graphic text. Materialize only
-            # saved text/field values in a temporary copy, keeping geometry,
+            # libvisio can omit inherited data-graphic text. Materialize
+            # saved text and line-end values in a temporary copy, keeping geometry,
             # pictures, connectors and the original source bytes unchanged.
             render_source = work / 'input.vsdx'
             parse_visio(path, render_copy=render_source)
@@ -355,6 +498,11 @@ def render_visio(path, parsed, progress=None):
             try:
                 source_pages = [page] + [by_id[i] for i in page['background_ids']]
                 page_warnings = []
+                unresolved_ends = sum(1 for p in source_pages for shape in p['shapes']
+                    if shape.get('connector') for name in ('BeginArrow', 'EndArrow')
+                    if shape['line_ends'][name]['value'] is None)
+                if unresolved_ends:
+                    page_warnings.append(f'{unresolved_ends} connector line-end setting(s) could not be resolved from saved source values; arrowhead fidelity is unverified.')
                 expected_images = sum(p['raster_images'] for p in source_pages)
                 rendered_images = len(svg.findall(f'.//{{{S}}}image'))
                 if expected_images > rendered_images:
@@ -366,6 +514,13 @@ def render_visio(path, parsed, progress=None):
                 missing = [t for t in expected_text if ' '.join(t.split()) not in visible_text]
                 if missing:
                     page_warnings.append(f'{len(missing)} source text label(s) were not found verbatim in the converted SVG; inspect the preview.')
+                if settings.visio_repair_text_layout:
+                    from src.ingestion.visio_text import repair_text
+                    page_warnings.extend(repair_text(svg, source_pages))
+                repairs_before = emf_converter.clip_repairs
+                converted_emfs = replace_embedded_emfs(svg, emf_converter)
+                if emf_converter.clip_repairs > repairs_before:
+                    page_warnings.append(f"Corrected redundant full-frame clipping in {emf_converter.clip_repairs-repairs_before} embedded EMF+ image wrapper(s); source bytes unchanged.")
                 source = work / 'page.svg'
                 source.write_bytes(_safe_svg(svg))
                 width, height = _dimensions(svg)
@@ -378,10 +533,17 @@ def render_visio(path, parsed, progress=None):
                 region = ImageRegion(page['page'], 0, png.read_bytes(), width, height,
                     source='visio_page_render', figure_id=f"visio-page-{page['id']}", caption=page['name'])
                 assets = save_region(region)
-                records.append(FigureRecord(region.figure_id, page['text'], 'diagram', page=page['page'],
+                record = FigureRecord(region.figure_id, page['text'], 'diagram', page=page['page'],
                     caption=page['name'], section_path=[page['name']], source='visio_page_render', assets=assets,
                     alt_text='Converted Visio page; appearance may differ from Microsoft Visio.', analysis_status='source_extracted',
-                    render_warnings=page_warnings, source_page_id=page['id']))
+                    render_warnings=page_warnings, source_page_id=page['id'])
+                if converted_emfs:
+                    page_warnings.append(f'{converted_emfs} embedded EMF image(s) converted to PNG; visual fidelity requires review.')
+                    if index < settings.figure_max_per_doc:
+                        analyze_diagram(record, region.image_bytes, progress)
+                    else:
+                        page_warnings.append('EMF page OCR/vision analysis limit reached; source text and PNG retained.')
+                records.append(record)
                 warnings.extend(f"Visio page {page['page'] + 1} ({page['name']}): {w}" for w in page_warnings)
             except (OSError, ValueError, TimeoutError) as exc:
                 warnings.append(f"Visio page {page['page'] + 1} ({page['name']}) PNG unavailable: {exc}")

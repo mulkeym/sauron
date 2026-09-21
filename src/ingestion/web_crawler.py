@@ -22,7 +22,7 @@ from markdownify import markdownify as md
 
 logger = logging.getLogger(__name__)
 
-FILE_EXTENSIONS = {".vsdx", ".pdf", ".docx", ".xlsx", ".csv", ".txt", ".conf", ".cfg",
+FILE_EXTENSIONS = {".emf", ".vsdx", ".pdf", ".docx", ".xlsx", ".csv", ".txt", ".conf", ".cfg",
                    ".pptx", ".doc", ".xls", ".zip", ".json", ".xml", ".yaml", ".yml"}
 
 

@@ -1,3 +1,4 @@
+from src.citations import render_citations, citation_details
 from fastapi import APIRouter, Depends, HTTPException, Request
 from src.api.models import (
     CitationResponse, QueryRequest, QueryResponse,
@@ -24,14 +25,14 @@ async def query(payload: QueryRequest, http: Request, user: UserContext = Depend
             question=payload.question, user_groups=user.groups,
             vector_store=get_vector_store(), schema_registry=get_schema_registry(),
             metadata_store=get_metadata_store(),
-            skip_cache=payload.skip_cache,
+            skip_cache=payload.skip_cache, conversation=[m.model_dump() for m in payload.conversation],
             session_headers=http.headers, agent_id=user.username,
         )
         span.strategy = result.query_type or ("cache" if result.cached else "")
         span.cache_hit = bool(result.cached)
         return QueryResponse(
-            answer=result.answer,
-            citations=[CitationResponse(**c.model_dump()) for c in result.citations],
+            answer=render_citations(result.answer, result.citations),
+            citations=[CitationResponse(**citation_details(c)) for c in result.citations],
             warnings=result.warnings,
             images=result.images,
             cached=result.cached,
@@ -51,7 +52,7 @@ async def query_async(payload: QueryRequest, http: Request, user: UserContext = 
             question=payload.question,
             username=user.username,
             groups=user.groups,
-            skip_cache=payload.skip_cache,
+            skip_cache=payload.skip_cache, conversation=[m.model_dump() for m in payload.conversation],
             session_id=session_id,
             agent_id=agent_id,
         )
@@ -83,8 +84,8 @@ async def query_async_status(token: str, user: UserContext = Depends(require_aut
         step=job.step,
         steps=job.steps,
         classification=job.classification,
-        answer=job.answer,
-        citations=[CitationResponse(**c) for c in job.citations],
+        answer=render_citations(job.answer, job.citations),
+        citations=[CitationResponse(**citation_details(c)) for c in job.citations],
         warnings=job.warnings,
         images=images,
         cached=job.cached,

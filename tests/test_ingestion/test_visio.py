@@ -118,7 +118,7 @@ async def test_native_full_pages_png_handoff(tmp_path,monkeypatch):
     monkeypatch.setattr(storage,'FIGURE_ROOT',tmp_path/'published')
     with storage.extraction_assets(tmp_path/'worker'):
         prepared=await prepare_document(fixture(tmp_path/'sample.vsdx'),'source.vsdx')
-    assert not prepared.warnings,prepared.warnings
+    assert all(any(message in w for message in ('Restored source text-box', 'used a reduced preview font size', 'adjacent label box(es) narrowed')) for w in prepared.warnings), prepared.warnings
     assert [r.caption for r in prepared.office.figures]==['Branch topology','Shared background']
     assert [r.page for r in prepared.office.figures]==[1,0]
     staging=storage.FigureStore().handoff(tmp_path/'worker')
@@ -178,7 +178,7 @@ async def test_native_worker_and_persistent_index(tmp_path,monkeypatch):
     monkeypatch.setattr(storage,'FIGURE_ROOT',tmp_path/'assets')
     source=fixture(tmp_path/'source.vsdx')
     prepared=await extract_in_worker(source,'branch.vsdx')
-    assert not prepared.warnings and prepared.figure_staging
+    assert all(any(message in w for message in ('Restored source text-box', 'used a reduced preview font size', 'adjacent label box(es) narrowed')) for w in prepared.warnings) and prepared.figure_staging
     ms=MetadataStore('sqlite+aiosqlite:///'+str(tmp_path/'metadata.db'))
     await ms.init()
     try:
@@ -254,7 +254,7 @@ def arrow_fixture(path):
 async def test_native_directional_arrowheads(tmp_path):
     with storage.extraction_assets(tmp_path/'worker'):
         prepared=await prepare_document(arrow_fixture(tmp_path/'arrows.vsdx'),'arrows.vsdx')
-    assert not prepared.warnings,prepared.warnings
+    assert all(any(message in w for message in ('Restored source text-box', 'used a reduced preview font size', 'adjacent label box(es) narrowed')) for w in prepared.warnings), prepared.warnings
     figure=next(r for r in prepared.office.figures if r.caption=='Branch topology')
     # Inspect the actual full PNG before publication; no generated substitute graphic.
     key=figure.assets['full']['key']
@@ -271,3 +271,117 @@ async def test_native_directional_arrowheads(tmp_path):
         assert shaft>0
         assert right>shaft*2  # Broad arrowhead, not merely a surviving line.
         assert (left>shaft*2) if left_arrow else (left<=shaft+2)
+
+
+def test_connector_evidence_keeps_endpoints_separate_from_arrowheads(tmp_path):
+    source = fixture(tmp_path / 'attachments.vsdx')
+    parsed = parse_document(source)
+    front = parsed.metadata['visio_pages'][1]
+    link = next(s for s in front['shapes'] if s['id'] == '3')['connector']
+    assert link['begin']['attachments'][0]['shape_id'] == '1'
+    assert link['end']['attachments'][0]['shape_id'] == '2'
+    assert link['begin']['arrow']['value'] == 0
+    assert link['end']['arrow']['value'] == 4
+    assert link['coordinates'] == {'BeginX': 3., 'BeginY': 3., 'EndX': 7., 'EndY': 3.}
+    assert 'begin: shape 1 (BRANCH A)' in front['text']
+    assert 'end: shape 2 (BRANCH B)' in front['text']
+    assert 'line end: Visio line-end style 4' in front['text']
+    assert 'traffic direction' in front['text']
+
+
+def test_inherited_line_ends_reach_render_copy_without_changing_source(tmp_path):
+    source = arrow_fixture(tmp_path / 'arrows.vsdx')
+    original = source.read_bytes()
+    output = tmp_path / 'render.vsdx'
+    parsed = visio.parse_visio(source, render_copy=output)
+    inherited = parsed.metadata['visio_pages'][1]['shapes'][2]
+    assert inherited['connector']['begin']['arrow']['value'] == 4
+    assert inherited['connector']['end']['arrow']['origin'] == 'line_style:1'
+    assert inherited['connector']['begin']['attachments'] == []
+    with zipfile.ZipFile(output) as archive:
+        root = visio._xml(archive.read('visio/pages/page1.xml'))
+    assert root.find('v:Shapes/v:Shape[@ID="3"]/v:Cell[@N="BeginArrow"]', visio.NS).get('V') == '4'
+    assert source.read_bytes() == original
+
+
+def test_master_inheritance_and_explicit_no_arrow_override():
+    def element(raw):
+        return visio.ET.fromstring(f'<Shape xmlns="{visio.V}">{raw}</Shape>')
+    base = element('<Cell N="BeginArrow" V="4"/><Cell N="EndArrow" V="4"/>')
+    shape = element('<Cell N="BeginArrow" V="0"/><Cell N="EndArrow" F="Inh" V="4"/>')
+    assert visio._line_end_cell(shape, base, {}, '0', 'BeginArrow')['value'] == 0
+    inherited = visio._line_end_cell(shape, base, {}, '0', 'EndArrow')
+    assert inherited['value'] == 4 and inherited['origin'] == 'master'
+    unknown = element('<Cell N="EndArrow" F="USE(&quot;Custom head&quot;)" V="4"/>')
+    assert visio._line_end_cell(unknown, base, {}, '0', 'EndArrow')['status'] == 'custom_line_end'
+
+
+def test_cyclic_missing_and_chained_line_styles_are_bounded():
+    def element(raw):
+        return visio.ET.fromstring(raw.replace('<Shape', f'<Shape xmlns="{visio.V}"'))
+    shape = element('<Shape LineStyle="1"/>')
+    styles = {'1': element('<Shape LineStyle="2"/>'), '2': element('<Shape LineStyle="1"/>')}
+    assert visio._line_end_cell(shape, None, styles, '0', 'EndArrow')['value'] is None
+    styles['2'] = element('<Shape><Cell N="EndArrow" V="13"/></Shape>')
+    value = visio._line_end_cell(shape, None, styles, '0', 'EndArrow')
+    assert value['value'] == 13 and value['origin'] == 'line_style:2'
+    assert visio._line_end_cell(shape, None, {}, '0', 'EndArrow')['value'] is None
+
+
+def test_grouped_and_dangling_connector_attachments_do_not_invent_targets(tmp_path):
+    source = fixture(tmp_path / 'grouped.vsdx')
+    def grouped(raw):
+        root = visio._xml(raw)
+        shapes = root.find('v:Shapes', visio.NS)
+        connector = shapes.find('v:Shape[@ID="3"]', visio.NS)
+        shapes.find('v:Shape[@ID="10"]/v:Shapes', visio.NS).append(connector)
+        root.find('v:Connects/v:Connect[@FromCell="EndX"]', visio.NS).set('ToSheet', '999')
+        return visio.ET.tostring(root)
+    rewrite(source, 'visio/pages/page1.xml', grouped)
+    page = parse_document(source).metadata['visio_pages'][1]
+    shape = next(s for s in page['shapes'] if s['id'] == '3')
+    assert shape['parent'] == '10'
+    assert shape['connector']['coordinate_space'] == 'containing_shape'
+    attachment = shape['connector']['end']['attachments'][0]
+    assert attachment['shape_id'] == '999' and not attachment['resolved']
+    assert attachment['shape_name'] == ''
+
+
+@pytest.mark.skipif(not shutil.which('vsd2xhtml') or not shutil.which('rsvg-convert'),reason='native Visio tools not installed')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('begin,end,bent', [(4,0,False),(0,0,False),(4,4,True)])
+async def test_native_begin_only_plain_and_bent_connectors(tmp_path,begin,end,bent):
+    source = arrow_fixture(tmp_path / 'variants.vsdx')
+    def change(raw):
+        root = visio._xml(raw)
+        shape = root.find('v:Shapes/v:Shape[@ID="1"]', visio.NS)
+        shape.find('v:Cell[@N="BeginArrow"]', visio.NS).set('V',str(begin))
+        shape.find('v:Cell[@N="EndArrow"]', visio.NS).set('V',str(end))
+        if bent:
+            geometry = shape.find('v:Section[@N="Geometry"]', visio.NS)
+            geometry.remove(geometry.find('v:Row[@IX="2"]', visio.NS))
+            for i,(x,y) in enumerate([(1,0),(1,.5),(5,.5),(5,0),(6,0)],2):
+                row=visio.ET.SubElement(geometry,'{'+visio.V+'}Row',T='LineTo',IX=str(i))
+                for name,value in [('X',x),('Y',y)]:
+                    visio.ET.SubElement(row,'{'+visio.V+'}Cell',N=name,V=str(value))
+        return visio.ET.tostring(root)
+    rewrite(source,'visio/pages/page1.xml',change)
+    with storage.extraction_assets(tmp_path/'worker'):
+        prepared=await prepare_document(source,source.name)
+    assert all(any(message in w for message in ('Restored source text-box', 'used a reduced preview font size', 'adjacent label box(es) narrowed')) for w in prepared.warnings), prepared.warnings
+    figure=next(f for f in prepared.office.figures if f.caption=='Branch topology')
+    image=Image.open(tmp_path/'worker'/figure.assets['full']['key']).convert('RGB')
+    def thickness(x0,x1,y):
+        crop=image.crop((int(x0/10*image.width),int((6-y-.3)/6*image.height),
+                         int(x1/10*image.width),int((6-y+.3)/6*image.height)))
+        return max(sum(crop.getpixel((x,j))!=(255,255,255) for j in range(crop.height)) for x in range(crop.width))
+    shaft=thickness(4,4.5,5.5 if bent else 5)
+    assert shaft>0
+    assert (thickness(1.6,2.5,5)>shaft*2) == bool(begin)
+    assert (thickness(7.5,8.4,5)>shaft*2) == bool(end)
+
+
+def test_embedded_metafile_failure_is_not_misreported_as_external_url():
+    svg=visio.ET.fromstring(f'<svg xmlns="{visio.S}"><image href="data:image/emf;base64,AAAA"/></svg>')
+    with pytest.raises(ValueError,match='Unsupported embedded image format'):
+        visio._safe_svg(svg)

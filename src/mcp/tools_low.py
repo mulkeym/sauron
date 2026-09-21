@@ -23,14 +23,14 @@ def search_documents(
     metadata_store=None,
 ) -> list[dict]:
     from src.retrieval.query_scope import resolve_query_scope_sync
-    scope = resolve_query_scope_sync(user_groups, metadata_store)
+    scope = resolve_query_scope_sync(user_groups, metadata_store, question=query)
     if not scope.doc_ids:
         return []
     vector = embed_query(query)
     chunks = vector_store.search(vector=vector, user_groups=user_groups, top_k=top_k,
                                  doc_ids=list(scope.doc_ids))
     # Only filter by doc_type if it's a known type (pdf, docx, xlsx, transcript)
-    valid_types = {"vsdx", "pdf", "docx", "xlsx", "transcript", "txt", "markdown"}
+    valid_types = {"emf", "vsdx", "pdf", "docx", "xlsx", "transcript", "txt", "markdown"}
     if doc_type and doc_type.lower() in valid_types:
         chunks = [c for c in chunks if c.metadata.doc_type == doc_type.lower()]
     async def stored_figures():
@@ -148,6 +148,7 @@ def lookup_document(doc_id: str, user_groups: list[str], vector_store,
     content = "\n\n".join(c.text for c in chunks)
     return {"content": content,
             "metadata": {"doc_id": doc.doc_id, "filename": doc.filename,
+                         "source_revision": getattr(doc, "content_hash", "") or "",
                          "doc_type": doc.doc_type, "category": doc.category,
                          "source_url": getattr(doc, "source_url", "") or ""},
             "chunks": [c.model_dump() for c in chunks], "offset": offset,

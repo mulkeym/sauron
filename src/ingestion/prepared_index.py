@@ -56,6 +56,18 @@ def figure_index_entries(records):
     """Keep all labels on large Visio pages searchable with the same PNG citation."""
     from src.ingestion.chunker import chunk_text
     for record in records:
+        if record.source_text or record.source == 'emf_render':
+            header = f"Figure: {record.figure_id}\nCaption: {record.caption}\n"
+            # Every search chunk carries its own evidence type, including chunks
+            # after the first one in a long OCR or model-generated description.
+            for label, text in (
+                ('Source information', record.source_text or record.description),
+                ('OCR text (recognition may contain errors)', record.ocr_text),
+                ('Visual model interpretation (not source-verified connector facts)', record.vision_description),
+            ):
+                for chunk in chunk_text(text, chunk_size=1400, chunk_overlap=150) if text.strip() else []:
+                    yield record, header + label + ':\n' + chunk.text
+            continue
         if record.source != 'visio_page_render':
             yield record, record.retrieval_text()
             continue

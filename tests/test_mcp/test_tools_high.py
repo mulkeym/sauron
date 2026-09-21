@@ -115,3 +115,41 @@ async def test_ask_forwards_query_type_and_cached():
         )
     assert result["query_type"] == "lookup"
     assert result["cached"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tool, kwargs, key', [
+    ('ask', {'question':'q'}, 'answer'),
+    ('summarize_topic', {'topic':'t'}, 'summary'),
+    ('compare', {'item_a':'a', 'item_b':'b'}, 'comparison'),
+])
+async def test_readable_answers_preserve_machine_provenance(tool, kwargs, key):
+    from src.mcp import tools_high
+    response = _mock_rag_response(answer='A fact [Eabc123].')
+    response.citations[0].evidence_id = 'Eabc123'
+    with patch('src.mcp.tools_high.agent_query', new_callable=AsyncMock, return_value=response):
+        result = await getattr(tools_high, tool)(**kwargs, user_groups=['team'], vector_store=MagicMock(), schema_registry=MagicMock())
+    assert result[key] == 'A fact [test.pdf — page 1].'
+    if tool == 'ask':
+        assert result['citations'][0]['evidence_id'] == 'Eabc123'
+        assert result['citations'][0]['display_label'] == 'test.pdf — page 1'
+    assert response.answer == 'A fact [Eabc123].'
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tool, kwargs, key', [
+    ('ask', {'question': 'q'}, 'answer'),
+    ('summarize_topic', {'topic': 't'}, 'summary'),
+    ('compare', {'item_a': 'a', 'item_b': 'b'}, 'comparison'),
+])
+async def test_versioned_mcp_citation_contract(tool, kwargs, key):
+    from src.mcp import tools_high
+    response = _mock_rag_response(answer='A fact [Eabc123].')
+    response.citations[0].evidence_id = 'Eabc123'
+    response.citations[0].source_revision = 'a' * 64
+    with patch('src.mcp.tools_high.agent_query', new_callable=AsyncMock, return_value=response):
+        result = await getattr(tools_high, tool)(**kwargs, user_groups=['team'], vector_store=MagicMock(), schema_registry=MagicMock())
+    assert result['sauron_citations_version'] == 1
+    assert result['answer_with_evidence_ids'] == response.answer
+    assert result['citations'][0]['snippet'] == 'test snippet'
+    assert result['citations'][0]['source_revision'] == 'a' * 64
+    assert '[Eabc123]' not in result[key]

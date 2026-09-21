@@ -31,11 +31,9 @@ def default_book():
             instructions="Answer directly and explain technical terms when needed."),
         "deployment": AnswerProfile(name="Deployment guidance", description="Documented SD-WAN deployment procedures.",
             instructions="Use the team's documented deployment procedure. Organize supported steps into prerequisites, execution, verification, and rollback. Preserve exact commands. Never invent an undocumented step.",
-            routing_instructions="Use targeted lookup for a specific deployment procedure. Use sweep only when the question requires coverage across multiple procedures.",
             retrieval_depth="thorough", insufficient_evidence="abstain"),
         "troubleshooting": AnswerProfile(name="Technical troubleshooting", description="Diagnose SD-WAN issues using documented evidence.",
             instructions="Separate observed symptoms, documented possible causes, diagnostic checks, and corrective actions. Explain what each documented check establishes. Do not present a possible cause as a confirmed diagnosis.",
-            routing_instructions="Use lookup for a specific symptom or error. Use cross_reference when the question explicitly requires comparing sources.",
             retrieval_depth="thorough"),
     }
     return {"version": 0, "active": {"profile_id": "general", "revision": 1},

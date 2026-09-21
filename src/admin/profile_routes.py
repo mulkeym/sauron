@@ -43,9 +43,9 @@ class PromptRequest(BaseModel):
 @router.post("/api/answer-profiles/{profile_id}/prompt")
 def preview_prompt(profile_id: str, request: PromptRequest):
     from src.agent.synthesizer import get_system_prompt
-    from src.agent.classifier import CLASSIFICATION_PROMPT
+    from src.agent.classifier import get_classification_prompt
     return {"system_prompt": get_system_prompt(snapshot(profile_id, None, request.config)),
-            "routing_prompt": CLASSIFICATION_PROMPT + "\n\nTeam routing guidance:\n" + request.config.routing_instructions}
+            "routing_prompt": get_classification_prompt(request.config)}
 
 
 def _store_call(fn, *args):

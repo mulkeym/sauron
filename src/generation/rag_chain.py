@@ -52,7 +52,8 @@ def rag_query(question, user_groups, vector_store, top_k=10):
         context_parts.append(f"{source}:\n{chunk.text}")
     context = "\n\n".join(context_parts)
     user_prompt = USER_PROMPT_TEMPLATE.format(context=context, question=question)
-    answer = generate(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
+    from src.generation.reasoning import answer_generation_kwargs
+    answer = generate(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt, **answer_generation_kwargs())
     citations = [
         Citation(
             doc_id=c.metadata.doc_id,
@@ -75,7 +76,7 @@ def rag_query(question, user_groups, vector_store, top_k=10):
 async def agent_query_streamed(
     question: str, user_groups: list[str], vector_store, schema_registry,
     metadata_store=None, step_callback=None, skip_cache: bool = False,
-    session_headers=None, agent_id: str | None = None, session_id: str | None = None,
+    session_headers=None, agent_id: str | None = None, session_id: str | None = None, conversation=None,
 ) -> RAGResponse:
     from src.generation.llm_client import llm_session
     from src.agent.profiles import active_snapshot
@@ -84,7 +85,7 @@ async def agent_query_streamed(
         result = await _agent_query_streamed_bound(
             question=question, user_groups=user_groups, vector_store=vector_store,
             schema_registry=schema_registry, metadata_store=metadata_store,
-            step_callback=step_callback, skip_cache=skip_cache, answer_profile=answer_profile,
+            step_callback=step_callback, skip_cache=skip_cache, answer_profile=answer_profile, conversation=conversation,
         )
 
         from src.figures.service import answer_images
@@ -100,7 +101,7 @@ async def agent_query_streamed(
 
 async def _agent_query_streamed_bound(
     question: str, user_groups: list[str], vector_store, schema_registry,
-    metadata_store=None, step_callback=None, skip_cache: bool = False, answer_profile=None,
+    metadata_store=None, step_callback=None, skip_cache: bool = False, answer_profile=None, conversation=None,
 ) -> RAGResponse:
     from src.agent.profiles import active_snapshot
     answer_profile = answer_profile or active_snapshot()
@@ -111,7 +112,7 @@ async def _agent_query_streamed_bound(
         step_callback("cache_check")
     # Shared cache decision (embed -> lookup -> LLM applicability judge) — same
     # path the admin playground uses, so the two cannot diverge.
-    decision = await judged_cache_lookup(question, user_groups, skip_cache=skip_cache, metadata_store=metadata_store, answer_profile=answer_profile)
+    decision = await judged_cache_lookup(question, user_groups, skip_cache=skip_cache, metadata_store=metadata_store, answer_profile=answer_profile, conversation=conversation)
     if decision.accepted:
         cached = decision.cached
         citations = [Citation(**c) for c in cached.get("citations", [])]
@@ -125,7 +126,7 @@ async def _agent_query_streamed_bound(
         question=question, user_groups=user_groups, vector_store=vector_store,
         schema_registry=schema_registry, metadata_store=metadata_store,
         step_callback=step_callback,
-        answer_profile=answer_profile,
+        answer_profile=answer_profile, conversation=conversation,
     )
 
     if decision.query_vector is not None and not result.warnings:
@@ -146,11 +147,11 @@ async def _agent_query_streamed_bound(
 async def agent_query(
     question: str, user_groups: list[str], vector_store, schema_registry,
     metadata_store=None, skip_cache: bool = False,
-    session_headers=None, agent_id: str | None = None, session_id: str | None = None,
+    session_headers=None, agent_id: str | None = None, session_id: str | None = None, conversation=None,
 ) -> RAGResponse:
     return await agent_query_streamed(
         question=question, user_groups=user_groups, vector_store=vector_store,
         schema_registry=schema_registry, metadata_store=metadata_store,
         step_callback=None, skip_cache=skip_cache,
-        session_headers=session_headers, agent_id=agent_id, session_id=session_id,
+        session_headers=session_headers, agent_id=agent_id, session_id=session_id, conversation=conversation,
     )

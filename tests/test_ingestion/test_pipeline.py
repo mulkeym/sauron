@@ -406,3 +406,22 @@ async def test_pptx_figure_has_slide_chunk_and_ordered_kg(tmp_path, monkeypatch)
     kg_text = kg_calls[0][0][0]
     assert kg_text.index("Traffic enters") < kg_text.index("EDGE-01 --> CORE-01")
     assert kg_text.index("EDGE-01 --> CORE-01") < kg_text.index("forwards traffic")
+
+
+@pytest.mark.asyncio
+async def test_original_is_retained_for_the_exact_ingested_revision(mock_deps, tmp_path, monkeypatch):
+    import hashlib
+    from src.sources.storage import OriginalStore
+    from src.config import settings
+    monkeypatch.setattr(settings, 'source_originals_dir', str(tmp_path / 'originals'))
+    vector_store, metadata_store, mock_embed = mock_deps
+    source = FIXTURES / 'sample.pdf'
+    with patch('src.ingestion.pipeline.embed_texts', mock_embed):
+        result = await ingest_document(source, ['finance'], 'mike', vector_store, metadata_store)
+    revision = metadata_store.add_document.call_args.kwargs['content_hash']
+    assert revision == hashlib.sha256(source.read_bytes()).hexdigest()
+    stream, size = OriginalStore().open_verified(result.doc_id, revision)
+    try:
+        assert stream.read() == source.read_bytes() and size == source.stat().st_size
+    finally:
+        stream.close()

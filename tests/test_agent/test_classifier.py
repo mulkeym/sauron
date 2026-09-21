@@ -454,3 +454,26 @@ async def test_classify_node_progress_optional(monkeypatch):
     node = clf._classify_node_factory(schema_registry=None)
     out = await node({"question": "q", "user_groups": ["ALL"]})  # no 'progress' -> must not error
     assert out["query_type"] == QueryType.LOOKUP
+
+
+def test_admin_routing_preview_matches_actual_profile_composition(monkeypatch):
+    from src.agent.profiles import AnswerProfile, snapshot
+    from src.admin.profile_routes import preview_prompt, PromptRequest
+    config = AnswerProfile(name='custom', routing_instructions='Use lookup for a specific symptom.')
+    captured = {}
+    def capture(**kw):
+        captured.update(kw)
+        return '{"query_type":"lookup","sub_tasks":[]}'
+    monkeypatch.setattr(classifier, 'generate', capture)
+    classify_query({'question':'What is documented?', 'answer_profile':snapshot('custom',1,config)})
+    preview = preview_prompt('custom', PromptRequest(config=config))
+    assert preview['routing_prompt'] == captured['system_prompt']
+    assert 'first applicable rule' in captured['system_prompt']
+    assert 'take precedence over optional team guidance' in captured['system_prompt']
+    assert 'use LOOKUP even' not in captured['system_prompt']
+
+
+def test_builtin_profiles_do_not_override_the_central_routing_rules():
+    from src.agent.profile_store import default_book
+    for entry in default_book()['profiles'].values():
+        assert not entry['draft']['routing_instructions']

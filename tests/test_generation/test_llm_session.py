@@ -69,7 +69,7 @@ def test_call_llm_sends_session_headers_when_bound(monkeypatch):
         captured["headers"] = headers
         return FakeResp()
 
-    monkeypatch.setattr(llm_client.requests, "post", fake_post)
+    monkeypatch.setattr(llm_client, "post_json", fake_post)
     with llm_client.llm_session(session_id="sess-b", agent_id="bob"):
         llm_client._call_llm([{"role": "user", "content": "hi"}], "m", 0.0, 8)
     assert captured["headers"]["x-switchyard-session-id"] == "sess-b"
@@ -91,7 +91,7 @@ def test_call_llm_omits_session_headers_when_unbound(monkeypatch):
         captured["headers"] = headers
         return FakeResp()
 
-    monkeypatch.setattr(llm_client.requests, "post", fake_post)
+    monkeypatch.setattr(llm_client, "post_json", fake_post)
     llm_client._call_llm([{"role": "user", "content": "hi"}], "m", 0.0, 8)
     assert "x-switchyard-session-id" not in captured["headers"]
     assert "x-switchyard-request-id" not in captured["headers"]
@@ -112,7 +112,7 @@ async def test_to_thread_generate_keeps_bound_session(monkeypatch):
         captured["headers"] = headers
         return FakeResp()
 
-    monkeypatch.setattr(llm_client.requests, "post", fake_post)
+    monkeypatch.setattr(llm_client, "post_json", fake_post)
     with llm_client.llm_session(session_id="sess-thread", agent_id="carol"):
         await asyncio.to_thread(llm_client.generate, "sys", "usr")
     assert captured["headers"]["x-switchyard-session-id"] == "sess-thread"

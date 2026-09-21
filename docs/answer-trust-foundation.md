@@ -60,3 +60,28 @@ are now implemented; see [Answer profiles](answer-profiles.md).
    final answer writer for the OpenWebUI integration.
 2. Consistent production telemetry and a team-reviewed evaluation set before
    enabling adaptive strategy changes.
+
+## Graph-guided source retrieval
+
+When the selected answer profile enables graph enrichment, lookup, procedure and
+troubleshooting queries can use authorized graph entity names to search the
+original documents again. For example, a graph match for **Admin-Tech File** can
+expand a question about a **tech file** without requiring a hardcoded synonym.
+This runs after the initial document and graph searches have both finished.
+
+The follow-up is limited to one search, up to three terms and three source
+documents. It uses the existing technical follow-up result and character limits.
+Document permissions, dataset selection, filename ambiguity and source revisions
+are checked again. Only original medium text passages containing a selected term
+are promoted into the evidence pack; source checks use layout-normalized terms,
+not a claim that the graph has established semantic equivalence. Recovered
+passages remain available through final reranking. The request state records
+selected terms, document IDs and passage counts in `graph_retrieval_trace`.
+Disabling graph enrichment disables this follow-up too. No re-ingestion is needed.
+
+Quotation validation also recognizes source-verified inline code as literal
+support, alongside quoted prose. A filename appearing only in citation metadata,
+a generated description, or a fenced generated code block does not qualify.
+This avoids rejecting a documented filename pattern simply because the model
+formatted it with backticks instead of quotation marks. Literal support and
+citation validation do not certify semantic entailment of every generated step.

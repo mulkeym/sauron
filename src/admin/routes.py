@@ -1,3 +1,4 @@
+from src.citations import render_citations
 import asyncio
 import hashlib
 import json
@@ -54,26 +55,13 @@ def _require_login(request: Request):
 
 def _citation_html(c, ordinal):
     from html import escape
-    from urllib.parse import urlsplit
-    label = escape(c.get("evidence_id") or str(ordinal))
-    filename = escape(c.get("filename", ""))
-    url = c.get("source_url", "")
-    name = f"[{label}] {filename}"
-    try:
-        safe_url = urlsplit(url).scheme in {"https", "http"}
-    except ValueError:
-        safe_url = False
-    if safe_url:
+    from src.citations import citation_label, citation_url
+    name = escape(citation_label(c))
+    url = citation_url(c)
+    if url:
         name = f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{name}</a>'
-    locations = []
-    for field, prefix in (("page", "page "), ("slide", "slide "), ("figure_id", "figure "), ("section_title", "")):
-        if c.get(field) is not None:
-            locations.append(escape(prefix + str(c[field])))
-    if c.get("source_kind") == "derived":
-        locations.append("Derived evidence")
-    location = " &mdash; ".join(locations)
     snippet = escape(c.get("snippet", ""))
-    return (f'<div class="citation-card"><span class="filename">{name}</span> {location}'
+    return (f'<div class="citation-card" id="citation-{ordinal}" tabindex="-1"><span class="filename">{name}</span>'
             f'<details><summary>View supporting passage</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;">{snippet}</pre></details></div>')
 
 
@@ -694,12 +682,29 @@ async def document_row(doc_id: str):
     </tr>""")
 
 
+_document_edit_lock = asyncio.Lock()
+
+
 @router.put("/api/documents/{doc_id}")
 async def update_document(doc_id: str, category: str = Form(""), acl_groups: str = Form("")):
     store = get_metadata_store()
     groups = [g.strip() for g in acl_groups.split(",") if g.strip()]
-    await store.update_document(doc_id, category=category or "uncategorized", acl_groups=groups)
-    doc = await store.get_document(doc_id)
+    async with _document_edit_lock:
+        doc = await store.get_document(doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        vector_store = get_vector_store()
+        # Narrow first: an interrupted edit cannot leave revoked groups in the
+        # vector index. Startup reconciliation repairs any interrupted grant.
+        intersection = sorted(set(doc.acl_groups or []).intersection(groups))
+        try:
+            await asyncio.to_thread(vector_store.synchronize_document_acl, doc_id, intersection)
+            await store.update_document(doc_id, category=category or "uncategorized", acl_groups=groups)
+            await asyncio.to_thread(vector_store.synchronize_document_acl, doc_id, groups)
+        except Exception:
+            logging.getLogger(__name__).exception("Document permission synchronization failed for %s", doc_id)
+            raise HTTPException(status_code=503, detail="Document permission update did not finish. Retry saving the document.")
+        doc = await store.get_document(doc_id)
     acl = ", ".join(doc.acl_groups) if doc.acl_groups else ""
     return HTMLResponse(f"""<tr class="upload-ok">
         <td>{doc.filename}</td><td>{doc.doc_type}</td>
@@ -837,6 +842,17 @@ def _format_classify_detail(output: dict) -> str:
         detail += (f"<br><strong>Strategy memory:</strong> kept {_h.escape(str(sm.get('llm_pick')))} "
                    f"({_h.escape(str(sm.get('reason')))})")
     return detail
+
+
+async def _run_playground_with_deadline(query_id, coroutine, timeout):
+    """Give Playground the same overall ceiling as asynchronous API jobs."""
+    try:
+        await asyncio.wait_for(coroutine, timeout=timeout)
+    except asyncio.TimeoutError:
+        job = _playground_jobs.get(query_id)
+        if job is not None:
+            job.update(step="error", result_html="", active_substep="",
+                       error=f"Query exceeded the {timeout}-second overall deadline while waiting for {job.get('step', 'processing')}. Retry or adjust the query/model limits.")
 
 
 @router.post("/api/playground/start")
@@ -1014,7 +1030,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 </div>
                 <div class="result-card">
                     <div class="result-meta">Groups: {escape_html(', '.join(user_groups))} | Source: Cache</div>
-                    <div class="result-answer">{escape_html(cached['answer'])}</div>
+                    <div class="result-answer">{escape_html(render_citations(cached['answer'], citations, local_links=True))}</div>
                     <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                     {citations_html or '<p>No citations.</p>'}
                 </div>"""
@@ -1041,7 +1057,19 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 _playground_jobs[query_id]["step"] = "enrich"
                 from src.knowledge.graph_rag import query_graph
                 start_time = time.time()
-                result = await query_graph(question, mode="hybrid")
+                from src.retrieval.query_scope import resolve_query_scope
+                from src.agent.synthesizer import edition_clarification
+                scope = await resolve_query_scope(user_groups, store, dataset_id=app_id,
+                    allowed_doc_ids=allowed_doc_ids, mode=mode, answer_profile=answer_profile, question=question)
+                clarification = edition_clarification({'answer_profile':answer_profile,
+                    'revision_missing_details':scope.missing_details, 'warnings':scope.warnings})
+                if clarification:
+                    result = {'context':clarification['answer']}
+                else:
+                    result = await query_graph(question, mode="hybrid", user_groups=user_groups,
+                        dataset_id=app_id, allowed_doc_ids=list(scope.doc_ids))
+                    if scope.warnings:
+                        result['context'] = result.get('context','') + '\n\n' + '\n'.join(scope.warnings)
                 elapsed = round(time.time() - start_time, 1)
                 answer = result.get("context", "No graph data available.")
 
@@ -1053,7 +1081,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 </div>
                 <div class="result-card">
                     <div class="result-meta">Groups: {escape_html(', '.join(user_groups))} | Source: LightRAG</div>
-                    <div class="result-answer">{html_mod.escape(answer)}</div>
+                    <div class="result-answer">{html_mod.escape(render_citations(answer, citations, local_links=True))}</div>
                 </div>"""
                 _playground_jobs[query_id] = {"step": "complete", "result_html": result_html, "error": ""}
                 return
@@ -1170,7 +1198,9 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             from src.agent.synthesizer import synthesize_answer
             _playground_jobs[query_id]["step"] = "synthesize"
             synth_start = time.time()
+            _playground_jobs[query_id]["active_substep"] = f"Waiting for the model; each response has a {settings.vllm_request_timeout}-second total deadline."
             checked = await asyncio.to_thread(synthesize_answer, final_state)
+            _playground_jobs[query_id]["active_substep"] = ""
             final_state.update(checked)
             answer = checked["answer"]
             synth_elapsed = round(time.time() - synth_start, 2)
@@ -1296,7 +1326,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             result_html = f"""{trace_html}{evidence_warnings}
             <div class="result-card">
                 <div class="result-meta">Groups: {escape_html(', '.join(user_groups))}</div>
-                <div class="result-answer">{html_mod.escape(answer)}</div>
+                <div class="result-answer">{html_mod.escape(render_citations(answer, citations, local_links=True))}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
             </div>"""
@@ -1434,7 +1464,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
             _session_cm.__exit__(None, None, None)
             await span_cm.__aexit__(None, None, None)
 
-    asyncio.create_task(run_query())
+    asyncio.create_task(_run_playground_with_deadline(query_id, run_query(), settings.async_query_timeout_seconds))
     return JSONResponse({"query_id": query_id})
 
 
@@ -1471,10 +1501,14 @@ async def playground_stream(query_id: str):
             return
 
         from src.generation.llm_client import generate_stream
+        from src.generation.reasoning import answer_generation_kwargs
         from src.agent.synthesizer import get_system_prompt, USER_PROMPT_TEMPLATE, _strip_reasoning_artifacts
         from src.config import settings as _cfg
 
         try:
+            from src.citations import CitationStream
+            pack = context_data["evidence_pack"]
+            display_stream = CitationStream(pack.citations, aliases=pack.aliases)
             full_text = ""
             for token in generate_stream(
                 system_prompt=get_system_prompt(),
@@ -1485,13 +1519,21 @@ async def playground_stream(query_id: str):
                 max_tokens=_cfg.llm_max_output_tokens,
                 session_id=job.get("llm_session_id"),
                 agent_id=job.get("llm_agent_id"),
+                **answer_generation_kwargs(),
             ):
                 full_text += token
-                yield f"data: {json.dumps({'token': token})}\n\n"
+                visible = display_stream.feed(token)
+                if visible:
+                    yield f"data: {json.dumps({'token': visible})}\n\n"
+
+            trailing = display_stream.feed('', final=True)
+            if trailing:
+                yield f"data: {json.dumps({'token': trailing})}\n\n"
 
             # Send cleaned final answer
             from src.agent.synthesizer import finalize_answer
-            cleaned = finalize_answer({}, full_text, context_data["evidence_pack"])["answer"]
+            finalized = finalize_answer({}, full_text, pack)
+            cleaned = render_citations(finalized["answer"], finalized["citations"])
             yield f"data: {json.dumps({'done': True, 'answer': cleaned})}\n\n"
 
             # Store the final answer back in the job for citations
@@ -1551,24 +1593,13 @@ async def playground_query(question: str = Form(""), play_user: str = Form("mike
                 <div class="trace-steps">{steps_html}</div>
             </div>"""
 
-            citations_html = ""
-            for i, c in enumerate(result.citations, 1):
-                citations_html += f"""
-                <div class="citation-card">
-                    <span class="filename">[{i}] {c.filename}</span>
-                    {f'<span class="score"> &mdash; page {c.page}</span>' if c.page else ''}
-                    {f'<span class="score"> &mdash; slide {c.slide}</span>' if c.slide else ''}
-                    {f'<span class="score"> &mdash; figure {c.figure_id}</span>' if c.figure_id else ''}
-                    {f'<span class="score"> &mdash; {c.section_title}</span>' if c.section_title else ''}
-                    <span class="score"> &mdash; relevance: {c.relevance:.2f}</span>
-                    <div class="snippet">{c.snippet[:300]}</div>
-                </div>"""
+            citations_html = "".join(_citation_html(c.model_dump(), i) for i, c in enumerate(result.citations, 1))
 
             return HTMLResponse(f"""
             {trace_html}
             <div class="result-card">
                 <div class="result-meta">Groups: {escape_html(', '.join(user_groups))}</div>
-                <div class="result-answer">{escape_html(result.answer)}</div>
+                <div class="result-answer">{escape_html(render_citations(result.answer, result.citations, local_links=True))}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(result.citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
             </div>""")
@@ -2546,6 +2577,26 @@ async def save_settings(request: Request):
     return HTMLResponse('<div class="status-ok" role="status">Settings saved.' + _escape_html(note) + '</div>')
 
 
+@router.get("/api/settings/embedding-status")
+async def embedding_status():
+    from src.ingestion.embedding_isolation import embedding_worker_status
+    status = embedding_worker_status()
+    last = status["last_request"]
+    text = (f"Worker: {status['state']}. Available thread configuration: "
+            f"{status['effective_threads']} CPU / {status['effective_interop_threads']} inter-op.")
+    if last:
+        text += (f" Last successful request: {last['passages']} passages, batch {last['batch_size']}, "
+                 f"{last['threads']} CPU / {last['interop']} inter-op threads; "
+                 f"{last['seconds']} seconds, {last['passages_per_second']} passages/sec. "
+                 f"Queue wait: {last['queue_seconds']} seconds. "
+                 + ("Reused warm model." if last['reused'] else "Included cold model loading."))
+        if last.get('requested_batch_size', last['batch_size']) != last['batch_size']:
+            text += f" Automatic memory limit: requested batch {last['requested_batch_size']}, effective batch {last['batch_size']}."
+        if last.get('memory_retries'):
+            text += f" Recovered after {last['memory_retries']} memory retry/retries."
+    return HTMLResponse('<p role="status">' + _escape_html(text) + '</p>')
+
+
 @router.post("/api/settings/list-llm-models")
 async def list_llm_models(vllm_base_url: str = Form(""), vllm_api_key: str = Form("")):
     url = vllm_base_url or settings.vllm_base_url
@@ -3137,3 +3188,21 @@ router.include_router(answer_profile_router)
 @router.get("/diagrams", response_class=HTMLResponse)
 async def diagrams_page(request: Request):
     return templates.TemplateResponse(request, "diagrams.html", {})
+
+
+@router.post("/api/settings/reasoning-capability")
+def check_reasoning_capability(vllm_base_url: str = Form(""), vllm_model_name: str = Form(""),
+                               llm_reasoning_adapter: str = Form("auto")):
+    from src.generation.reasoning import reasoning_capability, ReasoningConfigurationError
+    try:
+        cap = reasoning_capability(vllm_base_url, vllm_model_name, llm_reasoning_adapter)
+        default = cap['default_enabled']
+        detail = cap['detail']
+        if default is not None:
+            detail += ' Provider default: ' + ('enabled.' if default else 'disabled.')
+        if cap['mandatory']:
+            detail += ' Reasoning is mandatory; Disable is unavailable.'
+        css = 'status-ok' if cap['supported'] else 'status-err'
+        return HTMLResponse(f'<div class="{css}" role="status">{_escape_html(detail)}</div>')
+    except ReasoningConfigurationError as exc:
+        return HTMLResponse(f'<div class="status-err" role="alert">{_escape_html(str(exc))}</div>', status_code=200)

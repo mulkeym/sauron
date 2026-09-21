@@ -50,7 +50,11 @@ async def prepare_document(path: Path, filename: str, progress_cb=None) -> Prepa
         result.warnings.append(message)
         logger.warning(message)
 
-    if parsed.doc_type == "vsdx":
+    if parsed.doc_type == "emf":
+        from src.ingestion.emf import render_emf
+        result.office, notices = render_emf(path, parsed, progress)
+        result.warnings.extend(notices)
+    elif parsed.doc_type == "vsdx":
         from src.ingestion.visio import render_visio
         result.office, notices = render_visio(path, parsed, progress)
         result.warnings.extend(notices)
@@ -95,6 +99,9 @@ async def prepare_document(path: Path, filename: str, progress_cb=None) -> Prepa
             raise
         except Exception as exc:
             warning("Office figure extraction", exc)
+    if parsed.doc_type in ("pdf", "docx", "vsdx", "markdown", "txt", "text"):
+        from src.ingestion.document_identity import analyze_document
+        parsed.metadata['document_identity'] = analyze_document(parsed)
     return result
 
 

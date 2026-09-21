@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.config import settings
 
@@ -12,6 +12,10 @@ from src.config import settings
 class QueryScope:
     doc_ids: tuple[str, ...]
     revision: str
+    edition_decisions: dict = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+    missing_details: tuple[str, ...] = ()
+    edition_candidates: tuple = ()
 
 
 def resolve_query_scope_sync(user_groups, metadata_store=None, **kwargs):
@@ -38,7 +42,7 @@ def scoped_schemas(registry, state):
 
 
 async def resolve_query_scope(user_groups, metadata_store=None, *, dataset_id=0,
-                              allowed_doc_ids=None, mode="full", answer_profile=None) -> QueryScope:
+                              allowed_doc_ids=None, mode="full", answer_profile=None, question="", conversation=None) -> QueryScope:
     if metadata_store is None:
         from src.api.routes_ingest import get_metadata_store
         metadata_store = get_metadata_store()
@@ -49,7 +53,11 @@ async def resolve_query_scope(user_groups, metadata_store=None, *, dataset_id=0,
                if ("ALL" in user_groups or set(user_groups).intersection(d.acl_groups))
                and (not dataset_id or d.dataset_id == dataset_id)
                and (allowed is None or d.doc_id in allowed)]
-    doc_ids = tuple(sorted(d.doc_id for d in visible))
+    selection = None
+    if settings.revision_selection_enabled and question:
+        from src.retrieval.editions import select_editions
+        selection = select_editions(visible, question, conversation)
+    doc_ids = tuple(selection.doc_ids if selection else sorted(d.doc_id for d in visible))
     # Invalidate conservatively on any catalog change, including deletions,
     # source edits, ACL changes, and newly added documents. Never cache a result
     # across a changed retrieval/model configuration or evidence format.
@@ -66,20 +74,31 @@ async def resolve_query_scope(user_groups, metadata_store=None, *, dataset_id=0,
         db = lancedb.connect(settings.lancedb_path)
         if settings.lancedb_table_name in db.table_names():
             index_revision = db.open_table(settings.lancedb_table_name).version
-    from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+    from src.agent.synthesizer import get_system_prompt, USER_PROMPT_TEMPLATE, FORMAT_REPAIR, QUOTE_REPAIR
+    from src.agent.classifier import get_classification_prompt
+    from src.agent.profiles import AnswerProfile
+    from src.agent.strategies.technical import GUIDANCE
     if answer_profile is None:
         from src.agent.profiles import active_snapshot
         answer_profile = active_snapshot()
     figures = await metadata_store.list_figures(list(doc_ids)) if hasattr(metadata_store, "list_figures") else []
     figure_revision = sorted((f["doc_id"], f["figure_id"], repr(f.get("assets", {}))) for f in figures)
     payload = {"figure_revision": figure_revision,
-        "format": 2, "documents": sorted(records, key=lambda d: d["doc_id"]),
+        "format": 15, "conversation": conversation or [], "edition_decisions": selection.decisions if selection else {}, "documents": sorted(records, key=lambda d: d["doc_id"]),
         "groups": sorted(set(user_groups)), "allowed": doc_ids,
         "dataset_id": dataset_id, "mode": mode,
         "index_revision": index_revision,
         "settings": settings.model_dump(),
-        "prompts": [SYSTEM_PROMPT, USER_PROMPT_TEMPLATE],
+        "prompts": [get_system_prompt(answer_profile), USER_PROMPT_TEMPLATE, GUIDANCE, FORMAT_REPAIR, QUOTE_REPAIR,
+                    get_classification_prompt(AnswerProfile.model_validate(answer_profile["config"]) if answer_profile else None)],
         "answer_profile": answer_profile,
     }
     revision = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
-    return QueryScope(doc_ids, revision)
+    decisions = selection.decisions if selection else {}
+    for doc in visible:
+        if doc.doc_id in doc_ids:
+            decisions.setdefault(doc.doc_id, {})['source_revision'] = getattr(doc, 'content_hash', '') or ''
+    return QueryScope(doc_ids, revision, decisions,
+                      tuple(selection.warnings) if selection else (),
+                      tuple(selection.missing_details) if selection else (),
+                      tuple(selection.candidates) if selection else ())

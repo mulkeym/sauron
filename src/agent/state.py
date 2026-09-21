@@ -23,6 +23,8 @@ def _merge_chunks(existing: list[RetrievedChunk], new: list[RetrievedChunk]) -> 
 
 
 class QueryType(StrEnum):
+    PROCEDURE = "procedure"
+    TROUBLESHOOTING = "troubleshooting"
     LOOKUP = "lookup"
     SWEEP = "sweep"
     ANALYTICAL = "analytical"
@@ -32,6 +34,7 @@ class QueryType(StrEnum):
 
 class AgentState(TypedDict, total=False):
     question: str
+    diagram_discovery: bool  # direct search/list/show of stored figures
     original_question: str  # preserved across retries
     user_groups: list[str]
     query_type: QueryType | None
@@ -47,6 +50,14 @@ class AgentState(TypedDict, total=False):
     warnings: list[str]
     answer_profile: dict  # immutable request snapshot of one published/draft profile
     response_kind: str  # answer, clarification, or insufficient_evidence
+    conversation: list[dict]
+    edition_decisions: dict
+    revision_missing_details: list[str]
+    technical_intent: str
+    graph_retrieval_hints: list[dict]
+    graph_retrieval_trace: dict
+    technical_coverage: dict
+    technical_context_keys: list[str]  # bounded original neighbors retained through final reranking
     preview: bool
     preview_evidence: list[dict]
     skip_graph: bool

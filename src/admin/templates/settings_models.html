@@ -43,6 +43,34 @@
         <span id="llm-status"></span>
     </div>
 
+    <h3>Final answer generation</h3>
+    <div class="form-group">
+        <label for="llm_answer_temperature">Answer temperature</label>
+        <input type="number" id="llm_answer_temperature" name="llm_answer_temperature"
+               value="{{ settings.llm_answer_temperature }}" min="0" max="2" step="any" required
+               aria-describedby="temperature-help">
+        <p id="temperature-help" class="section-desc">Applies to final answers, answer repairs and previews. Higher values increase output variation. For Gemma 4 with thinking enabled, start at 1.0 and check answer accuracy. Models that require fixed sampling omit this parameter. Saving applies to new generations immediately.</p>
+    </div>
+    <div class="form-group">
+        <label for="llm_answer_thinking">Reasoning (thinking)</label>
+        <select id="llm_answer_thinking" name="llm_answer_thinking" aria-describedby="thinking-help">
+            <option value="default" {% if settings.llm_answer_thinking == 'default' %}selected{% endif %}>Provider default (omit control)</option>
+            <option value="enabled" {% if settings.llm_answer_thinking == 'enabled' %}selected{% endif %}>Enabled</option>
+            <option value="disabled" {% if settings.llm_answer_thinking == 'disabled' %}selected{% endif %}>Disabled (when supported)</option>
+        </select>
+        <p id="thinking-help" class="section-desc">Applies to final answers, answer repairs and previews. Thinking can increase response time and token usage; reasoning and the final answer share the output token limit. Internal reasoning is not shown. Classification, ingestion and the separate SQL thinking option are unchanged.</p>
+    </div>
+    <div class="form-group">
+        <label for="llm_reasoning_adapter">Request adapter</label>
+        <select id="llm_reasoning_adapter" name="llm_reasoning_adapter" aria-describedby="adapter-help">
+            <option value="auto" {% if settings.llm_reasoning_adapter == 'auto' %}selected{% endif %}>Automatic (OpenRouter capability check)</option>
+            <option value="vllm_template" {% if settings.llm_reasoning_adapter == 'vllm_template' %}selected{% endif %}>vLLM template (server support required)</option>
+        </select>
+        <p id="adapter-help" class="section-desc">OpenRouter support is checked for the selected model. Choose vLLM only when your server and model template support its thinking control. Other endpoints must use Provider default. This setting cannot override server restrictions.</p>
+        <button type="button" class="secondary" hx-post="/admin/api/settings/reasoning-capability" hx-include="#vllm_base_url,#vllm_model_name,#llm_reasoning_adapter" hx-target="#reasoning-status">Check thinking support</button>
+        <div id="reasoning-status" aria-live="polite"></div>
+    </div>
+
     <h3 style="margin-top:1.5rem;">Embedding Model</h3>
     <div class="form-group">
         <label for="embedding_mode">Mode</label>
@@ -72,6 +100,23 @@
             <span id="embed-status"></span>
         </div>
     </div>
+    <h3 style="margin-top:1.5rem;">Local embedding performance</h3>
+    <div hx-get="/admin/api/settings/embedding-status" hx-trigger="load, every 5s" hx-swap="innerHTML" aria-live="polite"></div>
+    <p class="section-desc">One isolated CPU worker keeps the model loaded between requests. These controls apply in Local mode. Saves affect the next request; a running request keeps its settings. Larger batches, especially for long passages, need more memory.</p>
+    {% for name, label, minimum, maximum, help in [
+        ('embedding_batch_size', 'Batch size', 1, 512, 'Maximum passages per batch, across all chunk sizes. The worker retries with a smaller batch if it exceeds its memory budget.'),
+        ('embedding_cpu_threads', 'CPU threads', 0, 256, '0 = automatic, respecting container CPU limits. Higher is not always faster.'),
+        ('embedding_cpu_interop_threads', 'Inter-op threads', 1, 256, 'Parallel model operations. Start at 1. Thread changes recycle the worker on its next request.'),
+        ('embedding_worker_memory_mb', 'Memory budget (MiB)', 128, none, 'Memory protection also reserves container headroom for the API. Exceeding a limit stops the worker.'),
+        ('embedding_worker_timeout_seconds', 'Request timeout (seconds)', 1, none, 'Includes cold model loading; excludes time waiting for another embedding request.'),
+        ('embedding_worker_idle_seconds', 'Keep warm while idle (seconds)', 1, none, 'Release the model after this much idle time. The next request reloads it.')
+    ] %}
+    <div class="form-group">
+        <label for="{{ name }}">{{ label }}</label>
+        <input type="number" id="{{ name }}" name="{{ name }}" min="{{ minimum }}" {% if maximum is not none %}max="{{ maximum }}"{% endif %} step="1" value="{{ settings[name] }}" aria-describedby="{{ name }}-help">
+        <p class="section-desc" id="{{ name }}-help">{{ help }}</p>
+    </div>
+    {% endfor %}
     <script>
         document.getElementById('embedding_mode').addEventListener('change', function() {
             document.getElementById('embedding-api-fields').style.display = this.value === 'local' ? 'none' : '';

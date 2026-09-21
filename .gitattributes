@@ -2,3 +2,6 @@
 # (CRLF makes the shebang `#!/bin/sh\r`, which the kernel cannot exec).
 *.sh text eol=lf
 scripts/* text eol=lf
+
+# PDF cross-reference offsets and stream bytes must remain unchanged.
+*.pdf binary

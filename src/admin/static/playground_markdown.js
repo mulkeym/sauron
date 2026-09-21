@@ -45,6 +45,16 @@
                 const url = new URL(link.getAttribute('href'), window.location.href);
                 if (!link.hasAttribute('href') || !['http:', 'https:', 'mailto:'].includes(url.protocol)) {
                     link.removeAttribute('href');
+                } else if (/^#citation-\d+$/.test(link.getAttribute('href'))) {
+                    link.addEventListener('click', event => {
+                        const card = element.closest('.result-card')?.querySelector(url.hash);
+                        if (!card) return;
+                        event.preventDefault();
+                        const passage = card.querySelector('details');
+                        if (passage) passage.open = true;
+                        card.focus();
+                        card.scrollIntoView({block: 'nearest'});
+                    });
                 } else if (url.origin !== window.location.origin) {
                     link.target = '_blank';
                     link.rel = 'noopener noreferrer';

@@ -84,14 +84,40 @@ DIGITAL_MIN_CHARS = 20   # a page with fewer extractable chars is treated as sca
 _TABLE_SETTINGS = {"vertical_strategy": "text", "horizontal_strategy": "text"}
 
 
+def _text_table_splits_words(page, table) -> bool:
+    """Reject inferred columns cutting through prose words, retaining prose.
+
+    This applies only to borderless/text-strategy candidates. Ruled tables and
+    ambiguous candidates keep the existing extraction path.
+    """
+    try:
+        cells = [cell for cell in table.cells if cell is not None]
+        cuts = sorted({float(cell[i]) for cell in cells for i in (0, 2)})
+        x0, top, x1, bottom = table.bbox
+        words = [word for word in page.extract_words()
+                 if x0 <= (word['x0'] + word['x1']) / 2 <= x1
+                 and top <= (word['top'] + word['bottom']) / 2 <= bottom]
+        split = sum(any(word['x0'] + 0.5 < cut < word['x1'] - 0.5 for cut in cuts)
+                    for word in words)
+        return split >= 2 and split / max(1, len(words)) >= 0.10
+    except MemoryError:
+        raise
+    except (AttributeError, TypeError, KeyError, ValueError):
+        return False
+
+
 def _page_tables(page, page_no: int) -> tuple[list[SheetGrid], list[tuple]]:
     """Extract tables once and keep their bounds for prose/figure placement."""
     grids: list[SheetGrid] = []
     bboxes: list[tuple] = []
     tables = page.find_tables() or []
-    if not tables:
+    inferred = not tables
+    if inferred:
         tables = page.find_tables(table_settings=_TABLE_SETTINGS) or []
     for n, table in enumerate(tables):
+        if inferred and _text_table_splits_words(page, table):
+            logger.info("PDF page %s: inferred table columns split words; retaining original prose", page_no)
+            continue
         raw = table.extract()
         g = normalize_grid(raw, sheet_name=f"p{page_no}_table{n}")
         if g.rows:
@@ -107,6 +133,39 @@ def _page_tables(page, page_no: int) -> tuple[list[SheetGrid], list[tuple]]:
     return grids, bboxes
 
 
+def _layout_line_text(line: dict) -> str:
+    """Recover word gaps hidden by sheared glyph bounds in synthetic italics.
+
+    PDF glyph boxes include the italic overhang; their overlap is not the pen
+    advance. Use the text matrix's baseline origin and advance for horizontal,
+    sheared lines only. Never guess word boundaries from capitalization.
+    """
+    import math
+    from pdfplumber.utils import extract_text
+
+    original = (line.get("text") or "").strip()
+    chars = line.get("chars") or []
+    if not chars or not any(abs((c.get("matrix") or (0, 0, 0))[2]) > 1e-6 for c in chars):
+        return original
+    adjusted = []
+    for char in chars:
+        matrix = char.get("matrix")
+        advance = char.get("adv")
+        if (not matrix or len(matrix) != 6 or advance is None
+                or not all(math.isfinite(v) for v in (*matrix, advance))
+                or not char.get("upright") or abs(matrix[1]) > 1e-6
+                or matrix[0] <= 0 or matrix[3] <= 0 or advance < 0):
+            return original
+        x0 = matrix[4]
+        x1 = x0 + matrix[0] * advance
+        adjusted.append({**char, "x0": x0, "x1": x1, "width": x1 - x0})
+    restored = (extract_text(adjusted, x_tolerance_ratio=0.15) or "").strip()
+    # The repair may insert whitespace, but must preserve all source characters.
+    if "".join(restored.split()) != "".join(original.split()):
+        return original
+    return restored
+
+
 def _page_layout_lines(page, page_no: int, table_bboxes: list[tuple]) -> list[ProseBlock]:
     """Positioned text lines outside table regions, in page reading order."""
     lines: list[ProseBlock] = []
@@ -117,7 +176,7 @@ def _page_layout_lines(page, page_no: int, table_bboxes: list[tuple]) -> list[Pr
     except Exception:
         raw_lines = []
     for line in raw_lines:
-        text = (line.get("text") or "").strip()
+        text = _layout_line_text(line)
         if not text:
             continue
         x0 = float(line.get("x0", 0) or 0)

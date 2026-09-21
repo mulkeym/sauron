@@ -12,7 +12,7 @@ class AnswerProfile(BaseModel):
     description: str = Field(default="", max_length=500)
     instructions: str = Field(default="", max_length=20000)
     routing_instructions: str = Field(default="", max_length=6000)
-    strategy: Literal["auto", "lookup", "sweep", "analytical", "cross_reference", "temporal", "metadata"] = "auto"
+    strategy: Literal["auto", "lookup", "procedure", "troubleshooting", "sweep", "analytical", "cross_reference", "temporal", "metadata"] = "auto"
     retrieval_depth: Literal["focused", "balanced", "thorough"] = "balanced"
     images: Literal["inherit", "auto", "requested", "off"] = "inherit"
     max_images: int = Field(default=2, ge=0, le=5)
@@ -79,22 +79,22 @@ def active_snapshot():
 
 
 def response_policy(profile: AnswerProfile) -> str:
-    clarification = (
-        "When a missing detail materially changes the documented procedure, ask a clarification before giving steps. "
-        "Only request missing details from this list: " + ", ".join(profile.clarification_fields) + "."
-        if profile.clarification == "when_needed" and profile.clarification_fields
-        else "Do not ask a follow-up question. Give only supported information with explicit caveats; never guess missing details."
+    clarify = profile.clarification == "when_needed" and bool(profile.clarification_fields)
+    decision = (
+        "First, request clarification only if a missing detail from " + ", ".join(profile.clarification_fields)
+        + " changes the requested procedure. Otherwise, apply the evidence policy below."
+        if clarify else "Do not request clarification. Apply the evidence policy below."
     )
     evidence = (
-        "If the evidence cannot support the complete requested answer, abstain instead of giving a partial procedure."
+        "Answer only if evidence supports the complete requested answer; otherwise abstain."
         if profile.insufficient_evidence == "abstain"
-        else "You may give a partial answer using cited evidence. Explicitly identify what the evidence does not establish."
+        else "Answer the supported part and state any gaps. Abstain only when no useful part of the answer is supported."
     )
-    return clarification + "\n" + evidence + """
-Return a JSON object, without a code fence, using one of these forms:
-{"status":"answer","answer":"Your answer with exact [E...] evidence citations."}
-{"status":"clarification","missing_details":["platform","software_version"]}
-{"status":"insufficient_evidence"}
-For clarification, return only the missing detail identifiers; the application supplies the questions.
-Use insufficient_evidence when you cannot provide a grounded answer under the policy above.
-Do not include factual claims in a clarification or insufficient_evidence response."""
+    lines = [decision, evidence, "Response format — use exactly one of these forms:",
+             "SAURON_STATUS: answer\n<Markdown answer with [E...] citations>"]
+    if clarify:
+        lines.append("SAURON_STATUS: clarification\n<Comma-separated identifiers from: "
+                     + ", ".join(profile.clarification_fields) + ">")
+    lines += ["SAURON_STATUS: insufficient_evidence",
+              "Abstention has no body. Write Markdown directly. No JSON wrapper. Keep internal reasoning out of the visible final response."]
+    return "\n\n".join(lines)

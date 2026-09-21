@@ -39,7 +39,7 @@ env:
 
 jobs:
   build-and-push:
-    name: Build and push
+    name: Build, verify, and publish
     runs-on: ubuntu-latest
     # HF model bake can be slow on a cold cache
     timeout-minutes: 120
@@ -53,6 +53,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare build tools and disk space
+        run: |
+          # Hosted-runner SDKs are not used by this Python container build.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -82,16 +90,16 @@ jobs:
             # Short git SHA on every publish
             type=sha,prefix=sha-,format=short
 
-      - name: Build and push
+      - name: Build production OCI artifact
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          # PRs: build only (validate Dockerfile). Pushes/tags: publish.
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          # Build once. Release tags are written only after every check passes.
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/sauron-oci,tar=false,compression=gzip
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           # Final-image layers are reusable. Avoid exporting the deliberately
@@ -101,47 +109,75 @@ jobs:
           sbom: true
 
       - name: Enforce sub-1 GB OCI layers
+        run: |
+          python3 scripts/check_oci_layer_sizes.py "$RUNNER_TEMP/sauron-oci" \
+            --max-bytes 1000000000 --platform linux/amd64 \
+            --report "$RUNNER_TEMP/layer-sizes.json"
+
+      - name: Load verified production image
+        run: |
+          skopeo --override-os linux --override-arch amd64 copy \
+            "oci:$RUNNER_TEMP/sauron-oci" docker-daemon:sauron-ci:checked
+
+      - name: Check packaged runtime and offline startup
+        run: bash scripts/check_packaged_runtime.sh sauron-ci:checked
+
+      - name: Run regression tests against packaged source
+        run: |
+          docker run --rm --network none --entrypoint bash \
+            -v "$GITHUB_WORKSPACE:/release:ro" sauron-ci:checked -euc '
+              mkdir -p /tmp/release-tests /app/tests
+              cp -a /release/tests/. /app/tests/
+              cd /tmp/release-tests
+              cp -a /release/tests /release/test_fixtures /release/docs /release/.github .
+              cp /release/Dockerfile /release/.env.example /release/requirements.txt /release/constraints-security.txt .
+              ln -s /app/scripts scripts
+              ln -s /app/src src
+              PYTHONPATH=/app:/tmp/release-tests python -m pytest tests -q
+            '
+
+      - name: Publish the verified artifact
         if: github.event_name != 'pull_request'
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          image_ref="$(printf '%s\n' "$IMAGE_TAGS" | sed -n '1p')"
-          root_manifest=/tmp/sauron-oci-root.json
-          image_manifest=/tmp/sauron-oci-image.json
-          docker buildx imagetools inspect --raw \
-            "${image_ref}@${IMAGE_DIGEST}" > "$root_manifest"
-          platform_digest="$(python - "$root_manifest" <<'PY'
-          import json
-          import sys
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            skopeo copy --all --preserve-digests \
+              --authfile "$HOME/.docker/config.json" \
+              --digestfile "$RUNNER_TEMP/published-digest.txt" \
+              "oci:$RUNNER_TEMP/sauron-oci" "docker://$tag"
+          done <<< "$IMAGE_TAGS"
 
-          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
-          for item in manifest.get("manifests", []):
-              platform = item.get("platform") or {}
-              if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
-                  print(item["digest"])
-                  break
-          PY
-          )"
-          if [ -n "$platform_digest" ]; then
-            docker buildx imagetools inspect --raw \
-              "${image_ref}@${platform_digest}" > "$image_manifest"
-          else
-            cp "$root_manifest" "$image_manifest"
-          fi
-          python scripts/check_oci_layer_sizes.py \
-            "$image_manifest" --max-bytes 1000000000
+      - name: Save verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-verification
+          path: |
+            ${{ runner.temp }}/layer-sizes.json
+            ${{ runner.temp }}/sauron-release-startup.log
+            ${{ runner.temp }}/published-digest.txt
 
       - name: Image summary
-        if: github.event_name != 'pull_request'
+        if: success()
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Platform: \`linux/amd64\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Verified linux/amd64 image"
+            echo '```json'
+            cat "$RUNNER_TEMP/layer-sizes.json"
+            echo '```'
+            if [ "$EVENT_NAME" != pull_request ]; then
+              echo "Published tags:"
+              echo '```'
+              printf '%s\n' "$IMAGE_TAGS"
+              cat "$RUNNER_TEMP/published-digest.txt"
+              echo '```'
+            else
+              echo "Pull request validation only; no image tags published."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -61,6 +61,8 @@ def test_local_model_loads_on_cpu():
     try:
         with patch("src.ingestion.embedder.settings") as mock_settings:
             mock_settings.embedding_model_name = "nomic-ai/nomic-embed-text-v1"
+            mock_settings.embedding_cpu_threads = 0
+            mock_settings.embedding_cpu_interop_threads = 1
             with patch("sentence_transformers.SentenceTransformer") as mock_st:
                 emb._get_local_model()
                 mock_st.assert_called_once()

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.citations import render_citations, citation_details, citation_label
 from src.generation.llm_client import generate
 from src.generation.rag_chain import agent_query
 from src.mcp.auth import mcp_llm_session_kwargs
@@ -28,10 +29,12 @@ async def ask(
         **mcp_llm_session_kwargs(),
     )
 
-    citations = [c.model_dump() for c in response.citations]
+    citations = [citation_details(c) for c in response.citations]
 
     return {
-        "answer": response.answer,
+        "sauron_citations_version": 1,
+        "answer_with_evidence_ids": response.answer,
+        "answer": render_citations(response.answer, response.citations),
         "images": response.images,
         "citations": citations,
         "warnings": response.warnings,
@@ -63,12 +66,16 @@ async def summarize_topic(
     )
 
     sources = [
-        {"doc_id": c.doc_id, "filename": c.filename}
+        {"doc_id": c.doc_id, "filename": c.filename, "display_label": citation_label(c)}
         for c in response.citations
     ]
 
     return {
-        "summary": response.answer,
+        "sauron_citations_version": 1,
+        "answer_with_evidence_ids": response.answer,
+        "citations": [citation_details(c) for c in response.citations],
+        "warnings": response.warnings,
+        "summary": render_citations(response.answer, response.citations),
         "images": response.images,
         "sources": sources,
         "query_type": response.query_type,
@@ -96,12 +103,16 @@ async def compare(
     )
 
     sources = [
-        {"doc_id": c.doc_id, "filename": c.filename}
+        {"doc_id": c.doc_id, "filename": c.filename, "display_label": citation_label(c)}
         for c in response.citations
     ]
 
     return {
-        "comparison": response.answer,
+        "sauron_citations_version": 1,
+        "answer_with_evidence_ids": response.answer,
+        "citations": [citation_details(c) for c in response.citations],
+        "warnings": response.warnings,
+        "comparison": render_citations(response.answer, response.citations),
         "images": response.images,
         "sources": sources,
         "query_type": response.query_type,

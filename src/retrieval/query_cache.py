@@ -179,7 +179,7 @@ class CacheDecision:
 
 async def judged_cache_lookup(question: str, user_groups: list,
                               *, skip_cache: bool = False, metadata_store=None,
-                              dataset_id=0, allowed_doc_ids=None, mode="full", answer_profile=None) -> CacheDecision:
+                              dataset_id=0, allowed_doc_ids=None, mode="full", answer_profile=None, conversation=None) -> CacheDecision:
     """Return fresh retrieval whenever cache scope or applicability is uncertain."""
     d = CacheDecision()
     t0 = time.time()
@@ -188,9 +188,9 @@ async def judged_cache_lookup(question: str, user_groups: list,
     try:
         from src.retrieval.query_scope import resolve_query_scope
         scope = await resolve_query_scope(user_groups, metadata_store,
-            dataset_id=dataset_id, allowed_doc_ids=allowed_doc_ids, mode=mode, answer_profile=answer_profile)
+            dataset_id=dataset_id, allowed_doc_ids=allowed_doc_ids, mode=mode, answer_profile=answer_profile, question=question, conversation=conversation)
         d.scope_revision = scope.revision
-        if not scope.doc_ids:
+        if not scope.doc_ids or scope.warnings or scope.missing_details:
             return d
         d.query_vector = await asyncio.to_thread(embed_query, question)
     except Exception as e:

@@ -33,10 +33,10 @@
         <section class="settings-section">
           <h2>Retrieval</h2>
           <div class="form-group"><label for="profile-strategy">Routing strategy</label><select id="profile-strategy" name="strategy">
-            <option value="auto">Automatic classification</option><option value="lookup">Targeted lookup</option><option value="sweep">Search across documents</option><option value="analytical">Structured database query</option><option value="cross_reference">Cross-reference sources</option><option value="temporal">Date-oriented lookup</option><option value="metadata">Document catalog</option>
+            <option value="auto">Automatic classification</option><option value="lookup">Targeted lookup</option><option value="procedure">Procedure guidance</option><option value="troubleshooting">Troubleshooting</option><option value="sweep">Search across documents</option><option value="analytical">Structured database query</option><option value="cross_reference">Cross-reference sources</option><option value="temporal">Date-oriented lookup</option><option value="metadata">Document catalog</option>
           </select></div>
           <div class="form-group"><label for="profile-routing">Automatic routing instructions</label><textarea id="profile-routing" name="routing_instructions" rows="4" maxlength="6000" aria-describedby="routing-help"></textarea>
-            <p id="routing-help" class="profile-help">Explain when to use existing strategies. A fixed routing strategy bypasses classification and learned strategy overrides.</p></div>
+            <p id="routing-help" class="profile-help">Explain when to use existing strategies. A fixed routing strategy bypasses classification and learned strategy overrides. Procedure and troubleshooting also require their staged rollout flags in All Settings.</p></div>
           <div class="form-group"><label for="profile-depth">Retrieval depth</label><select id="profile-depth" name="retrieval_depth" aria-describedby="depth-help"><option value="focused">Focused</option><option value="balanced">Balanced</option><option value="thorough">Thorough</option></select>
             <p id="depth-help" class="profile-help">Focused: 15 lookup candidates / 50 discovery results. Balanced: 30 / 250. Thorough: 60 / 500. Broader searches can take longer; depth does not guarantee complete coverage.</p></div>
           <div class="form-row">

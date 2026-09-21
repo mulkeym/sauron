@@ -37,7 +37,7 @@ async def test_run_agent_lookup(monkeypatch):
     with patch("src.agent.classifier.generate", return_value='{"query_type": "lookup", "sub_tasks": ["Find policy 4.2"]}'):
         with patch("src.agent.strategies.lookup.embed_query", return_value=[0.1] * 1024), \
              patch("src.ingestion.embedder.embed_texts", side_effect=lambda texts, kind: [[0.1] * 1024 for _ in texts]):
-            with patch("src.agent.synthesizer.generate", side_effect=lambda **k: "Approval for expenses over $500 " + __import__("re").search(r"\[E[a-f0-9]{12}\]", k["user_prompt"])[0]):
+            with patch("src.agent.synthesizer.generate", side_effect=lambda **k: "Approval for expenses over $500 " + __import__("re").search(r"\[E[0-9]+\]", k["user_prompt"])[0]):
                 from src.db.schema_registry import SchemaRegistry
                 result = await run_agent(question="What is policy 4.2?", user_groups=["finance"], vector_store=mock_store, schema_registry=SchemaRegistry())
     assert "approval" in result.answer.lower() or "500" in result.answer
@@ -80,7 +80,10 @@ def test_merge_results_noop_when_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_agent_no_results():
+async def test_run_agent_no_results(monkeypatch):
+    from src.retrieval.query_scope import QueryScope
+    monkeypatch.setattr("src.retrieval.query_scope.resolve_query_scope",
+                        AsyncMock(return_value=QueryScope(("d1",), "test")))
     mock_store = MagicMock()
     mock_store.hybrid_search_reranked.return_value = []
     mock_store.expand_window.side_effect = lambda chunks, window=2: chunks
@@ -142,7 +145,10 @@ async def test_lookup_then_structured_skips_when_sql_present(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_agent_temporal_does_not_nameerror():
+async def test_run_agent_temporal_does_not_nameerror(monkeypatch):
+    from src.retrieval.query_scope import QueryScope
+    monkeypatch.setattr("src.retrieval.query_scope.resolve_query_scope",
+                        AsyncMock(return_value=QueryScope(("d1",), "test")))
     # TEMPORAL (and the default else) branch used to reference an undefined
     # _asyncio_lookup; they now route through _lookup_then_structured like LOOKUP.
     mock_store = MagicMock()

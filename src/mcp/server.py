@@ -103,6 +103,30 @@ def create_mcp_server(
         )
 
     @mcp.tool()
+    async def tool_get_original_document(doc_id: str, revision: str) -> dict:
+        """Get a login-protected OpenWebUI link to the original Word, PDF, or Visio file.
+        Use the exact doc_id and SHA-256 source_revision from the citation/lookup metadata
+        as the revision argument. If absent, look up that exact doc_id first.
+        Never substitute a family ID, filename, document edition, or newer revision.
+        Returns details and a link only; never file bytes or credentials.
+        The browser must be signed into OpenWebUI; current permissions apply on every click.
+        """
+        from src.sources.service import document_download
+        return await document_download(doc_id, revision, user_groups(), metadata_store)
+
+    @mcp.tool()
+    async def tool_get_cited_passage(doc_id: str, source_revision: str, evidence_id: str,
+                                     chunk_index: int, chunk_size_tier: str, start_char: int) -> dict:
+        """Read the exact indexed passage identified by a citation's fields.
+        Rechecks current document access and revision; never substitutes another passage.
+        Generated summaries/query results may not have a retrievable indexed passage.
+        """
+        from src.sources.passages import cited_passage
+        return await cited_passage(doc_id, source_revision, evidence_id, chunk_index,
+                                   chunk_size_tier, start_char, user_groups(),
+                                   metadata_store, vector_store)
+
+    @mcp.tool()
     async def tool_lookup_document(doc_id: str, offset: int = 0, limit: int = 100) -> dict:
         """Read indexed document passages by exact document ID or unique filename.
         Follow next_offset until null to read subsequent pages. complete is true
@@ -161,7 +185,7 @@ def create_mcp_server(
             if category:
                 return list_documents_in_category(category=category, user_groups=groups, metadata_store=metadata_store)
             docs = await metadata_store.list_documents(None if "ALL" in groups else groups)
-            return [{"doc_id": d.doc_id, "filename": d.filename, "doc_type": d.doc_type, "category": d.category or "uncategorized", "chunk_count": d.chunk_count, "uploaded_by": d.uploaded_by} for d in docs]
+            return [{"doc_id": d.doc_id, "filename": d.filename, "doc_type": d.doc_type, "category": d.category or "uncategorized", "chunk_count": d.chunk_count, "uploaded_by": d.uploaded_by, "source_revision": d.content_hash} for d in docs]
         return await run_logged_mcp_tool(tool="list_documents", query_text=category, fn=_run)
 
     @mcp.tool()

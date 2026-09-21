@@ -1,3 +1,4 @@
+from src.citations import render_citations, citation_markdown
 # src/api/routes_openai_compat.py
 """OpenAI-compatible /v1/chat/completions endpoint.
 
@@ -63,9 +64,12 @@ async def chat_completions(
 
     # Extract the last user message as the question
     question = ""
-    for msg in reversed(payload.messages):
+    last_user_index = -1
+    for index in range(len(payload.messages)-1, -1, -1):
+        msg = payload.messages[index]
         if msg.role == "user":
             question = msg.content
+            last_user_index = index
             break
 
     if not question:
@@ -80,6 +84,8 @@ async def chat_completions(
     ) as span:
         result = await agent_query(
             question=question,
+            conversation=[{'role':m.role, 'content':m.content[:4000]} for m in payload.messages[:last_user_index][-8:]
+                          if m.role in ('user', 'assistant')],
             user_groups=user_groups,
             vector_store=get_vector_store(),
             schema_registry=get_schema_registry(),
@@ -91,12 +97,11 @@ async def chat_completions(
         span.cache_hit = bool(result.cached)
 
     # Format citations as part of the response
-    answer = result.answer
+    answer = render_citations(result.answer, result.citations)
     if result.citations:
         sources = "\n\n---\n**Sources:**\n"
         for i, c in enumerate(result.citations, 1):
-            page_info = f", page {c.page}" if c.page else ""
-            sources += f"- [{c.evidence_id or i}] {c.filename}{page_info}\n"
+            sources += f"- {citation_markdown(c)}\n"
         answer += sources
     if result.warnings:
         answer += "\n\nEvidence limitations:\n" + "\n".join("- " + w for w in result.warnings)

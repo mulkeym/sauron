@@ -5,7 +5,7 @@ from src.agent.synthesizer import synthesize_answer
 
 
 def cited_answer(**kwargs):
-    ids = re.findall(r"\[E[a-f0-9]{12}\]", kwargs["user_prompt"])
+    ids = re.findall(r"\[E[0-9]+\]", kwargs["user_prompt"])
     return "Expenses require approval; salary 1500000. " + " ".join(ids)
 from src.agent.state import AgentState, QueryType
 from src.retrieval.models import RetrievedChunk, ChunkMetadata
@@ -323,7 +323,8 @@ def test_synthesis_context_caps_wide_sql_result():
 
 def test_prompts_require_evidence_and_preserve_procedures():
     from src.agent.synthesizer import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
-    assert "exact documented commands" in SYSTEM_PROMPT
+    assert "Preserve commands, numbers, negation, conditions, step order and arrow direction" in SYSTEM_PROMPT
     assert "untrusted data" in SYSTEM_PROMPT
-    assert "conflicting" in USER_PROMPT_TEMPLATE
-    assert "[E...]" in USER_PROMPT_TEMPLATE
+    assert "In an answer, state evidence gaps or conflicts" in SYSTEM_PROMPT
+    assert "[E...]" in SYSTEM_PROMPT
+    assert "Use the response policy above" in USER_PROMPT_TEMPLATE
