@@ -133,6 +133,15 @@ class Settings(BaseSettings):
     # 1200 tokens ≈ half the calls of the old 500 default for large PDFs.
     kg_chunk_token_size: int = 1200
     kg_chunk_overlap_token_size: int = 100
+    kg_llm_max_output_tokens: int = Field(
+        default=4096, ge=256, le=32768, title="Knowledge graph output token limit",
+        description="Maximum generated tokens per graph model call. Truncated chunks are marked incomplete and can be retried.")
+    kg_llm_timeout_seconds: int = Field(
+        default=180, ge=10, le=600, title="Knowledge graph model deadline (seconds)",
+        description="Total deadline per graph model call, including adapter retries. Failed chunks do not cancel other chunks; the whole-document budget still applies.")
+    kg_llm_disable_thinking: bool = Field(
+        default=True, title="Disable thinking for knowledge graph",
+        description="Use the configured reasoning adapter to disable thinking for graph extraction and summaries, independently of final answers. Select vLLM template for compatible local servers; unsupported providers log a warning.")
     # 0 = adaptive timeout from estimated chunk count; else fixed seconds per attempt
     kg_extract_timeout_seconds: int = 0
     kg_extract_timeout_max_seconds: int = 3600  # cap for adaptive (1 hour)

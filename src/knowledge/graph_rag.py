@@ -7,10 +7,11 @@ from pathlib import Path
 
 import numpy as np
 
-from lightrag import LightRAG, QueryParam
+from lightrag import QueryParam
+from src.knowledge.resilient_lightrag import ResilientLightRAG as LightRAG, FAILURES_KEY
 from lightrag.base import DocStatus
 from lightrag.llm.openai import openai_complete_if_cache
-from lightrag.utils import EmbeddingFunc
+from lightrag.utils import EmbeddingFunc, TruncatedResponse
 
 from src.config import settings
 from src.knowledge.kg_format import repair_extraction_format, should_skip_graph
@@ -46,7 +47,7 @@ def plan_orphan_lightrag_docs(
 async def _llm_func(
     prompt: str,
     system_prompt: str | None = None,
-    history_messages: list[dict] = [],
+    history_messages: list[dict] | None = None,
     keyword_extraction: bool = False,
     **kwargs,
 ) -> str:
@@ -60,19 +61,44 @@ async def _llm_func(
     extra_headers.update(outbound_llm_headers())
     if extra_headers:
         kwargs["extra_headers"] = extra_headers
-    result = await openai_complete_if_cache(
-        model=settings.vllm_model_name,
-        prompt=prompt,
-        system_prompt=system_prompt,
-        history_messages=history_messages,
-        keyword_extraction=keyword_extraction,
-        base_url=settings.vllm_base_url,
-        api_key=settings.vllm_api_key or "not-needed",
-        # Bound the HTTP call so a wedged connection fails fast instead of
-        # tying up a LightRAG worker until its (2x) execution-timeout cap.
-        timeout=settings.vllm_request_timeout,
-        **kwargs,
-    )
+    from src.generation.llm_client import _is_reasoning_model
+    from src.generation.reasoning import reasoning_parameters, ReasoningConfigurationError
+    token_key = "max_completion_tokens" if _is_reasoning_model(settings.vllm_model_name) else "max_tokens"
+    requested_limit = kwargs.pop("max_tokens", kwargs.pop("max_completion_tokens", settings.kg_llm_max_output_tokens))
+    kwargs[token_key] = min(int(requested_limit), settings.kg_llm_max_output_tokens)
+    kwargs["enable_cot"] = False  # Never index reasoning as source evidence.
+    if settings.kg_llm_disable_thinking:
+        try:
+            controls = await asyncio.to_thread(reasoning_parameters, False, model=settings.vllm_model_name)
+            extra_body = dict(kwargs.get("extra_body") or {})
+            extra_body.update(controls)
+            kwargs["extra_body"] = extra_body
+        except ReasoningConfigurationError as exc:
+            logger.warning("KG thinking could not be explicitly disabled: %s", exc)
+    deadline = min(settings.kg_llm_timeout_seconds, settings.vllm_request_timeout)
+    try:
+        result = await asyncio.wait_for(openai_complete_if_cache(
+            model=settings.vllm_model_name,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages,
+            keyword_extraction=keyword_extraction,
+            base_url=settings.vllm_base_url,
+            api_key=settings.vllm_api_key or "not-needed",
+            # Bound the HTTP call so a wedged connection fails fast instead of
+            # tying up a LightRAG worker until its (2x) execution-timeout cap.
+            timeout=deadline,
+            **kwargs,
+        ), timeout=deadline)
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(f"Knowledge graph model call exceeded {deadline}s deadline") from exc
+    if isinstance(result, TruncatedResponse):
+        raise RuntimeError("Knowledge graph output reached its token limit; increase the graph output limit or reduce graph chunk size")
+    if not isinstance(result, str) or not result.strip():
+        raise RuntimeError(
+            "Knowledge graph model returned no text; check the model server's "
+            "reasoning/output configuration and token limit"
+        )
     # Small local models occasionally drop a field (e.g. entity type), which
     # makes LightRAG silently discard otherwise-valid records. Repair before
     # the result is parsed (and cached).
@@ -192,7 +218,7 @@ async def get_lightrag() -> LightRAG:
         # Align LightRAG's per-call LLM timeout with our configured request
         # timeout (worker execution cap is ~2x this) so slow prose chunks have
         # room to finish instead of being killed at the 360s default.
-        default_llm_timeout=settings.vllm_request_timeout,
+        default_llm_timeout=max(settings.vllm_request_timeout, settings.kg_llm_timeout_seconds),
 
         # Larger chunks ⇒ fewer extract LLM calls (main KG speed lever for big PDFs).
         chunk_token_size=max(200, int(settings.kg_chunk_token_size)),
@@ -217,14 +243,20 @@ async def get_lightrag() -> LightRAG:
 
 
 async def get_graph_counts() -> tuple[int, int]:
-    """Return (node_count, edge_count) from the knowledge graph."""
-    try:
-        rag = await get_lightrag()
-        nodes = await rag.chunk_entity_relation_graph.get_all_nodes()
-        edges = await rag.chunk_entity_relation_graph.get_all_edges()
-        return len(nodes), len(edges)
-    except Exception:
-        return 0, 0
+    """Return graph counts; an unreadable graph is not an empty graph."""
+    rag = await get_lightrag()
+    nodes = await rag.chunk_entity_relation_graph.get_all_nodes()
+    edges = await rag.chunk_entity_relation_graph.get_all_edges()
+    return len(nodes), len(edges)
+
+
+async def get_document_graph_counts(doc_id: str) -> tuple[int, int]:
+    """Count this document's graph contributions, including shared entities."""
+    rag = await get_lightrag()
+    entities = await rag.full_entities.get_by_id(doc_id)
+    relations = await rag.full_relations.get_by_id(doc_id)
+    return (len((entities or {}).get("entity_names") or []),
+            len((relations or {}).get("relation_pairs") or []))
 
 
 async def load_graph_for_ui() -> tuple[list[dict], list[dict]]:
@@ -373,36 +405,38 @@ async def hard_purge_lightrag(*, reason: str = "") -> None:
         await _hard_purge_lightrag_unlocked(reason=reason)
 
 
+async def _list_lightrag_doc_statuses(rag: LightRAG) -> dict[str, str]:
+    """Read all statuses using the bulk API supported by LightRAG 1.5.7.
+
+    Read failures must propagate: an unreadable status store is not an empty
+    corpus. Include every enum value, including new parsing/analysis stages.
+    """
+    docs = await rag.doc_status.get_docs_by_statuses(list(DocStatus))
+    out: dict[str, str] = {}
+    for doc_id, meta in (docs or {}).items():
+        status = meta.get("status") if isinstance(meta, dict) else getattr(meta, "status", None)
+        out[str(doc_id)] = str(getattr(status, "value", status) or "unknown")
+    return out
+
+
 async def list_lightrag_doc_ids() -> dict[str, str]:
     """Return {doc_id: status_value} for every document in LightRAG doc_status."""
     if not (LIGHTRAG_DIR / "kv_store_doc_status.json").exists() and _rag_instance is None:
         return {}
     rag = await get_lightrag()
-    out: dict[str, str] = {}
-    for st in (
-        DocStatus.PENDING,
-        DocStatus.PROCESSING,
-        DocStatus.PREPROCESSED,
-        DocStatus.PROCESSED,
-        DocStatus.FAILED,
-    ):
-        try:
-            docs = await rag.doc_status.get_docs_by_status(st)
-        except Exception as e:
-            logger.warning(f"list_lightrag_doc_ids status={st}: {e}")
-            continue
-        for doc_id, meta in (docs or {}).items():
-            status_val = getattr(st, "value", str(st))
-            if meta is not None and getattr(meta, "status", None) is not None:
-                status_val = getattr(meta.status, "value", str(meta.status))
-            out[str(doc_id)] = str(status_val)
-    return out
+    return await _list_lightrag_doc_statuses(rag)
 
 
-async def _delete_lightrag_doc(rag: LightRAG, doc_id: str) -> bool:
-    """Delete one LightRAG document; return True on success."""
+async def _delete_lightrag_doc(rag: LightRAG, doc_id: str, *, clear_cache: bool = True) -> bool:
+    """Check LightRAG's result and persisted status; a returned failure is not success."""
     try:
-        await asyncio.wait_for(rag.adelete_by_doc_id(doc_id), timeout=120)
+        kwargs = {"delete_llm_cache": True} if clear_cache else {}
+        result = await asyncio.wait_for(rag.adelete_by_doc_id(doc_id, **kwargs), timeout=120)
+        status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+        if status not in ("success", "not_found"):
+            raise RuntimeError(f"LightRAG deletion returned {status or 'no status'}: {result}")
+        if await rag.doc_status.get_by_id(doc_id) is not None:
+            raise RuntimeError("LightRAG document status still exists after deletion")
         return True
     except asyncio.TimeoutError:
         logger.warning(f"LightRAG delete timed out for {doc_id}")
@@ -447,8 +481,9 @@ async def reconcile_lightrag_with_metadata(
             logger.info(
                 f"KG reconcile: removing orphan LightRAG doc {doc_id} (status={status})"
             )
-            if await _delete_lightrag_doc(rag, doc_id):
-                removed += 1
+            if not await _delete_lightrag_doc(rag, doc_id):
+                raise RuntimeError(f"Knowledge graph cleanup failed for {doc_id}; retry cleanup before re-ingesting")
+            removed += 1
 
         if removed:
             try:
@@ -469,49 +504,43 @@ async def reconcile_lightrag_with_metadata(
         }
 
 
-async def insert_document(text: str, doc_id: str = "", filename: str = "") -> str:
+async def insert_document(text: str, doc_id: str = "", filename: str = "", *, rebuild: bool = False) -> str:
     """Insert a document into LightRAG for knowledge graph extraction."""
     if should_skip_graph(filename):
         logger.info(f"Skipping KG extraction for tabular/numeric file: {filename or doc_id}")
         return "skipped: tabular file has no graph entities"
     async with _insert_lock:
-        # Drop crash leftovers so process_enqueue won't resume deleted PDFs
-        # alongside this insert. Keep metadata live ids + this doc_id.
-        try:
-            from src.db.metadata import MetadataStore
+        # Enumeration/deletion failures must stop admission: otherwise LightRAG
+        # silently deduplicates against stale records and does no extraction.
+        from src.db.metadata import MetadataStore
 
-            store = MetadataStore()
+        store = MetadataStore()
+        try:
             await store.init()
             docs = await store.list_documents()
-            live = {d.doc_id for d in docs if getattr(d, "doc_id", None)}
-            if doc_id:
-                live.add(doc_id)
-            # Nested reconcile would re-acquire lock — inline orphan drop here
-            rag = await get_lightrag()
-            present = {}
-            for st in (
-                DocStatus.PENDING,
-                DocStatus.PROCESSING,
-                DocStatus.PREPROCESSED,
-                DocStatus.FAILED,
-                DocStatus.PROCESSED,
-            ):
-                try:
-                    batch = await rag.doc_status.get_docs_by_status(st)
-                    for did in (batch or {}):
-                        present[str(did)] = getattr(st, "value", str(st))
-                except Exception:
-                    pass
-            orphans = plan_orphan_lightrag_docs(live, set(present))
-            for oid in sorted(orphans):
-                logger.info(
-                    f"KG pre-insert: dropping orphan {oid} "
-                    f"(status={present.get(oid)}) before ainsert of {doc_id or filename}"
-                )
-                await _delete_lightrag_doc(rag, oid)
-        except Exception as e:
-            logger.warning(f"KG pre-insert orphan cleanup skipped: {e}")
-            rag = await get_lightrag()
+        finally:
+            await store.engine.dispose()
+        live = {d.doc_id for d in docs if getattr(d, "doc_id", None)}
+        if rebuild and doc_id not in live:
+            raise RuntimeError("Document was deleted before knowledge graph rebuild")
+        if doc_id:
+            live.add(doc_id)
+        rag = await get_lightrag()
+        present = await _list_lightrag_doc_statuses(rag)
+        for oid in sorted(plan_orphan_lightrag_docs(live, set(present))):
+            logger.info(f"KG pre-insert: dropping orphan {oid} before {doc_id or filename}")
+            if not await _delete_lightrag_doc(rag, oid):
+                raise RuntimeError(f"Knowledge graph cleanup failed for {oid}; document was not submitted")
+        # Reset stale status/graph anchors. Partial retries retain successful
+        # extraction caches; a full rebuild of a processed document clears them.
+        status = present.get(doc_id)
+        if status and (rebuild or status != DocStatus.PROCESSED.value):
+            previous = await rag.doc_status.get_by_id(doc_id)
+            retry_partial = bool(((previous or {}).get("metadata") or {}).get(FAILURES_KEY))
+            if not await _delete_lightrag_doc(rag, doc_id, clear_cache=not retry_partial):
+                raise RuntimeError(f"Knowledge graph reset failed for {doc_id}")
+        elif status == DocStatus.PROCESSED.value:
+            return "already processed"
 
         try:
             result = await rag.ainsert(
@@ -519,13 +548,20 @@ async def insert_document(text: str, doc_id: str = "", filename: str = "") -> st
                 ids=[doc_id] if doc_id else None,
                 file_paths=[filename] if filename else None,
             )
-            logger.info(f"LightRAG insert complete: {filename or doc_id}")
-
+            # LightRAG catches per-document failures internally. A returning
+            # ainsert (or a tracking ID) alone does not establish success.
+            if doc_id:
+                status_record = await rag.doc_status.get_by_id(doc_id)
+                status = (status_record or {}).get("status")
+                if status != DocStatus.PROCESSED:
+                    detail = (status_record or {}).get("error_msg")
+                    raise RuntimeError(
+                        f"LightRAG document status is {status or 'missing'}: "
+                        f"{detail or 'extraction did not finish'}"
+                    )
             # Ensure GraphML is on disk for the admin UI disk fallback
-            try:
-                await rag.chunk_entity_relation_graph.index_done_callback()
-            except Exception as e:
-                logger.warning(f"Graph flush after insert failed: {e}")
+            await rag.chunk_entity_relation_graph.index_done_callback()
+            logger.info(f"LightRAG insert complete: {filename or doc_id}")
 
             # Clear cached query responses since graph data changed.
             # Keep extract/summary caches (expensive, chunk-specific, still valid).
@@ -537,9 +573,10 @@ async def insert_document(text: str, doc_id: str = "", filename: str = "") -> st
             await release_pipeline_busy()
             raise
         except Exception as e:
+            _invalidate_query_cache()  # Partial successful chunks may have changed the graph.
             logger.error(f"LightRAG insert failed: {e}")
             await release_pipeline_busy()
-            return f"error: {e}"
+            raise
 
 
 def _invalidate_query_cache():

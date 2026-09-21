@@ -8,6 +8,73 @@
     Drag to pan, scroll to zoom, click a node to inspect.
 </p>
 
+<section class="settings-section" style="margin-bottom:1rem;">
+    <h2>Rebuild graph from uploaded documents</h2>
+    <p>Reprocess all documents using their stored indexed passages, including figure descriptions.
+       This replaces each document's graph records and reruns extraction with the current model.
+       Documents, search vectors, and images remain available. Text omitted during the original
+       ingestion cannot be recovered this way. Structured spreadsheets are skipped.
+       If extraction fails, that document may be absent from the graph until a retry succeeds.</p>
+    <button id="kg-rebuild-button" type="button" onclick="startGraphRebuild()">Rebuild from uploaded documents</button>
+    <p id="kg-rebuild-message" role="status" aria-live="polite"></p>
+    <details id="kg-rebuild-details" hidden>
+        <summary>Rebuild progress and errors</summary>
+        <ul id="kg-rebuild-jobs"></ul>
+    </details>
+    <p>Jobs run in the ingestion queue. Keep Sauron running until they finish; after a restart,
+       start the rebuild again to retry. Reload this page when complete to refresh the graph.</p>
+</section>
+<script>
+async function refreshGraphRebuild() {
+    const response = await fetch('/admin/api/knowledge-graph/rebuild');
+    if (!response.ok) {
+        const error = new Error('Unable to read rebuild status. Check your admin session.');
+        error.stopPolling = response.status === 401 || response.status === 403;
+        throw error;
+    }
+    const data = await response.json();
+    document.getElementById('kg-rebuild-button').disabled = data.running;
+    const list = document.getElementById('kg-rebuild-jobs');
+    list.replaceChildren();
+    for (const job of data.jobs) {
+        const item = document.createElement('li');
+        item.textContent = `${job.filename}: ${job.status} — ${job.error || job.progress}`;
+        if (job.warnings.length) item.textContent += ' — ' + job.warnings.join('; ');
+        list.appendChild(item);
+    }
+    document.getElementById('kg-rebuild-details').hidden = !data.jobs.length;
+    if (data.jobs.length) {
+        const failed = data.jobs.filter(j => j.status === 'failed').length;
+        document.getElementById('kg-rebuild-message').textContent = data.running
+            ? 'Rebuilding graph from stored passages…'
+            : `Rebuild jobs finished. ${failed} failed; check progress for warnings or skipped documents.`;
+    }
+    if (data.running) setTimeout(pollGraphRebuild, 3000);
+}
+async function pollGraphRebuild() {
+    try { await refreshGraphRebuild(); }
+    catch (error) {
+        document.getElementById('kg-rebuild-message').textContent = error.message;
+        if (!error.stopPolling) setTimeout(pollGraphRebuild, 5000);
+    }
+}
+async function startGraphRebuild() {
+    const button = document.getElementById('kg-rebuild-button');
+    button.disabled = true;
+    try {
+        const response = await fetch('/admin/api/knowledge-graph/rebuild', {method: 'POST'});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not queue rebuild');
+        document.getElementById('kg-rebuild-message').textContent = `${data.queued} documents queued.`;
+        await refreshGraphRebuild();
+    } catch (error) {
+        document.getElementById('kg-rebuild-message').textContent = error.message;
+        button.disabled = false;
+    }
+}
+pollGraphRebuild();
+</script>
+
 <div class="form-row" style="margin-bottom:1rem;">
     <div class="form-group">
         <label for="kg-persona">View as</label>

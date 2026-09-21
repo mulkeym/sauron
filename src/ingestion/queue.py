@@ -43,6 +43,7 @@ class IngestJob:
     metadata_tags: dict = field(default_factory=dict)
     auto_categorize: bool = True
     build_graph: bool = True
+    graph_only: bool = False
     step: IngestStep = IngestStep.QUEUED
     progress: str = ""
     doc_id: str = ""
@@ -61,7 +62,7 @@ class IngestQueue:
         self._queue: asyncio.Queue | None = None
         self._worker_running = False
         self._workers: list[asyncio.Task] = []
-        # KG extraction runs without locks — counts are approximate when parallel
+        self._graph_rebuild_lock = asyncio.Lock()
 
     def enqueue(self, filename: str, file_path: str, acl_groups: list[str],
                 uploaded_by: str, category: str = "", dataset_id: int = 0,
@@ -73,6 +74,23 @@ class IngestQueue:
             acl_groups=acl_groups, uploaded_by=uploaded_by,
             category=category, dataset_id=dataset_id, source_url=source_url,
             auto_categorize=auto_categorize, build_graph=build_graph,
+        )
+        self._jobs[job_id] = job
+        if self._queue:
+            self._queue.put_nowait(job_id)
+        return job_id
+
+    def enqueue_graph_rebuild(self, doc) -> str:
+        """Rebuild one existing document without uploading, parsing, or reindexing it."""
+        terminal = (IngestStep.COMPLETE, IngestStep.FAILED)
+        for job in self._jobs.values():
+            if job.graph_only and job.doc_id == doc.doc_id and job.step not in terminal:
+                return job.job_id
+        job_id = str(uuid.uuid4())[:8]
+        job = IngestJob(
+            job_id=job_id, filename=doc.filename, file_path="",
+            acl_groups=list(doc.acl_groups), uploaded_by="admin", doc_id=doc.doc_id,
+            dataset_id=doc.dataset_id, graph_only=True, chunk_count=doc.chunk_count,
         )
         self._jobs[job_id] = job
         if self._queue:
@@ -172,7 +190,7 @@ class IngestQueue:
             finally:
                 self._queue.task_done()
                 # Worker failures must not leak uploaded source files.
-                if job.step in (IngestStep.COMPLETE, IngestStep.FAILED):
+                if not job.graph_only and job.step in (IngestStep.COMPLETE, IngestStep.FAILED):
                     try:
                         Path(job.file_path).unlink(missing_ok=True)
                     except OSError as exc:
@@ -186,7 +204,7 @@ class IngestQueue:
         written for the doc_id yet (e.g. early failures).
         """
         doc_id = job.doc_id
-        if not doc_id:
+        if job.graph_only or not doc_id:
             return
         try:
             vector_store.delete_by_doc_id(doc_id)
@@ -202,7 +220,166 @@ class IngestQueue:
         except Exception as ce:
             logger.warning(f"Partial-tabular cleanup failed for {job.filename} ({doc_id}): {ce}")
 
+    async def _build_knowledge_graph(self, job: IngestJob, kg_text: str, doc_id: str):
+        """Build optional graph data without rolling back searchable passages."""
+        if not kg_text.strip():
+            warning = "Knowledge graph skipped: no extracted text to analyze"
+            job.warnings.append(warning)
+            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, warning)
+            return
+        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
+        from src.knowledge.graph_rag import (
+            insert_document as lightrag_insert,
+            get_graph_counts,
+            estimate_kg_timeout_seconds,
+        )
+        from src.config import settings as _kg_settings
+
+        MAX_RETRIES = max(1, int(_kg_settings.kg_extract_max_retries))
+        TIMEOUT_SECS = estimate_kg_timeout_seconds(kg_text)
+        import logging as _log
+        _kg_logger = _log.getLogger(__name__)
+        _kg_logger.info(
+            f"KG extract budget for {job.filename}: {TIMEOUT_SECS}s, "
+            f"retries={MAX_RETRIES}, text_chars={len(kg_text)}"
+        )
+        self.update_step(
+            job.job_id, IngestStep.EXTRACTING_ENTITIES,
+            f"Building knowledge graph (budget {TIMEOUT_SECS // 60}m, "
+            f"{len(kg_text):,} chars)…",
+        )
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                nodes_before, edges_before = await get_graph_counts()
+
+                if attempt > 1:
+                    # Later attempts get a longer leash — cancel+retry is costly
+                    TIMEOUT_SECS = min(
+                        int(TIMEOUT_SECS * 1.5),
+                        int(_kg_settings.kg_extract_timeout_max_seconds),
+                    )
+                    self.update_step(
+                        job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                        f"Knowledge graph retry {attempt}/{MAX_RETRIES} "
+                        f"(budget {TIMEOUT_SECS // 60}m)…",
+                    )
+
+                await asyncio.wait_for(
+                    lightrag_insert(
+                        kg_text,
+                        doc_id=doc_id,
+                        filename=job.filename,
+                        **({"rebuild": True} if job.graph_only else {}),
+                    ),
+                    timeout=TIMEOUT_SECS,
+                )
+
+                nodes_after, edges_after = await get_graph_counts()
+                job.entity_count = max(0, nodes_after - nodes_before)
+                job.relationship_count = max(0, edges_after - edges_before)
+
+                if job.graph_only:
+                    from src.knowledge.graph_rag import get_document_graph_counts
+                    job.entity_count, job.relationship_count = await get_document_graph_counts(doc_id)
+                    message = (f"Knowledge graph rebuilt ({job.entity_count} entities, "
+                               f"{job.relationship_count} relationships for this document)")
+                    if job.entity_count == 0 and job.relationship_count == 0:
+                        message = "Graph rebuild finished with no entities or relationships for this document; inspect the stored passages and model output."
+                        job.warnings.append(message)
+                        _kg_logger.warning(message)
+                elif nodes_after == 0 and edges_after == 0:
+                    message = (
+                        "Knowledge graph extraction finished, but the graph is empty. "
+                        "Check extracted text and model output format; no entities or relationships were stored."
+                    )
+                    job.warnings.append(message)
+                    _kg_logger.warning(message)
+                else:
+                    message = (
+                        f"Knowledge graph complete ({job.entity_count} new entities, "
+                        f"{job.relationship_count} new relationships)"
+                    )
+                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, message)
+                return True  # success
+            except asyncio.TimeoutError:
+                _kg_logger.warning(
+                    f"KG extraction timed out for {job.filename} "
+                    f"(attempt {attempt}/{MAX_RETRIES}, budget {TIMEOUT_SECS}s)"
+                )
+                # Cancelled ainsert can leave LightRAG pipeline busy=True,
+                # which makes later inserts return early with 0 entities.
+                try:
+                    from src.knowledge.graph_rag import release_pipeline_busy
+                    await release_pipeline_busy()
+                except Exception as rel_err:
+                    _kg_logger.warning(f"Pipeline release after timeout failed: {rel_err}")
+                if attempt == MAX_RETRIES:
+                    # Partial graph may still exist from in-progress extract
+                    partial = "partial counts unavailable"
+                    try:
+                        nodes_after, edges_after = await get_graph_counts()
+                        job.entity_count = max(0, nodes_after - nodes_before)
+                        job.relationship_count = max(0, edges_after - edges_before)
+                        partial = f"partial: {job.entity_count} entities / {job.relationship_count} rels"
+                    except Exception as count_error:
+                        _kg_logger.warning(f"Could not read partial graph counts: {count_error}")
+                    message = f"Knowledge graph timed out after {MAX_RETRIES} attempt(s) ({partial})"
+                    job.warnings.append(message)
+                    self.update_step(
+                        job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                        message,
+                    )
+            except Exception as e:
+                _kg_logger.warning(f"KG extraction failed for {job.filename} (attempt {attempt}/{MAX_RETRIES}): {e}")
+                try:
+                    from src.knowledge.graph_rag import release_pipeline_busy
+                    await release_pipeline_busy()
+                except Exception:
+                    pass
+                if attempt == MAX_RETRIES:
+                    from src.knowledge.resilient_lightrag import PartialGraphError
+                    if isinstance(e, PartialGraphError):
+                        try:
+                            from src.knowledge.graph_rag import get_document_graph_counts
+                            job.entity_count, job.relationship_count = await get_document_graph_counts(doc_id)
+                        except Exception:
+                            pass  # The extraction failure remains the primary diagnostic.
+                        message = str(e)[:500]
+                    else:
+                        message = f"Knowledge graph failed: {str(e)[:300]}"
+                    job.warnings.append(message)
+                    self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
+                        message)
+
+        return False
+
+    async def _rebuild_graph_job(self, job, vector_store, metadata_store):
+        from src.knowledge.rebuild import read_indexed_graph_text
+        from src.knowledge.kg_format import should_skip_graph
+
+        doc = await metadata_store.get_document(job.doc_id)
+        if doc is None:
+            raise RuntimeError("Document no longer exists; graph rebuild skipped")
+        if should_skip_graph(doc.filename):
+            self.complete_job(job.job_id, job.doc_id, doc.chunk_count)
+            job.progress = "Skipped: structured data is not processed by the knowledge graph"
+            return
+        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Reading stored passages for graph rebuild…")
+        text = await asyncio.to_thread(read_indexed_graph_text, vector_store, doc.doc_id)
+        if not text:
+            raise RuntimeError("No stored passages are available; re-ingest this document to recover its graph")
+        if await self._build_knowledge_graph(job, text, doc.doc_id):
+            self.complete_job(job.job_id, doc.doc_id, doc.chunk_count,
+                              job.entity_count, job.relationship_count)
+        else:
+            self.fail_job(job.job_id, job.warnings[-1] if job.warnings else "Knowledge graph rebuild failed")
+
     async def _process_job(self, job: IngestJob, vector_store, metadata_store):
+        if job.graph_only:
+            # Waiting rebuilds must not consume their model-processing timeout.
+            async with self._graph_rebuild_lock:
+                return await self._rebuild_graph_job(job, vector_store, metadata_store)
         import asyncio
         from src.ingestion.isolation import extract_in_worker
         from src.ingestion.prepared_index import index_prepared
@@ -481,93 +658,8 @@ class IngestQueue:
                 self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
                     "Skipped (structured data — knowledge graph not applicable)")
             elif job.build_graph and (not is_spreadsheet or spreadsheet_figure_kg):
-                self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Building knowledge graph...")
-                from src.knowledge.graph_rag import (
-                    insert_document as lightrag_insert,
-                    get_graph_counts,
-                    estimate_kg_timeout_seconds,
-                )
-                from src.config import settings as _kg_settings
-
-                kg_text = spreadsheet_figure_kg if spreadsheet_figure_kg else (kg_source_text or parsed.text or "")
-                MAX_RETRIES = max(1, int(_kg_settings.kg_extract_max_retries))
-                TIMEOUT_SECS = estimate_kg_timeout_seconds(kg_text)
-                import logging as _log
-                _kg_logger = _log.getLogger(__name__)
-                _kg_logger.info(
-                    f"KG extract budget for {parsed.filename}: {TIMEOUT_SECS}s, "
-                    f"retries={MAX_RETRIES}, text_chars={len(kg_text)}"
-                )
-                self.update_step(
-                    job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                    f"Building knowledge graph (budget {TIMEOUT_SECS // 60}m, "
-                    f"{len(kg_text):,} chars)…",
-                )
-
-                for attempt in range(1, MAX_RETRIES + 1):
-                    try:
-                        nodes_before, edges_before = await get_graph_counts()
-
-                        if attempt > 1:
-                            # Later attempts get a longer leash — cancel+retry is costly
-                            TIMEOUT_SECS = min(
-                                int(TIMEOUT_SECS * 1.5),
-                                int(_kg_settings.kg_extract_timeout_max_seconds),
-                            )
-                            self.update_step(
-                                job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                                f"Knowledge graph retry {attempt}/{MAX_RETRIES} "
-                                f"(budget {TIMEOUT_SECS // 60}m)…",
-                            )
-
-                        await asyncio.wait_for(
-                            lightrag_insert(
-                                kg_text,
-                                doc_id=doc_id,
-                                filename=parsed.filename,
-                            ),
-                            timeout=TIMEOUT_SECS,
-                        )
-
-                        nodes_after, edges_after = await get_graph_counts()
-                        job.entity_count = max(0, nodes_after - nodes_before)
-                        job.relationship_count = max(0, edges_after - edges_before)
-
-                        self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                            f"Knowledge graph complete ({job.entity_count} entities, {job.relationship_count} relationships)")
-                        break  # success
-                    except asyncio.TimeoutError:
-                        _kg_logger.warning(
-                            f"KG extraction timed out for {parsed.filename} "
-                            f"(attempt {attempt}/{MAX_RETRIES}, budget {TIMEOUT_SECS}s)"
-                        )
-                        # Cancelled ainsert can leave LightRAG pipeline busy=True,
-                        # which makes later inserts return early with 0 entities.
-                        try:
-                            from src.knowledge.graph_rag import release_pipeline_busy
-                            await release_pipeline_busy()
-                        except Exception as rel_err:
-                            _kg_logger.warning(f"Pipeline release after timeout failed: {rel_err}")
-                        if attempt == MAX_RETRIES:
-                            # Partial graph may still exist from in-progress extract
-                            nodes_after, edges_after = await get_graph_counts()
-                            job.entity_count = max(0, nodes_after - nodes_before)
-                            job.relationship_count = max(0, edges_after - edges_before)
-                            self.update_step(
-                                job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                                f"Knowledge graph timed out after {MAX_RETRIES} attempt(s) "
-                                f"(partial: {job.entity_count} entities / {job.relationship_count} rels)",
-                            )
-                    except Exception as e:
-                        _kg_logger.warning(f"KG extraction failed for {parsed.filename} (attempt {attempt}/{MAX_RETRIES}): {e}")
-                        try:
-                            from src.knowledge.graph_rag import release_pipeline_busy
-                            await release_pipeline_busy()
-                        except Exception:
-                            pass
-                        if attempt == MAX_RETRIES:
-                            self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES,
-                                f"Knowledge graph failed: {str(e)[:100]}")
+                kg_text = spreadsheet_figure_kg or kg_source_text or parsed.text or ""
+                await self._build_knowledge_graph(job, kg_text, doc_id)
             else:
                 self.update_step(job.job_id, IngestStep.EXTRACTING_ENTITIES, "Skipped (knowledge graph disabled)")
 

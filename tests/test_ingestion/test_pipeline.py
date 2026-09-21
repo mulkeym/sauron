@@ -425,3 +425,19 @@ async def test_original_is_retained_for_the_exact_ingested_revision(mock_deps, t
         assert stream.read() == source.read_bytes() and size == source.stat().st_size
     finally:
         stream.close()
+
+
+@pytest.mark.asyncio
+async def test_graph_failure_preserves_searchable_document(mock_deps):
+    vector_store, metadata_store, mock_embed = mock_deps
+    with patch("src.ingestion.pipeline.embed_texts", mock_embed), \
+         patch("src.knowledge.graph_rag.insert_document", new_callable=AsyncMock) as insert:
+        insert.side_effect = RuntimeError("model returned no text")
+        result = await ingest_document(
+            file_path=FIXTURES / "sample.pdf", acl_groups=["finance"],
+            uploaded_by="mike", vector_store=vector_store, metadata_store=metadata_store,
+        )
+    assert result.chunk_count > 0
+    assert result.warnings == ["Knowledge graph failed: model returned no text"]
+    vector_store.delete_by_doc_id.assert_not_called()
+    metadata_store.delete_document.assert_not_awaited()

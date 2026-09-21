@@ -1,6 +1,6 @@
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.ingestion.isolation import extract_in_worker
@@ -29,6 +29,7 @@ class IngestResult:
     filename: str
     doc_type: str
     chunk_count: int
+    warnings: list[str] = field(default_factory=list)
 
 
 from src.figures.storage import track_ingestion
@@ -238,20 +239,27 @@ async def ingest_document(
         # Knowledge graph: full text for PDF/DOCX/PPTX; figure-only for Excel with
         # images; skip pure spreadsheet cell dumps.
         spreadsheet_figure_kg = ""
+        graph_warnings = []
         if is_spreadsheet and enriched_prose and "## Embedded figures" in enriched_prose:
             spreadsheet_figure_kg = enriched_prose.split("## Embedded figures", 1)[-1].strip()
         if not is_spreadsheet or spreadsheet_figure_kg:
             from src.knowledge.graph_rag import insert_document as lightrag_insert
-            await lightrag_insert(
-                spreadsheet_figure_kg or kg_source_text or parsed.text,
-                doc_id=doc_id,
-                filename=parsed.filename,
-            )
+            try:
+                await lightrag_insert(
+                    spreadsheet_figure_kg or kg_source_text or parsed.text,
+                    doc_id=doc_id,
+                    filename=parsed.filename,
+                )
+            except Exception as error:
+                warning = f"Knowledge graph failed: {str(error)[:300]}"
+                logger.warning(warning)
+                graph_warnings.append(warning)
         return IngestResult(
             doc_id=doc_id,
             filename=parsed.filename,
             doc_type=parsed.doc_type,
             chunk_count=total_chunks,
+            warnings=graph_warnings,
         )
 
     except BaseException:

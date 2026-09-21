@@ -718,63 +718,27 @@ async def update_document(doc_id: str, category: str = Form(""), acl_groups: str
     </tr>""")
 
 
-_kg_delete_queue: list[str] = []  # doc_ids pending KG cleanup
-
-
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
-    import asyncio
     store = get_metadata_store()
-    # Remove from metadata DB
     await store.delete_document(doc_id)
-    # Remove entity mentions and relationships for this doc
     await store.delete_entities_for_doc(doc_id)
-    # Remove vector chunks from LanceDB
-    vector_store = get_vector_store()
-    vector_store.delete_by_doc_id(doc_id)
-    # Remove any structured (DuckDB) tables + registered schemas for this doc
+    get_vector_store().delete_by_doc_id(doc_id)
     from src.ingestion.tabular_ingest import cleanup_spreadsheet_tables
     await cleanup_spreadsheet_tables(doc_id, store, get_schema_registry())
-    # Queue KG cleanup in background — adelete_by_doc_id is slow (rebuilds entities)
-    _kg_delete_queue.append(doc_id)
-    asyncio.create_task(_process_kg_deletes())
-    return HTMLResponse("")
-
-
-_kg_delete_running = False
-
-
-async def _process_kg_deletes():
-    """Process queued KG deletions in background. Purges if no docs remain."""
-    global _kg_delete_running
-    if _kg_delete_running:
-        return  # already running, will pick up new items
-    _kg_delete_running = True
-    _logger = logging.getLogger(__name__)
+    # Do not return success while a background cleanup may still fail silently.
+    # The next insertion also reconciles stale IDs if this request is interrupted.
     try:
-        # Check if all documents were deleted — if so, hard-purge under insert lock
-        store = get_metadata_store()
-        remaining_docs = await store.list_documents()
-        if not remaining_docs:
-            _logger.info(
-                f"KG cleanup: no documents remain, hard-purging knowledge graph "
-                f"({len(_kg_delete_queue)} queued deletes skipped)"
-            )
-            _kg_delete_queue.clear()
-            from src.knowledge.graph_rag import hard_purge_lightrag
-            await hard_purge_lightrag(reason="all metadata documents deleted")
-            return
-
-        # Prefer reconcile (drops orphans + handles id mismatches) over
-        # one-by-one adelete of the deleted id only — crash leftovers may use
-        # different LightRAG ids than the metadata row we just removed.
         from src.knowledge.graph_rag import reconcile_lightrag_with_metadata
-        live = {d.doc_id for d in remaining_docs if getattr(d, "doc_id", None)}
-        _kg_delete_queue.clear()
-        result = await reconcile_lightrag_with_metadata(live)
-        _logger.info(f"KG cleanup after document delete: {result}")
-    finally:
-        _kg_delete_running = False
+        remaining = await store.list_documents()
+        await reconcile_lightrag_with_metadata({d.doc_id for d in remaining})
+    except Exception as error:
+        logging.getLogger(__name__).exception("Graph cleanup after deleting %s failed", doc_id)
+        raise HTTPException(status_code=503, detail=(
+            "The document was removed from search, but knowledge graph cleanup failed. "
+            "Retry deletion or use Rebuild from uploaded documents after correcting the model connection."
+        )) from error
+    return HTMLResponse("")
 
 
 @router.get("/playground", response_class=HTMLResponse)
@@ -1764,6 +1728,36 @@ async def knowledge_graph_page(request: Request):
         "entities": entities, "relationships": relationships, "datasets": apps,
         "personas": personas,
     })
+
+
+@router.post("/api/knowledge-graph/rebuild")
+async def rebuild_knowledge_graph():
+    """Queue graph-only recovery for the current catalog; source/index data are retained."""
+    if ingest_queue.has_active_jobs():
+        raise HTTPException(status_code=409, detail="Wait for current ingestion or graph rebuild jobs to finish")
+    docs = await get_metadata_store().list_documents()
+    # Recheck after the database await so simultaneous requests cannot enqueue
+    # two batches. Enqueue itself is synchronous and deduplicates active doc IDs.
+    if ingest_queue.has_active_jobs():
+        raise HTTPException(status_code=409, detail="Ingestion or a graph rebuild has just started")
+    await ingest_queue.start_worker(get_vector_store(), get_metadata_store())
+    job_ids = [ingest_queue.enqueue_graph_rebuild(doc) for doc in docs]
+    return {"queued": len(job_ids), "job_ids": job_ids}
+
+
+@router.get("/api/knowledge-graph/rebuild")
+async def knowledge_graph_rebuild_status():
+    from src.ingestion.queue import IngestStep
+    jobs = []
+    seen = set()
+    for job in ingest_queue.list_jobs():
+        if job.graph_only and job.doc_id not in seen:
+            jobs.append(job)
+            seen.add(job.doc_id)
+    return {"running": any(j.step not in (IngestStep.COMPLETE, IngestStep.FAILED) for j in jobs),
+            "jobs": [{"job_id": j.job_id, "filename": j.filename, "status": j.step.value,
+                      "progress": j.progress, "error": j.error, "warnings": j.warnings}
+                     for j in jobs]}
 
 
 @router.get("/api/knowledge-graph/filtered")

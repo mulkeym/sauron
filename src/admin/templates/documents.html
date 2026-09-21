@@ -50,6 +50,7 @@
     <button class="danger" onclick="bulkDelete()">Delete Selected (<span id="selected-count">0</span>)</button>
     <button class="secondary" onclick="clearSelection()" style="margin-left:0.5rem;">Clear Selection</button>
 </div>
+<p id="document-delete-error" role="alert" style="color:var(--danger,#ef4444);"></p>
 <table id="doc-table">
     <thead><tr>
         <th><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
@@ -161,6 +162,14 @@ function clearSelection() {
     updateBulkActions();
 }
 
+document.body.addEventListener('htmx:responseError', function(event) {
+    const xhr = event.detail.xhr;
+    if (!xhr.responseURL.includes('/admin/api/documents/')) return;
+    let message = 'Document deletion or update failed. Please retry.';
+    try { message = JSON.parse(xhr.responseText).detail || message; } catch (_) {}
+    document.getElementById('document-delete-error').textContent = message;
+});
+
 async function bulkDelete() {
     const checked = document.querySelectorAll('.doc-select:checked');
     if (!checked.length) return;
@@ -168,9 +177,16 @@ async function bulkDelete() {
 
     for (const cb of checked) {
         try {
-            await fetch(`/admin/api/documents/${cb.value}`, {method: 'DELETE'});
+            const response = await fetch(`/admin/api/documents/${cb.value}`, {method: 'DELETE'});
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.detail || 'Document deletion failed');
+            }
             cb.closest('tr').remove();
-        } catch (e) {}
+        } catch (error) {
+            document.getElementById('document-delete-error').textContent = error.message;
+            break;
+        }
     }
     updateBulkActions();
     document.getElementById('select-all').checked = false;

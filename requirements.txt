@@ -45,7 +45,7 @@ onnx>=1.22.0
 #   pip install -r requirements.txt -c constraints-security.txt
 
 # Knowledge Graph
-lightrag-hku>=1.5.4
+lightrag-hku==1.5.7
 
 # MCP
 mcp>=1.28.1
@@ -58,7 +58,7 @@ aiohttp>=3.14.1
 idna>=3.15
 
 # LLM
-openai>=1.55.0
+openai==3.16.2
 
 # Database (metadata store)
 sqlalchemy>=2.0.36
