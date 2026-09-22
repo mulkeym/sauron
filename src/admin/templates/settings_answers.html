@@ -5,6 +5,7 @@
 <p class="section-desc">Control answer guidance and reuse. Source access checks and evidence reference validation always apply.</p>
 <p class="section-desc">Use <a href="/admin/settings/profiles">Answer Profiles</a> to edit prompts, retrieval and response policies, test a draft, and publish or restore a revision. Team instructions below apply to every profile.</p>
 <form hx-post="/admin/api/settings" hx-target="#save-status" hx-swap="innerHTML">
+  <input type="hidden" name="keep_blank_secrets" value="true">
   <div class="settings-section">
     <h3>Answer guidance</h3>
     <div class="form-group">
@@ -40,6 +41,12 @@
         <p id="confidence-help" class="section-desc">Used for similar-question reuse only. This score does not measure answer correctness.</p>
       </div>
     </div>
+  </div>
+  <div class="settings-section" id="inline-diagrams">
+    <h3>Inline diagrams</h3>
+    <p class="section-desc">Serve stored source diagrams beside the text that discusses them. Set a browser-facing Sauron URL and a signing secret to enable expiring image links. Nonempty environment values take precedence; otherwise these saved settings apply immediately.</p>
+    {% with fields=diagram_fields %}{% include "settings_fields.html" %}{% endwith %}
+    <p class="section-desc">Expired links cannot load again in older chats. Image selection follows the image policy in <a href="/admin/settings/profiles">Answer Profiles</a>.</p>
   </div>
   <button type="submit">Save answer settings</button>
   <span id="save-status" role="status" aria-live="polite"></span>

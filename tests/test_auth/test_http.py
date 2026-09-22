@@ -54,6 +54,8 @@ def test_every_registered_endpoint_denies_anonymous_requests(client, headers):
             response = client.request(method, path, headers=headers)
             if path.startswith("/admin/"):
                 expected = 302 if method in {"GET", "HEAD"} and not path.startswith("/admin/api/") else 401
+            elif path == "/api/v1/figure-links/1" and method in {"GET", "HEAD"}:
+                expected = 404  # The public image route rejects invalid capabilities itself.
             else:
                 expected = 403
             assert response.status_code == expected, (method, path, response.status_code)

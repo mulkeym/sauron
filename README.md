@@ -348,7 +348,7 @@ SAURON exposes tools via the Model Context Protocol for integration with OpenWeb
 
 | Tool | Purpose |
 |------|---------|
-| `tool_ask` | **Primary** -- answers any question with full RAG pipeline |
+| `tool_answer_from_documents` | **Primary** -- answers any question with full RAG pipeline |
 | `tool_summarize_topic` | Summarize a topic across all documents |
 | `tool_compare` | Compare two items, policies, or topics |
 | `tool_search_documents` | Low-level snippet search |
@@ -357,6 +357,10 @@ SAURON exposes tools via the Model Context Protocol for integration with OpenWeb
 | `tool_list_documents` | Browse documents by category |
 | `tool_search_knowledge_graph` | Find entity relationships |
 | `tool_search_meetings` | Search meeting transcripts by speaker/topic |
+
+The previous `tool_ask` name remains callable for compatibility but is hidden
+from tool discovery. Use `tool_answer_from_documents(question="<user request>")`
+for new integrations.
 
 Sauron uses native **Streamable HTTP** for MCP at `/mcp` on port 8080. See
 [`docs/MCP_OPENAPI_SETUP.md`](docs/MCP_OPENAPI_SETUP.md) for the authenticated
@@ -809,7 +813,7 @@ See [Answer trust foundation](docs/answer-trust-foundation.md) for the new Answe
 
 ### Source diagram retrieval
 
-Sauron retains extracted diagrams as persistent PNGs and returns cited images through native MCP. Use **Diagrams** in the admin portal to search, preview, and backfill images from matching original documents. See [Stored source diagrams](docs/diagrams.md) for controls, APIs, permissions and extraction limitations.
+Sauron retains extracted diagrams as persistent PNGs. Automatic image policy searches for relevant figure evidence during ordinary explanations and places cited diagrams beside their mentions in Playground. Configure `FIGURE_PUBLIC_BASE_URL`, `FIGURE_LINK_TTL_SECONDS`, and `FIGURE_LINK_SIGNING_SECRET` to include expiring image Markdown in OpenAI-compatible, REST and native MCP answers for unmodified OpenWebUI clients. Native MCP image attachments remain available when public links are disabled. Use **Diagrams** in the admin portal to search, preview, and backfill images from matching original documents. See [Stored source diagrams](docs/diagrams.md) for controls, APIs, permissions, expiry behavior and extraction limitations.
 
 Visio `.vsdx` ingestion uses libvisio/librsvg for persistent page PNGs and indexes native labels, properties, and connections. See [Visio support and rendering limits](docs/visio.md).
 

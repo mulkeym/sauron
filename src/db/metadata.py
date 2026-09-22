@@ -7,7 +7,7 @@ from src.db.models import (
     Base, DocumentRecord, Category, CategoryProposal, Entity, EntityMention,
     EntityMergeProposal, Relationship, AclGroup, Persona, Dataset, WebConnector,
     RegisteredSchema, SchemaHintRecord, ApiApplication, ApiKeyRecord,
-    QueryActivity, FigureAssetRecord,
+    QueryActivity, FigureAssetRecord, FigureLinkRecord,
 )
 from src.db.schema_registry import TableSchema, ColumnSchema
 from src.db.hint_store import SchemaHint
@@ -152,6 +152,17 @@ class MetadataStore:
     async def get_document(self, doc_id):
         async with self.session_factory() as session:
             return await session.get(DocumentRecord, doc_id)
+
+    async def store_figure_link(self, token_hash, signed_capability, expires_at, now):
+        async with self.session_factory() as session:
+            await session.execute(delete(FigureLinkRecord).where(FigureLinkRecord.expires_at <= now))
+            session.add(FigureLinkRecord(token_hash=token_hash,
+                signed_capability=signed_capability, expires_at=expires_at))
+            await session.commit()
+
+    async def get_figure_link(self, token_hash):
+        async with self.session_factory() as session:
+            return await session.get(FigureLinkRecord, token_hash)
 
     async def list_documents(self, user_groups=None):
         async with self.session_factory() as session:

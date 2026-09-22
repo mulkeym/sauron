@@ -131,8 +131,8 @@ async def answer_images(question, citations, groups, metadata_store, profile=Non
     if not limit:
         return []
     images, seen = [], set()
-    for citation in citations:
-        c = citation.model_dump() if hasattr(citation, "model_dump") else citation
+    records = [c.model_dump() if hasattr(c, "model_dump") else c for c in citations]
+    for c in records:
         if not c.get("figure_id"):
             continue
         key = (c["doc_id"], c["figure_id"])
@@ -146,6 +146,8 @@ async def answer_images(question, citations, groups, metadata_store, profile=Non
             continue
         if ref:
             ref["evidence_id"] = c.get("evidence_id", "")
+            ref["evidence_ids"] = list(dict.fromkeys(r.get("evidence_id", "") for r in records
+                if (r.get("doc_id"), r.get("figure_id")) == key))
             images.append(ref)
             if len(images) >= limit:
                 break
@@ -153,7 +155,7 @@ async def answer_images(question, citations, groups, metadata_store, profile=Non
 
 
 async def mcp_result(payload, groups, metadata_store):
-    """Wrap metadata and native image blocks without changing model-facing text."""
+    """Deliver inline links when configured, otherwise native image blocks."""
     import base64
     import json
     from fastmcp import FastMCP  # Initialize package before importing tools on older releases.
@@ -162,7 +164,15 @@ async def mcp_result(payload, groups, metadata_store):
     payload = dict(payload)
     blocks, delivered, used = [], [], 0
     warnings = list(payload.get("warnings", []))
-    for ref in payload.get("images", []):
+    from src.figures.presentation import public_images, inline_images, image_markdown
+    references = await public_images(payload.get("images", []), groups, metadata_store)
+    if len(references) < len(payload.get("images", [])):
+        warnings.append("A referenced diagram is no longer available.")
+    for ref in references:
+        if ref.get("inline_url"):
+            ref["markdown"] = image_markdown(ref, ref["inline_url"])
+            delivered.append(ref)
+            continue
         try:
             raw, current = await image_bytes(ref["doc_id"], ref["figure_id"], groups, metadata_store, ref.get("variant", "preview"))
             size = 4 * ((len(raw) + 2) // 3)
@@ -171,10 +181,29 @@ async def mcp_result(payload, groups, metadata_store):
                 continue
             used += size
             blocks.append(ImageContent(type="image", data=base64.b64encode(raw).decode("ascii"), mimeType="image/png"))
-            delivered.append({**current, "evidence_id": ref.get("evidence_id", "")})
+            delivered.append({**current, "evidence_id": ref.get("evidence_id", ""),
+                              "evidence_ids": ref.get("evidence_ids", [])})
         except (FileNotFoundError, OSError, ValueError):
             warnings.append("A referenced diagram is no longer available.")
     payload["images"] = delivered
+    if any(ref.get("inline_url") for ref in delivered):
+        from src.citations import render_citations
+        canonical = payload.get("answer_with_evidence_ids")
+        if canonical is not None:
+            illustrated = inline_images(canonical, delivered)
+            payload["answer_with_evidence_ids"] = illustrated
+            for key in ("answer", "summary", "comparison"):
+                if key in payload:
+                    payload[key] = render_citations(illustrated, payload.get("citations", []))
+        diagram_markdown = "\n\n".join(ref["markdown"] for ref in delivered if ref.get("inline_url"))
+        instructions = ("Only embed the diagrams in the images list below. Copy each complete supplied markdown "
+            "line exactly, including its caption, URL and closing parenthesis, beside the paragraph discussing that diagram. "
+            "Do not invent another figure, edit a token, escape the parentheses, or wrap the URL in another Markdown link. "
+            "Citation text mentioning other figures does not provide an image URL. To show a different figure, first "
+            "retrieve it with tool_search_diagrams/tool_get_diagram. Never construct an image URL from a document or figure ID. "
+            "Do not move diagrams to a separate gallery or redraw them. URLs expire at each image's expires_at timestamp.")
+        # Put the small, exact-copy image catalog before the larger evidence body.
+        payload = {"display_instructions": instructions, "diagram_markdown": diagram_markdown, **payload}
     payload["warnings"] = warnings
     return ToolResult(content=[TextContent(type="text", text=json.dumps(payload)), *blocks], structured_content=payload)
 

@@ -36,6 +36,14 @@ class FigureAssetRecord(Base):
     details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class FigureLinkRecord(Base):
+    """Expiring opaque-link lookup; never persist the browser's bearer token."""
+    __tablename__ = "figure_links"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    signed_capability: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[int] = mapped_column(index=True)
+
+
 class Dataset(Base):
     __tablename__ = "datasets"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

@@ -4,6 +4,18 @@ from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 from typing import Literal
 
+DIAGRAM_LINK_FIELDS = frozenset({"figure_public_base_url", "figure_link_ttl_seconds", "figure_link_signing_secret"})
+
+
+def diagram_environment_values():
+    """Nonempty diagram overrides from .env and process environment (highest)."""
+    import os
+    from dotenv import dotenv_values
+    values = {key.lower(): value for key, value in dotenv_values(".env").items()}
+    values.update({key.lower(): value for key, value in os.environ.items()})
+    return {key: value for key, value in values.items()
+            if key in DIAGRAM_LINK_FIELDS and value is not None and value.strip()}
+
 
 class Settings(BaseSettings):
     @field_validator("*")
@@ -268,6 +280,41 @@ class Settings(BaseSettings):
     figure_render_vector_pages: bool = Field(default=True, description="Render pages with substantial vector drawings; may include surrounding text and tables.")
     answer_images: Literal["auto", "requested", "off"] = Field(default="auto", description="Automatically attach cited diagrams, attach only when requested, or disable answer attachments.")
     answer_max_images: int = Field(default=2, ge=0, le=5)
+    figure_public_base_url: str = Field(default="", title="Diagram public base URL", description="Browser-facing Sauron URL, including any reverse-proxy prefix. Configure this and a diagram signing secret to return expiring inline PNG links to ordinary chat clients. Blank keeps authenticated/native image delivery.")
+    figure_link_ttl_seconds: int = Field(default=900, ge=30, le=86400, title="Diagram link lifetime (seconds)", description="Lifetime of a newly issued diagram link (30 seconds to 24 hours). Old chat images cannot be fetched after expiry; previously downloaded copies cannot be revoked.")
+    figure_link_signing_secret: str = Field(default="", title="Diagram link signing secret", description="Dedicated random secret of at least 32 characters, shared by all Sauron replicas. Rotating or clearing it revokes existing links. Leave blank when editing to keep the saved value.")
+
+    @field_validator(*DIAGRAM_LINK_FIELDS, mode="before")
+    @classmethod
+    def blank_diagram_environment_uses_default(cls, value, info):
+        # Compose forwards unset values as empty strings, including the TTL.
+        # Persisted control-panel values are applied after initial construction.
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
+
+    @field_validator("figure_public_base_url")
+    @classmethod
+    def validate_figure_public_base_url(cls, value):
+        from urllib.parse import urlsplit
+        if not value:
+            return value
+        if any(ch.isspace() or ord(ch) < 32 or ch in "\\<>\"'()" for ch in value):
+            raise ValueError("Diagram public base URL must be an absolute HTTP(S) URL without whitespace or Markdown delimiters")
+        parsed = urlsplit(value)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment):
+            raise ValueError("Diagram public base URL must be HTTP(S), without credentials, query or fragment")
+        parsed.port  # Validate malformed ports as well.
+        return value.rstrip("/")
+
+    @field_validator("figure_link_signing_secret")
+    @classmethod
+    def validate_figure_link_secret(cls, value):
+        if value and len(value) < 32:
+            raise ValueError("Diagram link signing secret must contain at least 32 characters")
+        return value
+
     figure_extraction_enabled: bool = True
     figure_max_per_doc: int = 20
     figure_min_width: int = 80          # skip logos / icons smaller than this
@@ -299,7 +346,8 @@ class Settings(BaseSettings):
 def _load_persisted_settings(s: Settings) -> Settings:
     """Apply settings saved via the admin UI (data/settings.json).
 
-    Persisted admin settings override environment defaults.
+    Persisted admin settings override environment defaults, except the three
+    diagram-link fields, whose nonempty environment values take precedence.
     The file lives on the mounted volume so it survives container restarts.
     """
     import json
@@ -315,7 +363,7 @@ def _load_persisted_settings(s: Settings) -> Settings:
         return s
 
     try:
-        return Settings.model_validate({**s.model_dump(), **saved})
+        return Settings.model_validate({**s.model_dump(), **saved, **diagram_environment_values()})
     except Exception:
         import logging
         logging.getLogger(__name__).warning("Invalid persisted settings; using environment defaults")

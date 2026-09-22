@@ -287,3 +287,101 @@ def test_embedding_status_shows_automatic_memory_recovery(client, monkeypatch):
     assert response.status_code == 200
     assert 'requested batch 32, effective batch 8' in response.text
     assert 'Recovered after 2 memory retry/retries' in response.text
+
+
+@pytest.mark.parametrize('environment', [None, '', '   '])
+def test_diagram_panel_values_apply_when_environment_is_unset_or_empty(client, monkeypatch, tmp_path, environment):
+    from src.config import DIAGRAM_LINK_FIELDS
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(catalog, 'SETTINGS_PATH', tmp_path/'data/settings.json')
+    for name in DIAGRAM_LINK_FIELDS:
+        if environment is None:
+            monkeypatch.delenv(name.upper(), raising=False)
+        else:
+            monkeypatch.setenv(name.upper(), environment)
+    login(client)
+    values = {'figure_public_base_url':'https://diagrams.test', 'figure_link_ttl_seconds':'120',
+              'figure_link_signing_secret':'saved-diagram-secret-of-at-least-32-chars'}
+    response = client.post('/admin/api/settings', data=values)
+    assert response.status_code == 200
+    reloaded = _load_persisted_settings(Settings())
+    for name, value in values.items():
+        assert str(getattr(settings, name)) == value
+        assert str(getattr(reloaded, name)) == value
+    page = client.get('/admin/settings/answers').text
+    assert 'Inline diagrams' in page
+    for name in values:
+        assert f'name="{name}"' in page and f'for="{name}"' in page
+        assert f'aria-describedby="{name}_help"' in page
+    assert values['figure_link_signing_secret'] not in page
+
+
+def test_diagram_environment_overrides_live_saves_without_destroying_fallbacks(client, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(catalog, 'SETTINGS_PATH', tmp_path/'data/settings.json')
+    environment = {'figure_public_base_url':'https://environment.test', 'figure_link_ttl_seconds':'300',
+                   'figure_link_signing_secret':'environment-diagram-secret-at-least-32-chars'}
+    fallback = {'figure_public_base_url':'https://control-panel.test', 'figure_link_ttl_seconds':'60',
+                'figure_link_signing_secret':'control-panel-diagram-secret-at-least-32-chars'}
+    for name, value in environment.items():
+        monkeypatch.setenv(name.upper(), value)
+    login(client)
+    response = client.post('/admin/api/settings', data=fallback)
+    assert response.status_code == 200 and 'Environment values override' in response.text
+    saved = json.loads(catalog.SETTINGS_PATH.read_text())
+    reloaded = _load_persisted_settings(Settings())
+    for name in environment:
+        assert str(saved[name]) == fallback[name]
+        assert str(getattr(settings, name)) == environment[name]
+        assert str(getattr(reloaded, name)) == environment[name]
+    for section in ('answers', 'advanced'):
+        page = client.get('/admin/settings/'+section).text
+        assert 'FIGURE_PUBLIC_BASE_URL is set in the environment' in page
+        assert 'https://environment.test' in page and 'https://control-panel.test' in page
+        assert environment['figure_link_signing_secret'] not in page
+        assert fallback['figure_link_signing_secret'] not in page
+    assert client.post('/admin/api/settings', data={
+        'keep_blank_secrets':'true', 'figure_link_signing_secret':'', 'query_cache_mode':'off',
+    }).status_code == 200
+    assert json.loads(catalog.SETTINGS_PATH.read_text())['figure_link_signing_secret'] == fallback['figure_link_signing_secret']
+    assert client.post('/admin/api/settings', data={'clear_figure_link_signing_secret':'true'}).status_code == 200
+    assert settings.figure_link_signing_secret == environment['figure_link_signing_secret']
+    assert json.loads(catalog.SETTINGS_PATH.read_text())['figure_link_signing_secret'] == ''
+    for name in environment:
+        monkeypatch.delenv(name.upper())
+    reloaded = _load_persisted_settings(Settings())
+    assert reloaded.figure_public_base_url == fallback['figure_public_base_url']
+    assert reloaded.figure_link_ttl_seconds == 60
+    assert reloaded.figure_link_signing_secret == ''
+
+
+def test_unrelated_save_does_not_persist_environment_diagram_secret(client, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    secret = 'environment-only-secret-do-not-save-32-chars'
+    monkeypatch.setenv('FIGURE_LINK_SIGNING_SECRET', secret)
+    monkeypatch.setattr(settings, 'figure_link_signing_secret', secret)
+    login(client)
+    assert client.post('/admin/api/settings', data={'query_cache_mode':'off'}).status_code == 200
+    assert secret not in catalog.SETTINGS_PATH.read_text()
+    assert settings.figure_link_signing_secret == secret
+
+
+def test_dotenv_diagram_precedence_and_process_empty_falls_back(client, monkeypatch, tmp_path):
+    from src.config import DIAGRAM_LINK_FIELDS
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(catalog, 'SETTINGS_PATH', tmp_path/'data/settings.json')
+    for name in DIAGRAM_LINK_FIELDS:
+        monkeypatch.delenv(name.upper(), raising=False)
+    (tmp_path/'.env').write_text('FIGURE_PUBLIC_BASE_URL=https://dotenv.test\nFIGURE_LINK_TTL_SECONDS=240\n')
+    login(client)
+    assert client.post('/admin/api/settings', data={
+        'figure_public_base_url':'https://saved.test','figure_link_ttl_seconds':'90',
+    }).status_code == 200
+    reloaded = _load_persisted_settings(Settings())
+    assert reloaded.figure_public_base_url == 'https://dotenv.test'
+    assert reloaded.figure_link_ttl_seconds == 240
+    monkeypatch.setenv('FIGURE_PUBLIC_BASE_URL', '')
+    monkeypatch.setenv('FIGURE_LINK_TTL_SECONDS', '360')
+    reloaded = _load_persisted_settings(Settings())
+    assert reloaded.figure_public_base_url == 'https://saved.test'
+    assert reloaded.figure_link_ttl_seconds == 360

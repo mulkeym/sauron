@@ -30,11 +30,13 @@ async def query(payload: QueryRequest, http: Request, user: UserContext = Depend
         )
         span.strategy = result.query_type or ("cache" if result.cached else "")
         span.cache_hit = bool(result.cached)
+        from src.figures.presentation import present_answer
+        illustrated, images = await present_answer(result.answer, result.images, user.groups, get_metadata_store())
         return QueryResponse(
-            answer=render_citations(result.answer, result.citations),
+            answer=render_citations(illustrated, result.citations),
             citations=[CitationResponse(**citation_details(c)) for c in result.citations],
             warnings=result.warnings,
-            images=result.images,
+            images=images,
             cached=result.cached,
             cached_query=result.cached_query,
         )
@@ -67,24 +69,15 @@ async def query_async_status(token: str, user: UserContext = Depends(require_aut
     job = query_queue.get_job(token)
     if job is None or job.username != user.username:
         raise HTTPException(status_code=404, detail="Job not found")
-    from src.figures.service import answer_images
-    from src.figures.service import authorized_figure, reference
-    images = []
-    for ref in job.images:
-        try:
-            doc, figure = await authorized_figure(ref["doc_id"], ref["figure_id"], user.groups, get_metadata_store())
-            current = reference(doc, figure)
-            if current:
-                images.append({**current, "evidence_id": ref.get("evidence_id", "")})
-        except (OSError, ValueError):
-            continue
+    from src.figures.presentation import present_answer
+    illustrated, images = await present_answer(job.answer, job.images, user.groups, get_metadata_store())
     return AsyncQueryStatusResponse(
         token=job.token,
         status=str(job.status),
         step=job.step,
         steps=job.steps,
         classification=job.classification,
-        answer=render_citations(job.answer, job.citations),
+        answer=render_citations(illustrated, job.citations),
         citations=[CitationResponse(**citation_details(c)) for c in job.citations],
         warnings=job.warnings,
         images=images,

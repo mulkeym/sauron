@@ -4,15 +4,24 @@ Sauron retains PNGs extracted from newly ingested PDFs, Word documents, PowerPoi
 
 Images live under `/app/data/figures` in the existing persistent data volume. No new mount, service or model is required. Visio rendering adds the native tools described in [Visio ingestion](visio.md). Figures retain their source document's access restrictions. PNG bytes are absent from vector embeddings, query caches, extraction JSON, and answer text.
 
+## Inline display
+
+See [Inline diagrams with expiring links](inline-diagrams.md) to configure a
+browser-facing Sauron URL and short-lived signed PNG links for unmodified
+OpenWebUI. Automatic image policy now also searches for relevant figure evidence
+during ordinary explanations. Playground places cited image cards beside their
+mentions. The native attachment behavior below remains the default when public
+links are not configured.
+
 ## Use
 
-- Ask a diagram question through `tool_ask` for a grounded explanation with images from cited figure evidence.
+- Ask a diagram question through `tool_answer_from_documents` for a grounded explanation with images from cited figure evidence.
 - Use `tool_search_diagrams(query, top_k=5, doc_id="", kind="")` for ranked diagram candidates. It returns metadata, not binary images. Verify the candidate's source/site/version before applying it.
 - Use `tool_get_diagram(doc_id, figure_id, variant="preview")` to retrieve a selected source image without answer synthesis. `full` requests the original normalized PNG when retained within limits.
 - Native MCP responses include text/structured metadata and separate base64 `ImageContent` blocks. Do not ask the language model to copy base64 into Markdown.
 - REST search: `GET /api/v1/diagrams/search?query=branch%20topology`.
 - REST PNG: `GET /api/v1/documents/{doc_id}/figures/{figure_id}/content?variant=preview`. Requires the usual API key and user Bearer token. It is not a public Markdown image URL; backend clients must fetch and present it through their own authorized attachment handling.
-- Query and async-query responses include an `images` array with source metadata and authenticated content URLs. The OpenAI-compatible endpoint provides `sauron_images` as an extension; generic OpenAI clients may ignore it. Native MCP is the intended OpenWebUI image integration.
+- Query and async-query responses include an `images` array with source metadata and authenticated content URLs. The OpenAI-compatible endpoint provides `sauron_images` as an extension. When public links are configured, these responses also include expiring image Markdown in ordinary answer text and native MCP uses that Markdown instead of duplicate image blocks.
 
 OpenWebUI must support native MCP image results. Its attachment rendering/storage is separate from whether a vision model can inspect the image. Sauron permission changes stop subsequent retrieval; copies already delivered into a client's chat follow that client's retention and sharing controls.
 

@@ -1,4 +1,4 @@
-"""Authenticated image retrieval; never expose a public image directory."""
+"""Authenticated image retrieval and narrowly scoped expiring image links."""
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from src.auth.dependencies import require_auth
@@ -8,6 +8,18 @@ from src.figures.service import image_bytes, search_diagrams
 
 router = APIRouter(prefix="/api/v1", tags=["figures"])
 admin_router = APIRouter(prefix="/admin/api")
+
+
+@router.api_route("/figure-links/{token}", methods=["GET", "HEAD"])
+async def linked_figure(token: str):
+    from src.figures.links import read
+    headers = {"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache",
+               "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
+    try:
+        raw = await read(token, get_metadata_store())
+    except (OSError, ValueError):
+        raise HTTPException(404, "Diagram link is unavailable or expired", headers=headers) from None
+    return Response(raw, media_type="image/png", headers=headers)
 
 
 @router.get("/diagrams/search")

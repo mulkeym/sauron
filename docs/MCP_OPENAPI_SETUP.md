@@ -303,7 +303,7 @@ curl -fsS https://<sauron-host>/api/health -H 'X-API-Key: <your-app-key>'
 
 Then use OpenWebUI's **Verify Connection** action. Sauron should log an MCP
 initialize request, and OpenWebUI should discover tools such as
-`tool_ask`, `tool_search_documents`, and `tool_list_documents`.
+`tool_answer_from_documents`, `tool_search_documents`, and `tool_list_documents`.
 
 Test with two users in different groups. Each user should see only documents
 whose Sauron ACL intersects their forwarded OpenWebUI groups. This cross-group
@@ -321,6 +321,13 @@ Expected outcomes:
 
 ## Troubleshooting
 
+- **Missing `question`, or a tool call with `questions` / `timeout_ms`:** the host
+  model confused document search with a user-clarification tool. Discovery now
+  advertises `tool_answer_from_documents(question="<original user request>")`.
+  Refresh the client tool catalog and start a fresh chat if it still chooses
+  `tool_ask`. The old name remains callable for existing integrations but is
+  hidden from discovery. Missing or invalid questions return explicit retry
+  instructions; Sauron does not invent the omitted user request.
 - **OpenWebUI cannot verify the connection:** confirm it is 0.9.6+, the server
   type is **MCP (Streamable HTTP)**, and the URL ends in `/mcp`.
 - **401 from Sauron:** send `X-Sauron-Username` (and usually

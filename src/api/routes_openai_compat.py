@@ -97,7 +97,9 @@ async def chat_completions(
         span.cache_hit = bool(result.cached)
 
     # Format citations as part of the response
-    answer = render_citations(result.answer, result.citations)
+    from src.figures.presentation import present_answer
+    illustrated, images = await present_answer(result.answer, result.images, user_groups, get_metadata_store())
+    answer = render_citations(illustrated, result.citations)
     if result.citations:
         sources = "\n\n---\n**Sources:**\n"
         for i, c in enumerate(result.citations, 1):
@@ -110,7 +112,7 @@ async def chat_completions(
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
-        "sauron_images": result.images,
+        "sauron_images": images,
         "created": int(time.time()),
         "model": payload.model,
         "choices": [

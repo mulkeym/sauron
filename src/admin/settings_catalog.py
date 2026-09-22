@@ -7,11 +7,11 @@ import tempfile
 from pathlib import Path
 from typing import get_args, get_origin, Literal
 
-from src.config import Settings, settings
+from src.config import Settings, settings, DIAGRAM_LINK_FIELDS, diagram_environment_values
 
 SETTINGS_PATH = Path("data/settings.json")
 SECRET_FIELDS = {"admin_password", "api_keys", "vllm_api_key", "jwt_secret_key",
-                 "mcp_openwebui_jwt_secret", "source_download_jwt_secret", "sharepoint_client_secret", "registered_databases", "database_url"}
+                 "mcp_openwebui_jwt_secret", "source_download_jwt_secret", "figure_link_signing_secret", "sharepoint_client_secret", "registered_databases", "database_url"}
 RESTART_FIELDS = {
     "database_url", "lancedb_path", "lancedb_table_name", "tabular_duckdb_path",
     "embedding_mode", "embedding_model_name", "embedding_dimension", "embedding_api_url",
@@ -25,10 +25,14 @@ RESTART_FIELDS = {
 
 def configured_values():
     values = settings.model_dump()
+    # Keep the editable fallback separate from the active environment value;
+    # saving an unrelated setting must never copy an environment secret to disk.
+    for name in diagram_environment_values():
+        values[name] = Settings.model_fields[name].default
     if SETTINGS_PATH.exists():
         try:
             saved = json.loads(SETTINGS_PATH.read_text())
-            for name in RESTART_FIELDS:
+            for name in RESTART_FIELDS | DIAGRAM_LINK_FIELDS:
                 if name in saved:
                     values[name] = saved[name]
         except (OSError, ValueError):
@@ -71,7 +75,8 @@ def prepare_update(form):
 
 
 def apply_live(values):
-    for name, value in values.items():
+    effective = Settings.model_validate({**values, **diagram_environment_values()}).model_dump()
+    for name, value in effective.items():
         if name not in RESTART_FIELDS:
             setattr(settings, name, value)
 
@@ -93,9 +98,11 @@ def persist_settings(values):
 
 def settings_catalog():
     values = configured_values()
+    overrides = diagram_environment_values()
     groups = {}
     for name, info in Settings.model_fields.items():
-        group = ("Original document downloads" if name.startswith("source_")
+        group = ("Inline diagrams" if name in DIAGRAM_LINK_FIELDS
+                 else "Original document downloads" if name.startswith("source_")
                  else "Technical answers" if name.startswith(("revision_selection_", "technical_", "procedure_retrieval_", "troubleshooting_retrieval_"))
                  else "Models and embeddings" if name.startswith(("vllm_", "embedding_", "llm_", "rerank_"))
                  else "Retrieval and answers" if name.startswith(("query_cache_", "answer_", "feedback_", "prf_", "strategy_", "sql_", "map_"))
@@ -110,6 +117,8 @@ def settings_catalog():
             "value": "" if name in SECRET_FIELDS else values[name],
             "secret": name in SECRET_FIELDS,
             "configured": bool(values[name]) if name in SECRET_FIELDS else False,
+            "environment_override": name in overrides,
+            "effective_value": "" if name in SECRET_FIELDS else getattr(settings, name),
             "kind": "boolean" if info.annotation is bool else "number" if info.annotation in (int, float) else "text",
             "step": "1" if info.annotation is int else "any", "choices": choices,
             "minimum": limits.get("ge"), "maximum": limits.get("le"),

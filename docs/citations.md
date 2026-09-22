@@ -12,7 +12,7 @@ Existing rendered browser results need a new query to obtain the updated present
 
 ## MCP → OpenWebUI native citations
 
-`tool_ask`, `tool_summarize_topic`, and `tool_compare` now return
+`tool_answer_from_documents`, `tool_summarize_topic`, and `tool_compare` now return
 `sauron_citations_version: 1`, the human-readable answer, a canonical
 `answer_with_evidence_ids`, and the complete `citations` array. The canonical
 field is for client adapters; it should not be displayed alongside the readable

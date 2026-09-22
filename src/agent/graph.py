@@ -346,8 +346,8 @@ def create_agent_graph(vector_store: VectorStore, schema_registry: SchemaRegistr
             from src.agent.state import _merge_chunks
             state = {**state, **recovered, "retrieved_chunks": _merge_chunks(
                 state.get('retrieved_chunks', []), recovered.get('retrieved_chunks', []))}
-        from src.figures.service import visual_question, image_policy, search_chunks
-        if image_policy(state.get("question", ""), state.get("answer_profile")) and visual_question(state.get("question", "")):
+        from src.figures.service import image_policy, search_chunks
+        if image_policy(state.get("question", ""), state.get("answer_profile")):
             try:
                 figures = await search_chunks(
                     state["question"], state.get("user_groups", []), vector_store, metadata_store,

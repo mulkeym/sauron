@@ -100,6 +100,19 @@
             .map(image => image.getAttribute('src'));
         for (const answer of container.querySelectorAll('.result-answer')) {
             render(answer, answer.textContent, {images});
+            // Move the authorized source card (including provenance/warnings)
+            // beside its mention instead of also leaving a duplicate gallery.
+            const card = answer.closest('.result-card');
+            for (const figure of [...(card?.querySelectorAll(':scope > figure') || [])]) {
+                const path = imagePath(figure.querySelector('img')?.getAttribute('src'));
+                const inline = [...answer.querySelectorAll('img')]
+                    .find(image => imagePath(image.getAttribute('src')) === path);
+                if (path && inline) {
+                    const parent = inline.parentElement;
+                    if (parent.tagName === 'P' && parent.childNodes.length === 1) parent.replaceWith(figure);
+                    else inline.replaceWith(figure);
+                }
+            }
         }
     }
     window.SauronMarkdown = Object.freeze({render, renderResult});

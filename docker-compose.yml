@@ -54,6 +54,10 @@ services:
       - LANCEDB_TABLE_NAME=${LANCEDB_TABLE_NAME:-chunks}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - API_KEYS=${API_KEYS:-}
+      # Blank values allow the control panel's saved diagram settings to apply.
+      - FIGURE_PUBLIC_BASE_URL=${FIGURE_PUBLIC_BASE_URL:-}
+      - FIGURE_LINK_TTL_SECONDS=${FIGURE_LINK_TTL_SECONDS:-}
+      - FIGURE_LINK_SIGNING_SECRET=${FIGURE_LINK_SIGNING_SECRET:-}
       - MCP_ENABLED=${MCP_ENABLED:-true}
       - MCP_PATH=${MCP_PATH:-/mcp}
       - MCP_STATELESS_HTTP=${MCP_STATELESS_HTTP:-true}

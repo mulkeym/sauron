@@ -91,6 +91,12 @@ def get_system_prompt(answer_profile=None, *, technical_intent="", repair="", qu
     snapshot = answer_profile or active_snapshot()
     profile = AnswerProfile.model_validate(snapshot["config"])
     parts = [SYSTEM_PROMPT, "Response policy:\n" + response_policy(profile)]
+    from src.figures.service import image_policy
+    if image_policy(question, snapshot):
+        parts.append("When a supplied figure passage directly helps explain the answer, discuss and cite it "
+                     "in the relevant paragraph even if the user did not explicitly ask for a diagram. "
+                     "The service will place the stored source image beside that citation. Do not invent image "
+                     "URLs or reproduce source diagrams. Do not cite unrelated figures just to add an illustration.")
     if re.search(r"\b(?:diagram|mermaid|topology)\b", question, re.I):
         parts.append("Diagram requests: describe the supported components, groupings and saved connections. "
                      "Identify the source page; do not merge different pages into one topology. "
@@ -605,6 +611,8 @@ def build_evidence_pack(state: AgentState) -> EvidencePack:
                      m.section_title or "", f"slide {m.slide}" if m.slide is not None else "",
                      m.source_locator or ""]
         label = f"[{eid}] Source: {m.filename} ({kind}); " + "; ".join(x for x in locations if x)
+        if m.figure_id:
+            label += "; source diagram"
         edition = state.get('edition_decisions', {}).get(m.doc_id, {})
         if edition.get("family"):
             label += f"; document revision {edition.get('revision') or 'unknown'}; applicability {edition.get('applicability') or 'not stated'}"

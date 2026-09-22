@@ -951,7 +951,10 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 citations = cached.get("citations", [])
                 citations_html = "".join(_citation_html(c, i) for i, c in enumerate(citations, 1))
                 from src.figures.service import answer_images, preview_html
-                citations_html += preview_html(await answer_images(question, citations, user_groups, store, answer_profile))
+                from src.figures.presentation import inline_images
+                images = await answer_images(question, citations, user_groups, store, answer_profile)
+                citations_html += preview_html(images)
+                illustrated = inline_images(cached['answer'], images, url_field="content_url")
 
                 result_html = f"""<div class="trace-panel">
                 <div class="trace-header">
@@ -994,7 +997,7 @@ async def playground_start(request: Request, question: str = Form(""), play_user
                 </div>
                 <div class="result-card">
                     <div class="result-meta">Groups: {escape_html(', '.join(user_groups))} | Source: Cache</div>
-                    <div class="result-answer">{escape_html(render_citations(cached['answer'], citations, local_links=True))}</div>
+                    <div class="result-answer">{escape_html(render_citations(illustrated, citations, local_links=True))}</div>
                     <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                     {citations_html or '<p>No citations.</p>'}
                 </div>"""
@@ -1284,13 +1287,16 @@ async def playground_start(request: Request, question: str = Form(""), play_user
 
             citations_html = "".join(_citation_html(c.model_dump(), i) for i, c in enumerate(citations, 1))
             from src.figures.service import answer_images, preview_html
-            citations_html += preview_html(await answer_images(question, citations, user_groups, store, answer_profile))
+            from src.figures.presentation import inline_images
+            images = await answer_images(question, citations, user_groups, store, answer_profile)
+            citations_html += preview_html(images)
+            illustrated = inline_images(answer, images, url_field="content_url")
 
             evidence_warnings = "".join(f'<p class="status-err">{html_mod.escape(w)}</p>' for w in final_state.get("warnings", []))
             result_html = f"""{trace_html}{evidence_warnings}
             <div class="result-card">
                 <div class="result-meta">Groups: {escape_html(', '.join(user_groups))}</div>
-                <div class="result-answer">{html_mod.escape(render_citations(answer, citations, local_links=True))}</div>
+                <div class="result-answer">{html_mod.escape(render_citations(illustrated, citations, local_links=True))}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
             </div>"""
@@ -1558,12 +1564,17 @@ async def playground_query(question: str = Form(""), play_user: str = Form("mike
             </div>"""
 
             citations_html = "".join(_citation_html(c.model_dump(), i) for i, c in enumerate(result.citations, 1))
+            from src.figures.service import answer_images, preview_html
+            from src.figures.presentation import inline_images
+            images = await answer_images(question, result.citations, user_groups, store)
+            citations_html += preview_html(images)
+            illustrated = inline_images(result.answer, images, url_field="content_url")
 
             return HTMLResponse(f"""
             {trace_html}
             <div class="result-card">
                 <div class="result-meta">Groups: {escape_html(', '.join(user_groups))}</div>
-                <div class="result-answer">{escape_html(render_citations(result.answer, result.citations, local_links=True))}</div>
+                <div class="result-answer">{escape_html(render_citations(illustrated, result.citations, local_links=True))}</div>
                 <h3 style="margin-bottom:0.5rem; font-size:0.95rem;">Citations ({len(result.citations)})</h3>
                 {citations_html or '<p>No citations.</p>'}
             </div>""")
@@ -2516,6 +2527,8 @@ async def settings_section_page(request: Request, section: str):
         ctx["catalog"] = settings_catalog()
     if section == "answers":
         from src.agent.synthesizer import get_system_prompt
+        from src.admin.settings_catalog import settings_catalog
+        ctx["diagram_fields"] = settings_catalog()["Inline diagrams"]
         ctx["resolved_prompt"] = get_system_prompt()
     if section == "security":
         store = get_metadata_store()
@@ -2568,6 +2581,10 @@ async def save_settings(request: Request):
         from src.main import apply_ssl_verify_setting
         apply_ssl_verify_setting()
     note = " Restart Sauron to apply: " + ", ".join(sorted(pending)) + "." if pending else " Changes are active."
+    from src.config import diagram_environment_values
+    overrides = diagram_environment_values()
+    if overrides:
+        note += " Environment values override the saved diagram fallbacks: " + ", ".join(sorted(k.upper() for k in overrides)) + "."
     return HTMLResponse('<div class="status-ok" role="status">Settings saved.' + _escape_html(note) + '</div>')
 
 

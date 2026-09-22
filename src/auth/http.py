@@ -28,7 +28,8 @@ def _same_origin(source: str, target: str) -> bool:
 class EndpointAuthenticationMiddleware:
     """Admin sessions are confined to /admin; service endpoints require keys.
 
-    Only the sign-in form and read-only admin static assets are public. CORS
+    Sign-in and read-only admin assets are public; one exact PNG link route
+    delegates authorization to its expiring-signature verifier. CORS
     preflight responses are handled by the outer CORSMiddleware, which never
     dispatches them to application endpoints. Pure ASGI preserves streaming
     and MCP/LLM ContextVars.
@@ -48,6 +49,12 @@ class EndpointAuthenticationMiddleware:
         if root and (path == root or path.startswith(root + "/")):
             path = path[len(root):]
         method = scope.get("method", "")
+        from src.figures.links import LINK_PATH, TOKEN_ROUTE_PATTERN
+        import re
+        if (scope["type"] == "http" and method in {"GET", "HEAD"}
+                and re.fullmatch(re.escape(LINK_PATH) + TOKEN_ROUTE_PATTERN, path)):
+            await self.app(scope, receive, send)
+            return
         is_admin = path == "/admin" or path.startswith("/admin/")
         login_url = root + "/admin/login"
 

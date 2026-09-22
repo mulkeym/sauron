@@ -36,6 +36,10 @@ show sdwan control connections
 > Verify the device version first.
 
 ![Branch topology](''' + API_IMAGE + ''')
+
+### Operational checks
+
+Monitor path health after deployment.
 '''
 
 
@@ -121,10 +125,13 @@ def test_formatted_answer_and_authenticated_diagrams(browser_page, streaming):
     assert answer.locator('table tbody tr').count() == 2
     assert '<configuration> stays literal' in answer.locator('pre code').inner_text()
     assert answer.locator('blockquote').count() == 1
-    link = answer.locator('a')
+    link = answer.locator('a[href="https://example.com/guide"]')
     assert link.get_attribute('rel') == 'noopener noreferrer'
     assert answer.locator('img').get_attribute('src') == IMAGE
-    page.locator('.result-card > figure img').scroll_into_view_if_needed()
+    assert page.locator('.result-card > figure').count() == 0
+    assert answer.locator('figure').count() == 1
+    assert answer.locator('figure + h3').inner_text() == 'Operational checks'
+    answer.locator('figure img').scroll_into_view_if_needed()
     page.wait_for_function("[...document.querySelectorAll('#play-results img')].every(i => i.complete && i.naturalWidth > 0)")
     assert page.locator('#play-results .status-err').inner_text() == 'Check source version'
     assert 'review labels' in page.locator('#play-results figcaption').inner_text()

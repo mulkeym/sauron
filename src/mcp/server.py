@@ -1,6 +1,8 @@
 import asyncio
+from typing import Annotated
 
 from fastmcp import FastMCP
+from pydantic import Field
 from src.db.metadata import MetadataStore
 from src.db.schema_registry import SchemaRegistry
 from src.mcp.agent_registry import AgentRegistry
@@ -10,6 +12,7 @@ from src.mcp.tools_low import search_documents, query_database, lookup_document,
 from src.mcp.resources import get_document_resource, get_category_resource, get_schema_resource
 from src.mcp.activity_wrap import run_logged_mcp_tool
 from src.mcp.auth import current_mcp_context
+from src.mcp.answer_contract import AnswerToolContract
 from src.retrieval.vector_store import VectorStore
 from src.config import settings
 
@@ -21,15 +24,14 @@ def create_mcp_server(
     agent_registry: AgentRegistry,
 ) -> FastMCP:
     mcp = FastMCP(settings.mcp_server_name)
+    mcp.add_middleware(AnswerToolContract())
     job_store = JobStore()
 
     def user_groups() -> list[str]:
         """Resolve ACL groups from the authenticated request; never default to ALL."""
         return current_mcp_context().groups
 
-    @mcp.tool()
-    async def tool_ask(question: str, depth: str = "thorough", context: str = ""):
-        """For requests to find or show a diagram without an explanation, use tool_search_diagrams and tool_get_diagram. THIS IS THE PRIMARY TOOL — use it for ANY question about document content, contracts, policies, people, companies, awards, or facts. It searches all documents, enriches with knowledge graph data, and generates a comprehensive cited answer. Use this FIRST before trying other tools. Only use tool_list_documents or tool_lookup_document for browsing/reading specific files."""
+    async def answer_document_question(question: str, depth: str, context: str):
         async def _run():
             return await ask(
                 question=question,
@@ -43,6 +45,19 @@ def create_mcp_server(
         result = await run_logged_mcp_tool(tool="ask", query_text=question, fn=_run)
         from src.figures.service import mcp_result
         return await mcp_result(result, user_groups(), metadata_store)
+
+    @mcp.tool()
+    async def tool_answer_from_documents(
+        question: Annotated[str, Field(min_length=1, description="Required: the user's original request to answer from stored documents. Not a clarification question addressed to the user.")],
+        depth: str = "thorough", context: str = "",
+    ):
+        """Search stored documents and return a grounded answer with citations and available diagrams. PRIMARY tool for explanations, procedures, troubleshooting, policies and other document questions. Supply the user's actual request in question, preserving named products and requirements. Search first; the retrieved answer can identify missing details. This does not ask the user questions and does not accept questions/options/timeout_ms. Copy returned diagram_markdown lines exactly, with their own captions, URLs and closing parentheses. For diagram-only browsing, use tool_search_diagrams."""
+        return await answer_document_question(question, depth, context)
+
+    @mcp.tool()
+    async def tool_ask(question: str, depth: str = "thorough", context: str = ""):
+        """Compatibility alias for tool_answer_from_documents; requires the user's question string."""
+        return await answer_document_question(question, depth, context)
 
     @mcp.tool()
     async def tool_summarize_topic(topic: str, format: str = "brief"):
@@ -78,7 +93,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_search_documents(query: str, doc_type: str = "", top_k: int = 10) -> list[dict]:
-        """Low-level search returning raw text snippets. For ANSWERING questions, use tool_ask instead — it provides better results with knowledge graph enrichment and cited answers. Only use this tool when you need raw document snippets for your own analysis, or to find doc_ids for tool_lookup_document."""
+        """Low-level search returning raw text snippets. For ANSWERING questions, use tool_answer_from_documents instead — it provides better results with knowledge graph enrichment and cited answers. Only use this tool when you need raw document snippets for your own analysis, or to find doc_ids for tool_lookup_document."""
         async def _run():
             return await asyncio.to_thread(
                 search_documents, query=query, user_groups=user_groups(),
@@ -89,7 +104,7 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_query_database(question: str) -> dict:
-        """Query a structured SQL database only. For ANSWERING questions about document content, contracts, policies, or facts, use tool_ask instead. Only use this when you specifically need to run a SQL query against a registered database."""
+        """Query a structured SQL database only. For ANSWERING questions about document content, contracts, policies, or facts, use tool_answer_from_documents instead. Only use this when you specifically need to run a SQL query against a registered database."""
         async def _run():
             return await query_database(
                 question=question,
@@ -215,10 +230,17 @@ def create_mcp_server(
 
     @mcp.tool()
     async def tool_search_diagrams(query: str, top_k: int = 5, doc_id: str = "", kind: str = "") -> list[dict]:
-        """Find source diagrams, including topologies, Venn diagrams and flowcharts. Returns ranked candidates with figure IDs and provenance, without images. Use tool_get_diagram to show a selected candidate; explain uncertainty if several topologies could apply."""
+        """Find source diagrams, including topologies, Venn diagrams and flowcharts. Returns ranked candidates with figure IDs, provenance and, when public links are enabled, complete ready-to-display markdown. Copy the selected candidate's markdown exactly, including its caption and closing parenthesis. Every figure has its own URL: never reuse another figure's URL or construct one from IDs. If markdown is absent, use tool_get_diagram to show the selected candidate. Explain uncertainty if several topologies could apply."""
         from src.figures.service import search_diagrams
         async def run():
-            return await search_diagrams(query, user_groups(), vector_store, metadata_store, top_k, doc_id or None, kind or None)
+            candidates = await search_diagrams(query, user_groups(), vector_store, metadata_store, top_k, doc_id or None, kind or None)
+            from src.figures.links import enabled
+            if enabled():
+                from src.figures.presentation import public_images, image_markdown
+                candidates = await public_images(candidates, user_groups(), metadata_store)
+                candidates = [{"markdown": image_markdown(ref, ref["inline_url"]), **ref}
+                    if ref.get("inline_url") else ref for ref in candidates]
+            return candidates
         return await run_logged_mcp_tool(tool="search_diagrams", query_text=query, fn=run)
 
     @mcp.tool()
