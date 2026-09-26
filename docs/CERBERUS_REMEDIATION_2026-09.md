@@ -34,7 +34,18 @@ Not in the report's scope but still open: Trivy config finding DS-0002
 (container runs as root) and build-arg handling of `HF_TOKEN` (DS-0031) — see
 Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLAN.md).
 
-## Verification
+## Verification (26 Sep 2026, linux/amd64 build on the Proxmox node)
 
-Pending: the Proxmox test build (CT 120) was interrupted by host storage
-exhaustion before the final build completed. See the hand-off notes.
+- Trivy 0.74.0 on the final image: **0 Critical/High/Medium findings with a
+  fix available**. None of the 52 CVE/GHSA IDs in the report's "Packages to
+  upgrade" table are present. Remaining totals (all unfixed upstream):
+  1 Critical, 108 High, 193 Medium, 260 Low, 2 Unknown — versus 1 / 116 / 210
+  / 272 for the published `ghcr.io/mulkeym/sauron:latest` scanned with the
+  same database (4 High and 7 Medium of those were fixable).
+- `scripts/check_packaged_runtime.sh`: passed (imports, native tools, offline
+  models, no curl/system pip, anonymous `/api/health` 403, keyed 200).
+- Full test suite inside the image, offline: 1399 passed, 1 skipped.
+- End-to-end smoke test with local embeddings and vLLM
+  (`gemma-4-26b-a4b-awq`): PDF, DOCX and XLSX ingestion; cited answer from the
+  PDF; correct spreadsheet totals through the SQL path; Docker health check
+  (Python stdlib) reports healthy.
