@@ -10,7 +10,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker run --rm --network none --entrypoint python "$image" -c '
-import importlib, pathlib, shutil
+import importlib, importlib.util, pathlib, shutil
 for module in ("src.main", "src.ingestion.emf", "src.ingestion.visio", "src.ingestion.embedding_isolation", "src.mcp.server", "src.sources.service"):
     importlib.import_module(module)
 for command in ("inkscape", "vsd2xhtml", "rsvg-convert", "pdftoppm", "tesseract"):
@@ -21,6 +21,8 @@ assert shutil.which("curl") is None, "curl CLI should not be in the runtime imag
 system_site = pathlib.Path("/usr/local/lib/python3.11/site-packages")
 leftover = sorted(p.name for p in system_site.iterdir() if p.name.startswith(("pip", "setuptools", "wheel", "pkg_resources")))
 assert not leftover, f"system Python tooling left in image: {leftover}"
+assert importlib.util.find_spec("pip") is None, "pip should not be in the runtime venv"
+assert not list(pathlib.Path("/usr/local/lib/python3.11/ensurepip").glob("_bundled/*.whl")), "stale ensurepip wheels"
 '
 docker run -d --name "$container" --network none \
   -e API_KEYS=release-smoke-key -e JWT_SECRET_KEY=release-smoke-jwt \

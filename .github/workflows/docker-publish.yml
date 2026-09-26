@@ -122,6 +122,28 @@ jobs:
       - name: Check packaged runtime and offline startup
         run: bash scripts/check_packaged_runtime.sh sauron-ci:checked
 
+      # Full report for visibility, then block publishing on any Critical/High
+      # finding that already has a fixed version available.
+      - name: Scan image for vulnerabilities
+        run: |
+          set -euo pipefail
+          trivy() {
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$RUNNER_TEMP:/out" -v trivy-cache:/root/.cache/trivy \
+              aquasec/trivy:0.74.0 "$@"
+          }
+          trivy image --scanners vuln --format json --output /out/trivy-full.json sauron-ci:checked
+          trivy image --scanners vuln --ignore-unfixed --severity CRITICAL,HIGH \
+            --exit-code 1 sauron-ci:checked
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-full-report
+          path: ${{ runner.temp }}/trivy-full.json
+          if-no-files-found: ignore
+
       - name: Run regression tests against packaged source
         run: |
           docker run --rm --network none --entrypoint bash \

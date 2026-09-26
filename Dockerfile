@@ -151,6 +151,12 @@ PY
 COPY scripts/inject_system_cas_into_certifi.py /tmp/inject_system_cas_into_certifi.py
 RUN python /tmp/inject_system_cas_into_certifi.py
 
+# pip is only needed to build the venv. Its vendored dependency manifest
+# (pip/_vendor/vendor.txt: msgpack 1.1.2, setuptools 70.3.0) is reported by
+# scanners even in the newest pip, and the runtime never installs packages.
+RUN python -m pip uninstall -y pip \
+ && ! python -c 'import pip' 2>/dev/null
+
 # A normal `COPY --from=builder /opt/venv /opt/venv` collapses the complete
 # 3+ GiB environment into one image layer. Partition it into deterministic
 # overlay trees; the final stage copies each tree as its own bounded layer.
@@ -198,7 +204,8 @@ RUN set -eu; \
            /usr/local/lib/python3.11/site-packages/wheel* \
            /usr/local/lib/python3.11/site-packages/packaging* \
            /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.11 \
-           /usr/local/bin/wheel; \
+           /usr/local/bin/wheel \
+           /usr/local/lib/python3.11/ensurepip/_bundled/*.whl; \
     ! python -c 'import pip' 2>/dev/null
 
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).

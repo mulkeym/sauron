@@ -61,7 +61,9 @@ idna>=3.15
 openai==3.16.2
 
 # Database (metadata store)
-sqlalchemy>=2.0.36
+# asyncio extra installs greenlet (no longer a default dependency in 2.1);
+# stay on the 2.0 series the metadata store is tested against.
+sqlalchemy[asyncio]>=2.0.36,<2.1
 aiosqlite>=0.20.0
 
 # Tabular store (structured spreadsheet querying)
