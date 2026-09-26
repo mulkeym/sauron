@@ -88,7 +88,7 @@ Chart defaults already point at GHCR (`image.registry=ghcr.io`, `image.repositor
    store — required when outbound HTTPS is re-signed by a corporate proxy.
    See `certs/README.md`.
 
-2. **Mirror base layers** into Harbor if builders cannot reach Docker Hub (`python:3.11-slim`, etc.).
+2. **Mirror base layers** into Harbor if builders cannot reach Docker Hub (`cgr.dev/chainguard/wolfi-base`; override with the `WOLFI_IMAGE` build arg).
 
 3. **LLM endpoint** reachable from the cluster (vLLM or any OpenAI-compatible API). SAURON does not ship the LLM.
 

@@ -1,20 +1,126 @@
-# Base image: Debian 13 (trixie) slim. Pin the suite explicitly so a future
-# retag of `python:3.11-slim` cannot silently change the OS release. Override
-# with a digest-pinned mirror copy for reproducible/air-gapped builds.
-ARG PYTHON_IMAGE=python:3.11-slim-trixie
+# Base image: Wolfi (glibc, rolling, continuously patched). Debian's slim
+# images carried ~300 Critical/High/Medium OS findings with no fix available;
+# the same package set on Wolfi scans clean. Override with a digest-pinned
+# mirror copy for reproducible/air-gapped builds.
+ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base:latest
+
+# Stage 0: native document renderers that Wolfi does not package:
+#   - Inkscape 1.4.x (EMF -> PNG), with the gtkmm-3 C++ binding stack it needs
+#   - librevenge + libvisio tools (vsd2xhtml: Visio -> SVG)
+# Everything installs under /opt/inkscape and /opt/libvisio with an RPATH, so
+# the runtime stage only copies these trees plus Wolfi's shared libraries.
+# Sources are pinned by SHA-256. Bump versions and hashes together.
+FROM ${WOLFI_IMAGE} AS native-tools
+
+# Parallel compile jobs; defaults to the builder's CPU count.
+ARG BUILD_JOBS=
+
+RUN apk add --no-cache \
+      build-base cmake samurai meson pkgconf perl gperf python-3.11 curl xz bzip2 \
+      boost-dev icu-dev libxml2-dev libxslt-dev zlib-dev \
+      glib-dev cairo-dev pango-dev gtk-3-dev gdk-pixbuf-dev harfbuzz-dev \
+      fontconfig-dev freetype-dev libepoxy-dev \
+      gsl-dev gc-dev double-conversion-dev lcms2-dev libpng-dev \
+      libjpeg-turbo-dev potrace-dev readline-dev
+
+WORKDIR /src
+COPY docker/native-sources.sha256 /src/SHA256SUMS
+RUN set -eu; \
+    for url in \
+      https://download.gnome.org/sources/libsigc++/2.12/libsigc++-2.12.1.tar.xz \
+      https://download.gnome.org/sources/glibmm/2.66/glibmm-2.66.10.tar.xz \
+      https://www.cairographics.org/releases/cairomm-1.14.6.tar.xz \
+      https://download.gnome.org/sources/pangomm/2.46/pangomm-2.46.5.tar.xz \
+      https://download.gnome.org/sources/atkmm/2.28/atkmm-2.28.5.tar.xz \
+      https://download.gnome.org/sources/gtkmm/3.24/gtkmm-3.24.11.tar.xz \
+      https://media.inkscape.org/dl/resources/file/inkscape-1.4.4.tar.xz \
+      https://dev-www.libreoffice.org/src/librevenge-0.0.5.tar.bz2 \
+      https://dev-www.libreoffice.org/src/libvisio-0.1.8.tar.xz \
+      https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2; do \
+      curl -fsSL --retry 3 -o "$(basename "$url")" "$url"; \
+    done; \
+    sha256sum -c SHA256SUMS; \
+    for f in *.tar.*; do tar xf "$f"; done
+
+# LIBRARY_PATH lets meson's find_library() see libraries installed earlier in
+# this stage (pangomm needs glibmm_generate_extra_defs from glibmm).
+ENV PKG_CONFIG_PATH=/opt/inkscape/lib/pkgconfig:/opt/libvisio/lib/pkgconfig \
+    LD_LIBRARY_PATH=/opt/inkscape/lib:/opt/libvisio/lib \
+    LIBRARY_PATH=/opt/inkscape/lib:/opt/libvisio/lib
+
+# gtkmm-3 binding stack (meson builds, docs/examples off).
+RUN set -eu; \
+    for d in libsigc++-2.12.1 glibmm-2.66.10 cairomm-1.14.6 pangomm-2.46.5 atkmm-2.28.5 gtkmm-3.24.11; do \
+      meson setup "build-$d" "$d" --prefix=/opt/inkscape --libdir=lib --buildtype=release \
+        -Dbuild-documentation=false -Dmaintainer-mode=false \
+        $(case "$d" in libsigc*|glibmm*|cairomm*) echo -Dbuild-examples=false;; esac) \
+        $(case "$d" in cairomm*|libsigc*) echo -Dbuild-tests=false;; esac) \
+        $(case "$d" in gtkmm*) echo -Dbuild-demos=false -Dbuild-tests=false;; esac); \
+      ninja -C "build-$d" -j "${BUILD_JOBS:-$(nproc)}"; \
+      ninja -C "build-$d" install; \
+    done
+
+# Inkscape: CLI export only needs the core; optional importers and GUI extras off.
+RUN set -eu; \
+    src="$(ls -d inkscape-1.4.4*/)"; \
+    cmake -S "$src" -B build-inkscape -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/inkscape \
+      -DCMAKE_INSTALL_RPATH='/opt/inkscape/lib;/opt/inkscape/lib/inkscape' \
+      -DBUILD_TESTING=OFF -DWITH_NLS=OFF -DWITH_MANPAGE_COMPILE=OFF \
+      -DENABLE_POPPLER=OFF -DENABLE_POPPLER_CAIRO=OFF \
+      -DWITH_GSPELL=OFF -DWITH_GSOURCEVIEW=OFF -DWITH_DBUS=OFF \
+      -DWITH_IMAGE_MAGICK=OFF -DWITH_GRAPHICS_MAGICK=OFF \
+      -DWITH_LIBCDR=OFF -DWITH_LIBVISIO=OFF -DWITH_LIBWPG=OFF \
+      -DWITH_JEMALLOC=OFF -DWITH_OPENMP=OFF -DWITH_X11=OFF; \
+    ninja -C build-inkscape -j "${BUILD_JOBS:-$(nproc)}"; \
+    ninja -C build-inkscape install; \
+    rm -rf /opt/inkscape/share/inkscape/extensions /opt/inkscape/share/man \
+           /opt/inkscape/share/doc /opt/inkscape/include /opt/inkscape/share/aclocal
+
+# librevenge + libvisio with the vsd2xhtml converter.
+RUN set -eu; \
+    cd /src/librevenge-0.0.5; \
+    ./configure --prefix=/opt/libvisio --disable-static --disable-werror \
+      --without-docs --disable-tests; \
+    make -j "${BUILD_JOBS:-$(nproc)}"; make install; \
+    cd /src/libvisio-0.1.8; \
+    # ICU 7x headers need C++17; libvisio's configure would otherwise pin C++11.
+    ./configure CXX='g++ -std=c++17' --prefix=/opt/libvisio --disable-static --disable-werror \
+      --without-docs --disable-tests; \
+    make -j "${BUILD_JOBS:-$(nproc)}"; make install; \
+    rm -rf /opt/libvisio/include /opt/libvisio/share/doc
+
+# DejaVu (Debian's default sans-serif) keeps Visio text measurement and
+# rendered output identical to the previous Debian image. Wolfi has no package.
+RUN set -eu; \
+    mkdir -p /opt/fonts/dejavu; \
+    cp /src/dejavu-fonts-ttf-2.37/ttf/*.ttf /opt/fonts/dejavu/; \
+    cp /src/dejavu-fonts-ttf-2.37/LICENSE /opt/fonts/dejavu/
+
+# Verify every copied binary/library resolves, then record the system sonames
+# the runtime stage must install (apk `so:` provides). Wolfi has no ldd; call
+# the dynamic loader directly (that is all ldd does).
+RUN set -eu; \
+    LD=/usr/lib/ld-linux-x86-64.so.2; \
+    /opt/inkscape/bin/inkscape --version; \
+    test -x /opt/libvisio/bin/vsd2xhtml; \
+    find /opt/inkscape /opt/libvisio -type f \( -perm -u+x -o -name '*.so*' \) > /tmp/objects; \
+    while read -r f; do "$LD" --list "$f" 2>/dev/null || true; done < /tmp/objects > /tmp/resolved; \
+    if grep -q 'not found' /tmp/resolved; then grep 'not found' /tmp/resolved | sort -u; exit 1; fi; \
+    test "$(grep -c '=> /' /tmp/resolved)" -gt 50; \
+    awk '/=> \/usr\/lib\//{print "so:" $1}' /tmp/resolved | grep -vE '^so:(/|ld-linux)' | sort -u > /opt/native-runtime-deps.txt; \
+    wc -l /opt/native-runtime-deps.txt
+
 
 # Stage 1: Build dependencies
-FROM ${PYTHON_IMAGE} AS builder
+FROM ${WOLFI_IMAGE} AS builder
 WORKDIR /app
 
 # ca-certificates needed so optional custom roots can be merged into the
 # system trust store before pip hits HTTPS (public or internal).
-# `apt-get upgrade` pulls current Debian security/point-release fixes for the
-# packages inherited from the base image.
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# build-base/python-dev only for any sdist without a wheel; builder-only.
+RUN apk add --no-cache python-3.11 python-3.11-dev build-base bash ca-certificates
 
 # Optional custom roots: drop certs/Trusted_Root_CAs.pem in the build context.
 # Primary use case: corporate MITM / TLS inspection proxies that re-sign
@@ -80,7 +186,7 @@ RUN set -eu; \
 
 # Isolated venv so CPU torch is visible to the second pip install ( --prefix
 # installs are not considered "installed" by a later bare pip resolve).
-RUN python -m venv /opt/venv \
+RUN python3.11 -m venv /opt/venv \
  && mkdir -p /opt/venv/pip \
  && cp /etc/pip.conf /opt/venv/pip/pip.conf
 ENV PATH="/opt/venv/bin:$PATH" \
@@ -168,45 +274,49 @@ RUN python /tmp/split_layer_tree.py \
       --max-bytes 850000000
 
 # Stage 2: Runtime
-FROM ${PYTHON_IMAGE} AS runtime-base
+FROM ${WOLFI_IMAGE} AS runtime-base
 WORKDIR /app
 
 # System dependencies for document parsing.
-# libgl1 + libglib2.0-0 are required by OpenCV (cv2), which unstructured hi_res
+# mesa-gl + glib are required by OpenCV (cv2), which unstructured hi_res
 # imports for scanned-PDF OCR layout/table detection.
-# ca-certificates: default public roots + optional custom roots (below).
-# `apt-get upgrade` applies Debian security fixes to packages inherited from
-# the base image (perl-base, gzip, libc6, libpcre2, libsqlite3, util-linux...).
-# curl is intentionally not installed: the health check uses Python's stdlib.
-# (libcurl remains as a dependency of poppler and tesseract.)
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends \
-    ca-certificates tesseract-ocr libmagic1 poppler-utils libgl1 libglib2.0-0 \
-    libvisio-tools librsvg2-bin fonts-dejavu-core fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+# The gtk-3 / gsl / gc / ... libraries are the shared-library dependencies of
+# the Inkscape and libvisio builds copied from the native-tools stage.
+# No curl: the health check uses Python's stdlib.
+RUN apk add --no-cache \
+      python-3.11 bash ca-certificates \
+      tesseract tesseract-eng libmagic poppler-utils rsvg-convert \
+      mesa-gl glib fontconfig font-liberation libstdc++
 
-# Keep the native EMF renderer separate from the other system dependencies.
-# No additional Python ML models or services are required.
-RUN apt-get update && apt-get install -y --no-install-recommends inkscape \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Inkscape (EMF rendering), vsd2xhtml (Visio rendering) and DejaVu fonts,
+# built/pinned in the native-tools stage, plus the shared libraries they link
+# (recorded as apk `so:` names at build time so they track Wolfi versions).
+COPY --from=native-tools /opt/native-runtime-deps.txt /tmp/native-runtime-deps.txt
+RUN apk add --no-cache $(cat /tmp/native-runtime-deps.txt) && rm /tmp/native-runtime-deps.txt
+COPY --from=native-tools /opt/inkscape /opt/inkscape
+COPY --from=native-tools /opt/libvisio /opt/libvisio
+COPY --from=native-tools /opt/fonts/dejavu /usr/share/fonts/dejavu
+RUN set -eu; \
+    printf '%s\n' /opt/inkscape/lib /opt/inkscape/lib64 /opt/inkscape/lib64/inkscape \
+      /opt/libvisio/lib >> /etc/ld.so.conf; \
+    ldconfig; \
+    ln -s /opt/inkscape/bin/inkscape /usr/bin/inkscape; \
+    for tool in /opt/libvisio/bin/*; do ln -s "$tool" /usr/bin/; done; \
+    fc-cache -f >/dev/null; \
+    inkscape --version; command -v vsd2xhtml rsvg-convert pdftoppm tesseract fc-match
 
 # The application runs from /opt/venv (secured pip/setuptools live there).
-# Remove the base image's unused system pip/setuptools/wheel, which carry
-# outdated vendored copies (jaraco.context, wheel) flagged by scanners.
+# Remove the OS Python's bundled tooling, which the runtime never uses.
 RUN set -eu; \
-    python -m pip uninstall -y pip setuptools wheel packaging >/dev/null 2>&1 || true; \
-    rm -rf /usr/local/lib/python3.11/site-packages/pip* \
-           /usr/local/lib/python3.11/site-packages/setuptools* \
-           /usr/local/lib/python3.11/site-packages/_distutils_hack \
-           /usr/local/lib/python3.11/site-packages/distutils-precedence.pth \
-           /usr/local/lib/python3.11/site-packages/pkg_resources \
-           /usr/local/lib/python3.11/site-packages/wheel* \
-           /usr/local/lib/python3.11/site-packages/packaging* \
-           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.11 \
-           /usr/local/bin/wheel \
-           /usr/local/lib/python3.11/ensurepip/_bundled/*.whl; \
-    ! python -c 'import pip' 2>/dev/null
+    rm -rf /usr/lib/python3.11/site-packages/pip* \
+           /usr/lib/python3.11/site-packages/setuptools* \
+           /usr/lib/python3.11/site-packages/_distutils_hack \
+           /usr/lib/python3.11/site-packages/distutils-precedence.pth \
+           /usr/lib/python3.11/site-packages/pkg_resources \
+           /usr/lib/python3.11/site-packages/wheel* \
+           /usr/lib/python3.11/ensurepip/_bundled/*.whl \
+           /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.11; \
+    ! python3 -c 'import pip' 2>/dev/null
 
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).
 COPY certs/ /tmp/certs/

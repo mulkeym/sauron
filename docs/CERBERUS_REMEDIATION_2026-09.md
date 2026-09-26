@@ -21,20 +21,47 @@ store. `requirements.txt` now requires `sqlalchemy[asyncio]>=2.0.36,<2.1`.
 CI (`docker-publish.yml`) now saves a full Trivy JSON report and fails the
 build before publishing if any Critical/High finding has a fixed version.
 
-## Remaining (no fix available)
+## Phase 2: Wolfi base image (removes the no-fix findings)
 
-The remaining Critical (`libxml2` CVE-2026-6653) and the High/Medium OS
-findings have no Debian fix yet. They come from `util-linux`/`login`
-(essential), tesseract, poppler/libcurl, GnuPG (pulled in by poppler's
-gpgme), libtiff, libexpat, and libxml2 (inkscape, libvisio, librsvg). Removing
-them would remove OCR, PDF rasterisation, or EMF/Visio rendering. They clear
-automatically on rebuild once Debian publishes fixes.
+The Debian image still carried 1 Critical, 108 High and 193 Medium findings
+with no Debian fix (libxml2, util-linux, tesseract, poppler/libcurl, GnuPG, and
+inkscape's dependency tree: a second Python 3.13, CUPS, Avahi, systemd, X11).
+Probe scans of the same package set: Debian 13 1/110/199, Debian without
+inkscape 1/92/120, **Wolfi 0/0/0**. Alpine was not used: it is musl-based,
+and CPU PyTorch, onnxruntime, OpenCV and LanceDB ship glibc (manylinux) wheels
+only. Wolfi is glibc-based, so every Python wheel installs unchanged.
+
+What changed:
+
+- All stages build `FROM ${WOLFI_IMAGE}` (default
+  `cgr.dev/chainguard/wolfi-base:latest`; mirror/pin it for air-gapped builds).
+  Python is Wolfi's `python-3.11`; system packages come from `apk`.
+- Wolfi does not package Inkscape or libvisio-tools, so a `native-tools`
+  stage builds them from pinned sources (`docker/native-sources.sha256`):
+  libsigc++ 2.12.1, glibmm 2.66.10, cairomm 1.14.6, pangomm 2.46.5,
+  atkmm 2.28.5, gtkmm 3.24.11, Inkscape 1.4.4 (same 1.4 series as Debian's
+  1.4.0; optional importers, spellcheck, D-Bus and NLS disabled), librevenge
+  0.0.5 and libvisio 0.1.8 (`vsd2xhtml`; built as C++17 for ICU 78). The stage
+  records the sonames the binaries link, and the runtime installs exactly those
+  via `apk add so:...`.
+- DejaVu 2.37 fonts (Debian's default sans-serif) are installed from the
+  pinned upstream release so Visio text measurement matches the Debian image.
+- Base-image Python tooling is removed from `/usr/lib/python3.11`
+  (`check_packaged_runtime.sh` now finds it through `sys.base_prefix`).
+- The corporate CA script works unchanged with Wolfi's `update-ca-certificates`.
+- Image size drops from 11 GB to 7.5 GB.
+
+**Scanner blind spot:** the source-built components above are not in any
+package database, so Trivy and Harbor cannot report CVEs for them. Track
+Inkscape, the gtkmm stack, librevenge, libvisio and DejaVu releases manually
+and bump the URLs and hashes in the Dockerfile and `docker/native-sources.sha256`
+together. First builds compile for roughly an hour; the CI timeout is 240 min.
 
 Not in the report's scope but still open: Trivy config finding DS-0002
 (container runs as root) and build-arg handling of `HF_TOKEN` (DS-0031) — see
 Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLAN.md).
 
-## Verification (26 Sep 2026, linux/amd64 build on the Proxmox node)
+## Verification, Debian phase (26 Sep 2026, linux/amd64)
 
 - Trivy 0.74.0 on the final image: **0 Critical/High/Medium findings with a
   fix available**. None of the 52 CVE/GHSA IDs in the report's "Packages to
@@ -49,3 +76,12 @@ Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLAN.md
   (`gemma-4-26b-a4b-awq`): PDF, DOCX and XLSX ingestion; cited answer from the
   PDF; correct spreadsheet totals through the SQL path; Docker health check
   (Python stdlib) reports healthy.
+
+## Verification, Wolfi phase (26 Sep 2026, linux/amd64)
+
+- Trivy 0.74.0: **0 findings of any severity** (151 Wolfi packages and 265
+  Python packages inventoried). None of the report's 52 IDs are present.
+- `scripts/check_packaged_runtime.sh`: passed.
+- Full test suite inside the image, offline: 1399 passed, 1 skipped (includes
+  the EMF rendering tests through Inkscape and the Visio tests through
+  `vsd2xhtml`).

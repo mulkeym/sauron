@@ -41,8 +41,9 @@ jobs:
   build-and-push:
     name: Build, verify, and publish
     runs-on: ubuntu-latest
-    # HF model bake can be slow on a cold cache
-    timeout-minutes: 120
+    # HF model bake plus the from-source Inkscape/gtkmm/libvisio build can be
+    # slow on a cold cache.
+    timeout-minutes: 240
     permissions:
       contents: read
       packages: write
