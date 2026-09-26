@@ -1,10 +1,19 @@
+# Base image: Debian 13 (trixie) slim. Pin the suite explicitly so a future
+# retag of `python:3.11-slim` cannot silently change the OS release. Override
+# with a digest-pinned mirror copy for reproducible/air-gapped builds.
+ARG PYTHON_IMAGE=python:3.11-slim-trixie
+
 # Stage 1: Build dependencies
-FROM python:3.11-slim AS builder
+FROM ${PYTHON_IMAGE} AS builder
 WORKDIR /app
 
 # ca-certificates needed so optional custom roots can be merged into the
 # system trust store before pip hits HTTPS (public or internal).
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# `apt-get upgrade` pulls current Debian security/point-release fixes for the
+# packages inherited from the base image.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional custom roots: drop certs/Trusted_Root_CAs.pem in the build context.
@@ -100,11 +109,13 @@ RUN set -eu; \
     if [ -n "${PIP_EXTRA_INDEX_URL}" ]; then IDX_ARGS="${IDX_ARGS} --extra-index-url ${PIP_EXTRA_INDEX_URL}"; fi; \
     echo "pip trusted-host args:${TH_ARGS}"; \
     echo "pip index args:${IDX_ARGS}"; \
-    pip install --no-cache-dir --upgrade 'pip>=26.1.2' 'setuptools>=83.0.0' wheel \
+    pip install --no-cache-dir --upgrade 'pip>=26.2.0' 'setuptools>=83.0.0' 'wheel>=0.46.2' \
+      -c constraints-security.txt \
       --cert /etc/ssl/certs/ca-certificates.crt \
       ${TH_ARGS} ${IDX_ARGS} \
  && pip install --no-cache-dir \
       torch torchvision \
+      -c constraints-security.txt \
       --index-url "${TORCH_CPU_INDEX}" \
       --cert /etc/ssl/certs/ca-certificates.crt \
       ${TH_ARGS} \
@@ -151,22 +162,44 @@ RUN python /tmp/split_layer_tree.py \
       --max-bytes 850000000
 
 # Stage 2: Runtime
-FROM python:3.11-slim AS runtime-base
+FROM ${PYTHON_IMAGE} AS runtime-base
 WORKDIR /app
 
 # System dependencies for document parsing.
 # libgl1 + libglib2.0-0 are required by OpenCV (cv2), which unstructured hi_res
 # imports for scanned-PDF OCR layout/table detection.
 # ca-certificates: default public roots + optional custom roots (below).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tesseract-ocr libmagic1 poppler-utils curl libgl1 libglib2.0-0 \
+# `apt-get upgrade` applies Debian security fixes to packages inherited from
+# the base image (perl-base, gzip, libc6, libpcre2, libsqlite3, util-linux...).
+# curl is intentionally not installed: the health check uses Python's stdlib.
+# (libcurl remains as a dependency of poppler and tesseract.)
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
+    ca-certificates tesseract-ocr libmagic1 poppler-utils libgl1 libglib2.0-0 \
     libvisio-tools librsvg2-bin fonts-dejavu-core fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Keep the native EMF renderer separate from the other system dependencies.
 # No additional Python ML models or services are required.
 RUN apt-get update && apt-get install -y --no-install-recommends inkscape \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# The application runs from /opt/venv (secured pip/setuptools live there).
+# Remove the base image's unused system pip/setuptools/wheel, which carry
+# outdated vendored copies (jaraco.context, wheel) flagged by scanners.
+RUN set -eu; \
+    python -m pip uninstall -y pip setuptools wheel packaging >/dev/null 2>&1 || true; \
+    rm -rf /usr/local/lib/python3.11/site-packages/pip* \
+           /usr/local/lib/python3.11/site-packages/setuptools* \
+           /usr/local/lib/python3.11/site-packages/_distutils_hack \
+           /usr/local/lib/python3.11/site-packages/distutils-precedence.pth \
+           /usr/local/lib/python3.11/site-packages/pkg_resources \
+           /usr/local/lib/python3.11/site-packages/wheel* \
+           /usr/local/lib/python3.11/site-packages/packaging* \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.11 \
+           /usr/local/bin/wheel; \
+    ! python -c 'import pip' 2>/dev/null
 
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).
 COPY certs/ /tmp/certs/
@@ -371,8 +404,9 @@ EXPOSE 8080
 VOLUME /app/data
 
 # Probe the public sign-in page; /api/health requires an application API key.
+# Python stdlib instead of curl keeps the curl CLI out of the runtime image.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -fsS -o /dev/null http://localhost:8080/admin/login || exit 1
+    CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/admin/login', timeout=4).status == 200 else 1)"]
 
 ENTRYPOINT ["scripts/entrypoint.sh"]
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]

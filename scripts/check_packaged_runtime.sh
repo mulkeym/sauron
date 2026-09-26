@@ -16,12 +16,17 @@ for module in ("src.main", "src.ingestion.emf", "src.ingestion.visio", "src.inge
 for command in ("inkscape", "vsd2xhtml", "rsvg-convert", "pdftoppm", "tesseract"):
     assert shutil.which(command), command
 assert pathlib.Path("/app/.pdf_models_ready").is_file(), "offline models missing"
+# Unused base-image tooling must stay out of the runtime (scanner findings).
+assert shutil.which("curl") is None, "curl CLI should not be in the runtime image"
+system_site = pathlib.Path("/usr/local/lib/python3.11/site-packages")
+leftover = sorted(p.name for p in system_site.iterdir() if p.name.startswith(("pip", "setuptools", "wheel", "pkg_resources")))
+assert not leftover, f"system Python tooling left in image: {leftover}"
 '
 docker run -d --name "$container" --network none \
   -e API_KEYS=release-smoke-key -e JWT_SECRET_KEY=release-smoke-jwt \
   "$image" >/dev/null
 for attempt in $(seq 1 60); do
-  if docker exec "$container" curl -fsS http://127.0.0.1:8080/admin/login >/dev/null 2>&1; then
+  if docker exec "$container" python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/admin/login", timeout=4)' >/dev/null 2>&1; then
     docker exec "$container" python -c '
 import urllib.request, urllib.error
 url="http://127.0.0.1:8080/api/health"

@@ -25,7 +25,7 @@ Then open: http://localhost:{{ .Values.service.api.port }}/admin
 
 Health check:
 
-  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "sauron.fullname" . }} -c api -- curl -sf http://localhost:{{ .Values.api.containerPort }}/api/health
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "sauron.fullname" . }} -c api -- python -c "import urllib.request; urllib.request.urlopen('http://localhost:{{ .Values.api.containerPort }}/admin/login')"
 
 IMPORTANT (air-gapped / Harbor):
   1. Build & push the image to Harbor before install.

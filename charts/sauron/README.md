@@ -169,7 +169,7 @@ kubectl port-forward -n sauron svc/sauron-api 8080:8080
 # open http://localhost:8080/admin
 
 # HTTP readiness (same public sign-in page as the chart's default probes)
-kubectl exec -n sauron deploy/sauron -c api -- curl -fsS -o /dev/null http://localhost:8080/admin/login
+kubectl exec -n sauron deploy/sauron -c api -- python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/admin/login')"
 ```
 
 `/api/health` also remains available with an `X-API-Key` header. Update custom

@@ -1,4 +1,5 @@
-# Security floor pins (High/Critical CVE remediation — 2026-07-25 pip-audit)
+# Security floor pins (High/Critical CVE remediation — 2026-07-25 pip-audit,
+# updated 2026-09-26 for the Cerberus/Harbor remediation hand-off)
 # Use: pip install -r requirements.txt -c constraints-security.txt
 #
 # Auth / crypto
@@ -38,6 +39,15 @@ soupsieve>=2.8.4
 json-repair>=0.60.1
 pyasn1>=0.6.4
 
+# Serialization (transitive; GHSA-6v7p-g79w-8964)
+msgpack>=1.2.1
+
 # Tooling (image hygiene)
-pip>=26.1.2
+# pip: CVE-2025-8869, CVE-2026-13346, CVE-2026-3219, CVE-2026-6357,
+#      CVE-2026-8643, CVE-2026-1703
+# setuptools: CVE-2025-47273, CVE-2026-59890
+# wheel: CVE-2026-24049; jaraco.context: CVE-2026-23949
+pip>=26.2.0
 setuptools>=83.0.0
+wheel>=0.46.2
+jaraco.context>=6.1.0
