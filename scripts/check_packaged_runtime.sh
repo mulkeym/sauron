@@ -24,12 +24,27 @@ leftover = sorted(p.name for p in (system_site.iterdir() if system_site.is_dir()
 assert not leftover, f"system Python tooling left in image: {leftover}"
 assert importlib.util.find_spec("pip") is None, "pip should not be in the runtime venv"
 assert not list((base_lib / "ensurepip").glob("_bundled/*.whl")), "stale ensurepip wheels"
+# Non-root runtime: writable data volume, read-only models and code.
+import os
+assert os.getuid() != 0 and os.getgid() != 0, f"runs as root: {os.getuid()}:{os.getgid()}"
+assert os.access("/app/data", os.W_OK), "/app/data not writable by the app user"
+for path in ("/opt/models/huggingface/hub", "/app/src", "/opt/venv"):
+    assert os.path.isdir(path) and not os.access(path, os.W_OK), f"{path} should be read-only"
+'
+# The offline embedding model (remote code via transformers' module cache)
+# must load as the unprivileged user.
+docker run --rm --network none --entrypoint python "$image" -c '
+import os
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer(os.environ["EMBEDDING_MODEL_NAME"], trust_remote_code=True, device="cpu")
+assert model.encode(["non-root smoke"]).shape[-1] > 0
 '
 docker run -d --name "$container" --network none \
   -e API_KEYS=release-smoke-key -e JWT_SECRET_KEY=release-smoke-jwt \
   "$image" >/dev/null
 for attempt in $(seq 1 60); do
   if docker exec "$container" python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/admin/login", timeout=4)' >/dev/null 2>&1; then
+    test "$(docker exec "$container" id -u)" != 0
     docker exec "$container" python -c '
 import urllib.request, urllib.error
 url="http://127.0.0.1:8080/api/health"

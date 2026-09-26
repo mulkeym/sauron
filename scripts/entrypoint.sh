@@ -3,10 +3,10 @@ set -e
 
 # HF models must be baked at image build (scripts/prefetch_hf_models.py).
 # Force offline so runtime never hits huggingface.co when the bake marker exists.
-export HF_HOME="${HF_HOME:-/root/.cache/huggingface}"
-export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/root/.cache/huggingface/hub}"
-export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-/root/.cache/huggingface/hub}"
-export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-/root/.cache/torch/sentence_transformers}"
+export HF_HOME="${HF_HOME:-/opt/models/huggingface}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/opt/models/huggingface/hub}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-/opt/models/huggingface/hub}"
+export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-/opt/models/sentence_transformers}"
 export TIKTOKEN_CACHE_DIR="${TIKTOKEN_CACHE_DIR:-/app/.cache/tiktoken}"
 
 if [ -f /app/.pdf_models_ready ]; then
@@ -30,6 +30,17 @@ elif [ -f /app/.pdf_models_prefetch_failed ]; then
 else
     echo "WARNING: no HF model bake marker found; runtime may download from Hugging Face."
 fi
+
+# The image runs as an unprivileged user. Volumes created by older (root)
+# images must be re-owned once before the app can write to them.
+if ! touch /app/data/.write-test 2>/dev/null; then
+    echo "ERROR: /app/data is not writable by uid $(id -u)." >&2
+    echo "  Docker Compose: the data-permissions service fixes this automatically;" >&2
+    echo "  otherwise run once: docker run --rm --user 0 -v <volume>:/app/data --entrypoint chown IMAGE -R $(id -u):$(id -g) /app/data" >&2
+    echo "  Kubernetes: set podSecurityContext.fsGroup to $(id -g)." >&2
+    exit 1
+fi
+rm -f /app/data/.write-test
 
 # Seed categories on first startup (if DB is empty)
 if [ ! -f /app/data/.seeded ]; then

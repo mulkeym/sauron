@@ -408,10 +408,10 @@ def main() -> int:
         _configure_verified_huggingface(ca)
 
     # Prefer a stable cache location inside the image
-    os.environ.setdefault("HF_HOME", "/root/.cache/huggingface")
-    os.environ.setdefault("TRANSFORMERS_CACHE", "/root/.cache/huggingface/hub")
-    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/root/.cache/huggingface/hub")
-    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", "/root/.cache/torch/sentence_transformers")
+    os.environ.setdefault("HF_HOME", "/opt/models/huggingface")
+    os.environ.setdefault("TRANSFORMERS_CACHE", "/opt/models/huggingface/hub")
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/opt/models/huggingface/hub")
+    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", "/opt/models/sentence_transformers")
     os.environ["TIKTOKEN_CACHE_DIR"] = (
         os.environ.get("TIKTOKEN_CACHE_DIR") or _TIKTOKEN_CACHE_DEFAULT
     ).strip()

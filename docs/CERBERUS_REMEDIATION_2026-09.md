@@ -34,7 +34,8 @@ only. Wolfi is glibc-based, so every Python wheel installs unchanged.
 What changed:
 
 - All stages build `FROM ${WOLFI_IMAGE}` (default
-  `cgr.dev/chainguard/wolfi-base:latest`; mirror/pin it for air-gapped builds).
+  `cgr.dev/chainguard/wolfi-base`, pinned by digest; bump it periodically and
+  mirror it for air-gapped builds). The runtime stage runs `apk upgrade`.
   Python is Wolfi's `python-3.11`; system packages come from `apk`.
 - Wolfi does not package Inkscape or libvisio-tools, so a `native-tools`
   stage builds them from pinned sources (`docker/native-sources.sha256`):
@@ -57,9 +58,28 @@ Inkscape, the gtkmm stack, librevenge, libvisio and DejaVu releases manually
 and bump the URLs and hashes in the Dockerfile and `docker/native-sources.sha256`
 together. First builds compile for roughly an hour; the CI timeout is 240 min.
 
-Not in the report's scope but still open: Trivy config finding DS-0002
-(container runs as root) and build-arg handling of `HF_TOKEN` (DS-0031) — see
-Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLAN.md).
+## Phase 3: non-root runtime (Trivy DS-0002)
+
+- The image ends with `USER 65532:65532` (Wolfi's standard `nonroot` user,
+  `HOME=/home/nonroot`).
+- Baked models moved from `/root/.cache` to `/opt/models` (`HF_HOME`,
+  `SENTENCE_TRANSFORMERS_HOME`); they, the code and `/opt/venv` stay
+  root-owned and read-only. Only `/app/data`, `/tmp` and `$HOME` are writable.
+- Docker Compose: a one-shot `data-permissions` service (root, no network,
+  only `CHOWN`/`DAC_OVERRIDE`/`FOWNER`) re-owns a volume written by an older
+  root image, then exits; later starts change nothing. The `api` service waits
+  for it, drops all capabilities and sets `no-new-privileges`. Both use
+  `${SAURON_IMAGE:-sauron:local}`.
+- Helm: `runAsUser/runAsGroup/fsGroup: 65532`, `runAsNonRoot`,
+  `fsGroupChangePolicy: OnRootMismatch`, RuntimeDefault seccomp, no privilege
+  escalation, all capabilities dropped.
+- The entrypoint fails fast with instructions if `/app/data` is not writable.
+- `check_packaged_runtime.sh` asserts the non-root uid, writable data,
+  read-only models/code, and loads the embedding model offline as that user.
+  CI runs the regression suite as the unprivileged user too.
+
+Still open (outside the report): build-arg handling of `HF_TOKEN` (DS-0031) —
+see Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLAN.md).
 
 ## Verification, Debian phase (26 Sep 2026, linux/amd64)
 
@@ -85,3 +105,21 @@ Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLAN.md
 - Full test suite inside the image, offline: 1399 passed, 1 skipped (includes
   the EMF rendering tests through Inkscape and the Visio tests through
   `vsd2xhtml`).
+
+## Verification, non-root phase (26 Sep 2026, linux/amd64)
+
+- Trivy 0.74.0: 0 vulnerabilities; `trivy config Dockerfile`: 27 checks,
+  0 failures (DS-0002 root user and DS-0001 untagged base both cleared).
+- `scripts/check_packaged_runtime.sh`: passed, including uid != 0, writable
+  `/app/data`, read-only models/code/venv, and an offline Nomic embedding load
+  as the unprivileged user.
+- Full test suite as uid 65532: 1399 passed, 1 skipped.
+  `test_hung_child_times_out_without_blocking_event_loop` is timing-sensitive:
+  it fails on hosts with coarse timers (an idle 50 ms asyncio sleep measured
+  130-200 ms on one Docker host) regardless of user, and passes on the Proxmox
+  test container.
+- In-place upgrade of a deployment whose volume was written by the root image:
+  `data-permissions` re-owned it once (0 files left with another owner), a
+  second run changed nothing, existing documents remained available, and
+  ingestion, knowledge-graph insertion, cited answers and spreadsheet queries
+  worked as uid 65532.

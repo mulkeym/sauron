@@ -65,6 +65,12 @@ volumes:
     name: YOUR_EXISTING_VOLUME
 ```
 
+The image now runs as the unprivileged uid/gid 65532. On the first
+`docker compose up`, the one-shot `data-permissions` service re-owns an
+existing volume that an older (root) image wrote; nothing else is required.
+If you run the image without Compose, re-own the volume once:
+`docker run --rm --user 0 -v YOUR_VOLUME:/app/data --entrypoint chown IMAGE -R 65532:65532 /app/data`.
+
 Back up the existing data before upgrading. Preserve the existing Compose
 project name when replacing a running deployment; use `-p YOUR_PROJECT`
 with each command below if needed. This keeps Compose managing the existing

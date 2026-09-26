@@ -33,12 +33,39 @@ x-sauron-build: &sauron-build
     HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN:-}}
 
 services:
+  # One-shot: the app runs as uid/gid 65532. Volumes written by older (root)
+  # images are re-owned once; later starts find nothing to change and exit.
+  # Runs as root with only the capabilities chown needs and no network.
+  data-permissions:
+    image: ${SAURON_IMAGE:-sauron:local}
+    user: "0:0"
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        if find /app/data \( ! -user 65532 -o ! -group 65532 \) -print -quit | grep -q .;
+        then echo "Re-owning /app/data for uid 65532"; chown -R 65532:65532 /app/data;
+        fi
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - app_data:/app/data
+    restart: "no"
+
   # SAURON API + Admin UI + native MCP Streamable HTTP endpoint
   api:
-    image: sauron:local
+    image: ${SAURON_IMAGE:-sauron:local}
     # Reap OCR/rendering grandchildren when an extraction worker is killed.
     init: true
     build: *sauron-build
+    depends_on:
+      data-permissions:
+        condition: service_completed_successfully
+    # Non-root (image USER 65532) with no Linux capabilities.
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -1,8 +1,10 @@
 # Base image: Wolfi (glibc, rolling, continuously patched). Debian's slim
 # images carried ~300 Critical/High/Medium OS findings with no fix available;
 # the same package set on Wolfi scans clean. Override with a digest-pinned
-# mirror copy for reproducible/air-gapped builds.
-ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base:latest
+# mirror copy for reproducible/air-gapped builds. Pinned by digest (bump it
+# periodically). The runtime stage runs `apk upgrade`, so every shipped package
+# comes from the current Wolfi repository with the latest security fixes.
+ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:08df5982c3d27e70a4ce1607e3bb9af09d746f8722cf135a7694afef879fc5a2
 
 # Stage 0: native document renderers that Wolfi does not package:
 #   - Inkscape 1.4.x (EMF -> PNG), with the gtkmm-3 C++ binding stack it needs
@@ -283,7 +285,7 @@ WORKDIR /app
 # The gtk-3 / gsl / gc / ... libraries are the shared-library dependencies of
 # the Inkscape and libvisio builds copied from the native-tools stage.
 # No curl: the health check uses Python's stdlib.
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && apk add --no-cache \
       python-3.11 bash ca-certificates \
       tesseract tesseract-eng libmagic poppler-utils rsvg-convert \
       mesa-gl glib fontconfig font-liberation libstdc++
@@ -395,15 +397,15 @@ ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     RERANK_MODEL=${RERANK_MODEL} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
-    HF_HOME=/root/.cache/huggingface \
-    TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
-    HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \
-    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers \
+    HF_HOME=/opt/models/huggingface \
+    TRANSFORMERS_CACHE=/opt/models/huggingface/hub \
+    HUGGINGFACE_HUB_CACHE=/opt/models/huggingface/hub \
+    SENTENCE_TRANSFORMERS_HOME=/opt/models/sentence_transformers \
     TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken
 
 # Optional pre-seeded HF hub cache from build context (for true air-gap builds).
 # Create hf-cache/ on the host with hub/ blobs from a machine that can reach HF.
-COPY hf-cache/ /root/.cache/huggingface/
+COPY hf-cache/ /opt/models/huggingface/
 
 # Optional pre-seeded tiktoken cache for builds that cannot reach OpenAI blob
 # storage. On connected builds scripts/prefetch_hf_models.py fills this path.
@@ -434,8 +436,8 @@ RUN set -eu; \
     if [ "${SAURON_PREFETCH_ALLOW_FAIL}" != "1" ] && [ "${SKIP_HF_MODEL_PREFETCH}" != "1" ] && [ "${SKIP_PDF_MODEL_PREFETCH}" != "1" ]; then \
       test -f /app/.pdf_models_ready; \
     fi; \
-    mkdir -p /opt/model-export/root /opt/model-export/app; \
-    if [ -d /root/.cache ]; then cp -al /root/.cache /opt/model-export/root/; fi; \
+    mkdir -p /opt/model-export/opt /opt/model-export/app; \
+    if [ -d /opt/models ]; then cp -al /opt/models /opt/model-export/opt/; fi; \
     if [ -d /app/.cache ]; then cp -al /app/.cache /opt/model-export/app/; fi; \
     for marker in /app/.pdf_models_ready /app/.pdf_models_prefetch_failed; do \
       if [ -f "${marker}" ]; then cp -a "${marker}" /opt/model-export/app/; fi; \
@@ -495,8 +497,17 @@ ARG EMBEDDING_MODEL_NAME=nomic-ai/nomic-embed-text-v1
 ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 
 # Create data directory and prove the selected prefetch policy left a marker.
+# Run as Wolfi's standard unprivileged user. Models, code and caches stay
+# root-owned and read-only; only /app/data (the volume) and the user's home
+# (library scratch such as matplotlib's font cache) are writable.
+# New named volumes inherit this ownership; existing root-owned volumes are
+# re-owned once by the compose `data-permissions` service (or Kubernetes
+# fsGroup).
+ARG APP_UID=65532
+ARG APP_GID=65532
 RUN set -eu; \
-    mkdir -p /app/data/lancedb; \
+    mkdir -p /app/data/lancedb /home/nonroot; \
+    chown -R "${APP_UID}:${APP_GID}" /app/data /home/nonroot; \
     test -f /app/.pdf_models_ready -o -f /app/.pdf_models_prefetch_failed
 
 # HF cache paths + offline by default (models baked above). Entrypoint reinforces
@@ -511,11 +522,12 @@ ENV LANCEDB_PATH=/app/data/lancedb \
     HF_DATASETS_OFFLINE=1 \
     EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME} \
     RERANK_MODEL=${RERANK_MODEL} \
-    HF_HOME=/root/.cache/huggingface \
-    TRANSFORMERS_CACHE=/root/.cache/huggingface/hub \
-    HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub \
-    SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers \
-    TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken
+    HF_HOME=/opt/models/huggingface \
+    TRANSFORMERS_CACHE=/opt/models/huggingface/hub \
+    HUGGINGFACE_HUB_CACHE=/opt/models/huggingface/hub \
+    SENTENCE_TRANSFORMERS_HOME=/opt/models/sentence_transformers \
+    TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken \
+    HOME=/home/nonroot
 
 EXPOSE 8080
 VOLUME /app/data
@@ -524,6 +536,8 @@ VOLUME /app/data
 # Python stdlib instead of curl keeps the curl CLI out of the runtime image.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/admin/login', timeout=4).status == 200 else 1)"]
+
+USER 65532:65532
 
 ENTRYPOINT ["scripts/entrypoint.sh"]
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]

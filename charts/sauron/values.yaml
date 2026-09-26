@@ -43,13 +43,25 @@ replicaCount: 1
 podAnnotations: {}
 podLabels: {}
 
+# The image runs as uid/gid 65532. fsGroup makes the data volume (including
+# one written by an older root image) group-writable for that user; only
+# re-applied when the volume root does not already match.
 podSecurityContext:
-  fsGroup: 0
+  runAsUser: 65532
+  runAsGroup: 65532
+  runAsNonRoot: true
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
 
-securityContext: {}
-  # runAsNonRoot: true
-  # runAsUser: 1000
-  # readOnlyRootFilesystem: false
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  # Writes go to /app/data (volume), /tmp and $HOME; a read-only root
+  # filesystem additionally needs emptyDir mounts for /tmp and /home/nonroot.
+  readOnlyRootFilesystem: false
 
 ## API + Admin UI + native MCP Streamable HTTP (uvicorn on 8080)
 api:

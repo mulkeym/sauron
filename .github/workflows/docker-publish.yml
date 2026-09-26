@@ -147,12 +147,13 @@ jobs:
 
       - name: Run regression tests against packaged source
         run: |
+          # Runs as the image's unprivileged user; /app/tests is a read-only mount.
           docker run --rm --network none --entrypoint bash \
-            -v "$GITHUB_WORKSPACE:/release:ro" sauron-ci:checked -euc '
-              mkdir -p /tmp/release-tests /app/tests
-              cp -a /release/tests/. /app/tests/
+            -v "$GITHUB_WORKSPACE:/release:ro" \
+            -v "$GITHUB_WORKSPACE/tests:/app/tests:ro" sauron-ci:checked -euc '
+              mkdir -p /tmp/release-tests
               cd /tmp/release-tests
-              cp -a /release/tests /release/test_fixtures /release/docs /release/.github .
+              cp -R /release/tests /release/test_fixtures /release/docs /release/.github .
               cp /release/Dockerfile /release/.env.example /release/requirements.txt /release/constraints-security.txt .
               ln -s /app/scripts scripts
               ln -s /app/src src
