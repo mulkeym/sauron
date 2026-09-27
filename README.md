@@ -491,7 +491,7 @@ runtime never calls Hugging Face:
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` | App reranker |
 | `cross-encoder/ms-marco-TinyBERT-L-6` | LanceDB CrossEncoder default |
 | `unstructuredio/yolo_x_layout` | PDF hi_res layout (YOLOX) |
-| `microsoft/table-transformer-structure-recognition*` | PDF tables |
+| `microsoft/table-transformer-structure-recognition` | PDF tables |
 
 **Artifactory / corporate HF proxy** (recommended on work networks): set in `.env`
 before `docker compose build`:

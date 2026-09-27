@@ -42,8 +42,9 @@ _SNAPSHOT_REPOS: list[str] = [
     "cross-encoder/ms-marco-TinyBERT-L-6",
     # PDF hi_res layout + tables
     "unstructuredio/yolo_x_layout",
+    # unstructured-inference's DEFAULT_MODEL. The v1.1-all variant is not used
+    # at runtime and no longer loads with current transformers.
     "microsoft/table-transformer-structure-recognition",
-    "microsoft/table-transformer-structure-recognition-v1.1-all",
 ]
 
 # sentence-transformers style ids loaded via library (populates ST + hub caches)
@@ -310,10 +311,7 @@ def _load_table_transformers(attempts: int) -> None:
         print(f"prefetch_hf_models: transformers table models skipped: {e}", flush=True)
         return
 
-    for repo in (
-        "microsoft/table-transformer-structure-recognition",
-        "microsoft/table-transformer-structure-recognition-v1.1-all",
-    ):
+    for repo in ("microsoft/table-transformer-structure-recognition",):
         def _one(r=repo) -> None:
             _ = DetrImageProcessor.from_pretrained(r)
             _ = TableTransformerForObjectDetection.from_pretrained(r)
