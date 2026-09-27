@@ -1,7 +1,7 @@
 # Container CVE Remediation Plan
 
 Status: Implemented September 2026 (Phases 1-4 and the zero-Critical Wolfi
-runtime path of Phase 5; `HF_TOKEN` build-arg handling remains). See
+runtime path of Phase 5, including BuildKit-secret handling of `HF_TOKEN`). See
 [CERBERUS_REMEDIATION_2026-09.md](CERBERUS_REMEDIATION_2026-09.md).
 Review date: 2026-08-05
 Scanner: Trivy 0.73.0

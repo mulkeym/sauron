@@ -431,7 +431,7 @@ See [the answer-profile guide](docs/answer-profiles.md) for the workflow and lim
 # Clone and setup
 git clone https://github.com/mulkeym/sauron.git
 cd sauron
-python3.11 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -503,7 +503,11 @@ SAURON_PREFETCH_INSECURE_SSL=0   # enterprise CA verification stays enabled
 ```
 
 `huggingface_hub` honors `HF_ENDPOINT` + `HF_TOKEN` during the bake step. After
-models are in the image, runtime stays offline (`HF_HUB_OFFLINE=1`).
+models are in the image, runtime stays offline (`HF_HUB_OFFLINE=1`) and needs no
+token. Compose passes `HF_TOKEN` (from `.env` or the shell) to the build as a
+BuildKit secret, so it is never stored in image layers, history or provenance.
+Without Compose: `docker buildx build --secret id=hf_token,env=HF_TOKEN .`
+In CI, set the optional `HF_TOKEN` repository secret.
 
 If the hub is fully unreachable, pre-seed `hf-cache/` on a connected machine:
 
@@ -529,8 +533,14 @@ and extraction behavior; it does not reduce the image's total size.
 ### Container image and security
 
 - **Base:** [Wolfi](https://github.com/wolfi-dev) (`cgr.dev/chainguard/wolfi-base`,
-  glibc, continuously patched), pinned by digest via the `WOLFI_IMAGE` build arg;
-  the runtime stage runs `apk upgrade`. Mirror the base image for air-gapped builds.
+  glibc, continuously patched) with Python 3.13, pinned by digest via the
+  `WOLFI_IMAGE` build arg; the runtime stage runs `apk upgrade`. Mirror the base
+  image for air-gapped builds.
+- **Source-built Python packages:** `pikepdf` and OpenCV are compiled against
+  Wolfi's patched libraries (`docker/source-built-wheels.txt`), because their
+  PyPI wheels bundle outdated native copies (libjpeg-turbo 1.5.3; OpenSSL 1.1.1k,
+  FFmpeg, Qt 5). OpenCV is headless, with no video backends or DNN module; it
+  replaces the `opencv-python` wheel that `unstructured-inference` requests.
 - **Native renderers:** Wolfi does not package Inkscape (EMF) or libvisio
   (`vsd2xhtml`), so the Dockerfile's `native-tools` stage builds them, the
   gtkmm-3 stack and DejaVu fonts from SHA-256-pinned sources
@@ -545,8 +555,10 @@ and extraction behavior; it does not reduce the image's total size.
   volume once:
   `docker run --rm --user 0 -v VOLUME:/app/data --entrypoint chown IMAGE -R 65532:65532 /app/data`.
   The Helm chart sets the matching non-root security context and `fsGroup`.
-- **Vulnerability gate:** CI stores a full Trivy report and refuses to publish
-  an image with any Critical/High finding that has a fix available. See
+- **Vulnerability gate:** CI scans with Trivy and Grype (which also fingerprints
+  native libraries inside Python wheels), stores both full reports, and refuses
+  to publish an image with any Critical/High finding that has a fix available.
+  The runtime check also fails on outdated libraries bundled in wheels. See
   [docs/CERBERUS_REMEDIATION_2026-09.md](docs/CERBERUS_REMEDIATION_2026-09.md).
 
 Kubernetes / Run:ai: use the Helm chart under [`charts/sauron`](charts/sauron) (defaults to the GHCR image).
@@ -632,8 +644,8 @@ options.
 For secure environments, install with security floors and a frozen lock:
 
 ```bash
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -U 'pip>=26.1.2' 'setuptools>=83.0.0' wheel
+python3.13 -m venv .venv && source .venv/bin/activate
+pip install -U 'pip>=26.2.0' 'setuptools>=83.0.0' 'wheel>=0.46.2'
 # Prefer lock for reproducible builds:
 pip install -r requirements.lock.txt
 # Or resolve latest within security floors:

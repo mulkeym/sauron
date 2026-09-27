@@ -1,0 +1,6 @@
+# Python packages built from source against Wolfi's patched system libraries,
+# instead of PyPI wheels that bundle outdated copies (pikepdf: libjpeg-turbo
+# 1.5.3; opencv-python: OpenSSL 1.1.1k, FFmpeg, Qt 5, OpenBLAS 0.3.15).
+# Pinned by sdist SHA-256; bump version and hash together.
+pikepdf==10.14.0 --hash=sha256:141d6416eac4118402415cc7132478e36d3cabba145c9703f46452480d568c82
+opencv-python-headless==5.0.0.93 --hash=sha256:b82f9831daab90b725c7c1ee1b36cb5732c367096ac76d119e64e14eb70d5f3c

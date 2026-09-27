@@ -11,7 +11,7 @@ clearing 55 findings (52 unique IDs), plus 410 findings with no fix.
 | perl-base, gzip, libc6/libc-bin, libpcre2-8-0, libsqlite3-0 (Critical/High/Medium) | `apt-get upgrade` in builder and runtime stages installs the Debian 13 security updates (`+deb13u*` versions in the report or later). Base pinned to `python:3.11-slim-trixie` (`PYTHON_IMAGE` build arg). |
 | pip 24.0, setuptools 79.0.1, vendored jaraco.context 5.3.0 and wheel 0.45.1 (High/Medium) | These live in the base image's system Python, which Sauron never uses. The runtime stage removes system pip/setuptools/wheel and the stale `ensurepip` bundled wheels. |
 | setuptools 70.3.0, msgpack 1.1.2 (High) — no file path | Come from `pip/_vendor/vendor.txt` inside pip itself (still present in pip 26.2.1). pip is uninstalled from `/opt/venv` after the build; the runtime never installs packages. `msgpack>=1.2.1`, `wheel>=0.46.2`, `jaraco.context>=6.1.0`, `pip>=26.2.0` floors added to `constraints-security.txt`; constraints now also apply to the CPU torch install. |
-| libjpeg-turbo 1.5.3 (el8 RPM, High) | Not present in images built from this repository (Debian ships `libjpeg62-turbo` 2.1.5). Likely an attribution artifact of the Harbor/BuildKit SBOM for that digest; confirm with the next Cerberus import. |
+| libjpeg-turbo 1.5.3 (el8 RPM, High) | **Real.** An earlier revision of this document called it a likely SBOM artifact; that was wrong. It is the copy bundled inside the `pikepdf` PyPI wheel (`pikepdf.libs/libjpeg…so.62.2.0`, built on an Enterprise Linux 8 manylinux base), invisible to Trivy. Fixed in Phase 4: pikepdf is now built from source against Wolfi's libjpeg-turbo. |
 | curl (no fix, High/Medium) | curl CLI removed; Docker health check and `scripts/check_packaged_runtime.sh` use Python's stdlib. `libcurl` remains because poppler and tesseract depend on it, so the libcurl findings remain. |
 
 Related fix found during verification: SQLAlchemy 2.1 no longer installs
@@ -123,3 +123,73 @@ see Phase 2 of [CONTAINER_CVE_REMEDIATION_PLAN.md](CONTAINER_CVE_REMEDIATION_PLA
   second run changed nothing, existing documents remained available, and
   ingestion, knowledge-graph insertion, cited answers and spreadsheet queries
   worked as uid 65532.
+
+## Phase 4: libraries hidden inside Python wheels, second scanner
+
+The Wolfi image's "0 vulnerabilities" came from Trivy, which reads package
+metadata and does not inspect native libraries bundled inside Python wheels
+(`*.libs/`). An inventory and a second scanner (Grype, which fingerprints
+binaries) found real, unpatched code:
+
+| Wheel | Bundled | Notes |
+|---|---|---|
+| `pikepdf` 10.13/10.14 | libjpeg-turbo **1.5.3** | The report's `libjpeg-turbo 1.5.3-14.el8_10` item (manylinux on Enterprise Linux 8). |
+| `opencv-python` 5.0.0.93 | OpenSSL **1.1.1k** (EOL), FFmpeg 8.1.1 (16 High in Grype), Qt 5.15, X11/xcb, libvpx, libaom, OpenBLAS 0.3.15 | Pulled in by `unstructured-inference`. The headless wheel bundles the same OpenSSL and FFmpeg. |
+
+Grype also matched Wolfi's `python-3.11` (1 High, 7 Medium) and `glibc` (4
+Medium) against NVD by version.
+
+What changed:
+
+- **pikepdf** and **OpenCV** are built from SHA-256-pinned sdists
+  (`docker/source-built-wheels.txt`) against Wolfi's qpdf, libjpeg-turbo,
+  libpng, libtiff, libwebp and zlib. OpenCV is headless, limited to core,
+  imgproc, imgcodecs and videoio (plus features/flann/geometry/calib, which its
+  Python stub generator requires), with FFmpeg/GStreamer/V4L, DNN (bundled
+  protobuf), IPP, OpenJPEG, Qt and GTK off. It replaces the `opencv-python`
+  wheel that `unstructured-inference` requests by name. The builder asserts no
+  `opencv_python.libs`/`pikepdf.libs` remain and that OpenCV has no video
+  backends.
+- **Python 3.11 → 3.13** (Wolfi `python-3.13`); all dependencies publish 3.13
+  wheels.
+- The builder records the Wolfi packages that the venv's extensions link
+  against; the runtime installs exactly those (`mesa-gl`/`glib` are no longer
+  needed for OpenCV), and the runtime stage fails the build if any shipped
+  shared object has an unresolved library.
+- **CI** runs Grype (`anchore/grype:v0.119.0`) alongside Trivy: both full JSON
+  reports are uploaded, and publishing is blocked on any Critical/High finding
+  with a fix in either scanner. `check_packaged_runtime.sh` fails on OpenSSL 1.x,
+  FFmpeg, Qt 5 or libjpeg-turbo 1.x bundled in any wheel.
+- **Hugging Face token:** now a BuildKit secret (`id=hf_token`) used only by the
+  model download; the `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` build args are gone.
+  Compose reads `HF_TOKEN` from `.env` or the shell; CI uses the optional
+  `HF_TOKEN` repository secret. Verified: the token reaches the build step and
+  never appears in `docker history`.
+- **Builder install chain:** `pip install … && pip uninstall hf-xet … || true`
+  silently ignored a failed requirements install; the steps now run under
+  `set -e` so any failure stops the build.
+- Unused `microsoft/table-transformer-structure-recognition-v1.1-all` model
+  removed (~110 MB; it failed to load and was never used).
+
+Found while testing (application bug, pre-existing): relevance feedback logged
+from the admin Playground stored a single NaN instead of the 768-value query
+embedding whenever the query cache skipped embedding, and those rows then made
+every feedback lookup fail, so feedback boosting never took effect. Feedback
+now embeds the question when no vector is supplied, and malformed stored
+vectors are ignored (`tests/test_retrieval/test_feedback.py`).
+
+Remaining: Grype still reports NVD version matches with no fix available
+against Wolfi's `glibc` 2.44 and `python-3.13` (see verification); Trivy, which
+uses Wolfi's own security feed, reports none. The source-built components
+(Inkscape, gtkmm, libvisio, pikepdf, OpenCV) must be tracked manually.
+
+## Verification, Phase 4 (27 Sep 2026, linux/amd64, built on the 103 Docker host)
+
+- `check_packaged_runtime.sh`: passed (including the bundled-library guard).
+- Trivy 0.74.0: 0 vulnerabilities; CI gate passes. `trivy config`: 0 failures.
+- Grype v0.119.0: 7 Medium, 1 Low, all NVD version matches with no fix available (4 on `python-3.13`, 4 on `glibc` 2.44); nothing from wheels; CI gate (`--only-fixed
+  --fail-on high`) passes.
+- Full test suite as uid 65532 on Python 3.13: 1401 passed, 1 skipped.
+- End to end on a fresh instance: a scanned (image-only) PDF of the pay-table
+  fixture answered O-2/Over4 = 6042.90 and E-3/Over4 = 3081.00, matching the
+  source; memo and spreadsheet queries answered correctly with citations.

@@ -1,4 +1,5 @@
 """Relevance feedback: log query→document signals, boost future queries."""
+import asyncio
 import hashlib
 import logging
 import time
@@ -23,7 +24,9 @@ def _deserialize_vector(blob: bytes) -> np.ndarray:
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    if a.size == 0 or b.size == 0:
+    # Rows logged before the query vector was guaranteed hold a single NaN;
+    # mismatched or non-finite vectors carry no similarity signal.
+    if a.size == 0 or a.shape != b.shape or not (np.isfinite(a).all() and np.isfinite(b).all()):
         return 0.0
     dot = np.dot(a, b)
     norm = np.linalg.norm(a) * np.linalg.norm(b)
@@ -33,6 +36,16 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def _query_hash(text: str) -> str:
     normalized = " ".join(text.lower().split())
     return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+async def _query_vector_blob(query_text: str, query_vector) -> bytes | None:
+    """Serialized query embedding; embeds the question when the caller has none."""
+    if query_vector is None or len(query_vector) == 0:
+        from src.ingestion import embedder
+        query_vector = await asyncio.to_thread(embedder.embed_query, query_text)
+    if query_vector is None or len(query_vector) == 0:
+        return None
+    return _serialize_vector(query_vector)
 
 
 async def log_feedback(
@@ -54,7 +67,13 @@ async def log_feedback(
     doc_filenames = doc_filenames or {}
     doc_scores = doc_scores or {}
     qhash = _query_hash(query_text)
-    vec_blob = _serialize_vector(query_vector)
+    try:
+        vec_blob = await _query_vector_blob(query_text, query_vector)
+    except Exception as e:
+        logger.warning(f"Feedback not logged; query embedding failed: {e}")
+        return
+    if vec_blob is None:
+        return
 
     try:
         from src.api.routes_ingest import get_metadata_store

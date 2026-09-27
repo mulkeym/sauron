@@ -121,8 +121,12 @@ WORKDIR /app
 
 # ca-certificates needed so optional custom roots can be merged into the
 # system trust store before pip hits HTTPS (public or internal).
-# build-base/python-dev only for any sdist without a wheel; builder-only.
-RUN apk add --no-cache python-3.11 python-3.11-dev build-base bash ca-certificates
+# build-base/python-dev and the -dev libraries build pikepdf and OpenCV from
+# source against Wolfi's patched libraries (see docker/source-built-wheels.txt);
+# builder-only.
+RUN apk add --no-cache python-3.13 python-3.13-dev build-base bash ca-certificates \
+      cmake samurai pkgconf qpdf-dev libjpeg-turbo-dev libpng-dev tiff-dev \
+      libwebp-dev zlib-dev
 
 # Optional custom roots: drop certs/Trusted_Root_CAs.pem in the build context.
 # Primary use case: corporate MITM / TLS inspection proxies that re-sign
@@ -188,11 +192,35 @@ RUN set -eu; \
 
 # Isolated venv so CPU torch is visible to the second pip install ( --prefix
 # installs are not considered "installed" by a later bare pip resolve).
-RUN python3.11 -m venv /opt/venv \
+RUN python3.13 -m venv /opt/venv \
  && mkdir -p /opt/venv/pip \
  && cp /etc/pip.conf /opt/venv/pip/pip.conf
 ENV PATH="/opt/venv/bin:$PATH" \
     PIP_CONFIG_FILE=/etc/pip.conf
+
+# pikepdf and OpenCV from source. Their PyPI wheels bundle outdated native
+# libraries that scanners cannot see (pikepdf: libjpeg-turbo 1.5.3; OpenCV:
+# OpenSSL 1.1.1k, FFmpeg, Qt 5, X11, OpenBLAS 0.3.15). These builds link Wolfi's
+# qpdf/libjpeg-turbo/libpng/libtiff/libwebp/zlib instead (no JPEG 2000 in
+# OpenCV; Pillow decodes images, OpenCV only processes arrays). OpenCV is
+# limited to the modules Sauron's dependencies use (core, imgproc, imgcodecs,
+# videoio without any capture backend; features/flann/geometry/calib only
+# because OpenCV's Python typing-stub generator references them). No DNN
+# (bundled protobuf), GUI, IPP or other third-party downloads.
+COPY docker/source-built-wheels.txt /tmp/source-built-wheels.txt
+RUN set -eu; \
+    export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" MAKEFLAGS="-j$(nproc)" ENABLE_HEADLESS=1; \
+    export CMAKE_ARGS="-DBUILD_LIST=core,imgproc,imgcodecs,videoio,features,flann,geometry,calib,python3 \
+      -DWITH_FFMPEG=OFF -DWITH_GSTREAMER=OFF -DWITH_V4L=OFF -DWITH_1394=OFF \
+      -DWITH_IPP=OFF -DWITH_ADE=OFF -DWITH_PROTOBUF=OFF -DWITH_OPENEXR=OFF \
+      -DWITH_JASPER=OFF -DWITH_OPENJPEG=OFF -DWITH_AVIF=OFF -DWITH_OPENCL=OFF -DWITH_LAPACK=OFF \
+      -DWITH_EIGEN=OFF -DWITH_QT=OFF -DWITH_GTK=OFF \
+      -DBUILD_JPEG=OFF -DBUILD_PNG=OFF -DBUILD_TIFF=OFF -DBUILD_WEBP=OFF \
+      -DBUILD_OPENJPEG=OFF -DBUILD_ZLIB=OFF -DBUILD_TESTS=OFF \
+      -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOCS=OFF"; \
+    pip wheel --no-cache-dir --no-deps --no-binary pikepdf,opencv-python-headless \
+      --require-hashes -r /tmp/source-built-wheels.txt -w /opt/source-wheels; \
+    ls -l /opt/source-wheels
 
 COPY requirements.txt constraints-security.txt ./
 
@@ -220,20 +248,29 @@ RUN set -eu; \
     pip install --no-cache-dir --upgrade 'pip>=26.2.0' 'setuptools>=83.0.0' 'wheel>=0.46.2' \
       -c constraints-security.txt \
       --cert /etc/ssl/certs/ca-certificates.crt \
-      ${TH_ARGS} ${IDX_ARGS} \
- && pip install --no-cache-dir \
+      ${TH_ARGS} ${IDX_ARGS}; \
+    pip install --no-cache-dir \
       torch torchvision \
       -c constraints-security.txt \
       --index-url "${TORCH_CPU_INDEX}" \
       --cert /etc/ssl/certs/ca-certificates.crt \
-      ${TH_ARGS} \
- && pip install --no-cache-dir \
+      ${TH_ARGS}; \
+    pip install --no-cache-dir /opt/source-wheels/*.whl \
+      -c constraints-security.txt \
+      --cert /etc/ssl/certs/ca-certificates.crt \
+      ${TH_ARGS} ${IDX_ARGS}; \
+    pip install --no-cache-dir \
       -r requirements.txt \
       -c constraints-security.txt \
       --cert /etc/ssl/certs/ca-certificates.crt \
-      ${TH_ARGS} ${IDX_ARGS} \
- && pip uninstall -y hf-xet hf_xet 2>/dev/null || true \
- && python - <<'PY'
+      ${TH_ARGS} ${IDX_ARGS}; \
+    # unstructured-inference depends on opencv-python by name; replace that
+    # bundled-library wheel with the source-built headless OpenCV (same cv2).
+    pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true; \
+    pip install --no-cache-dir --no-deps --force-reinstall /opt/source-wheels/opencv_python_headless-*.whl; \
+    pip uninstall -y hf-xet hf_xet >/dev/null 2>&1 || true; \
+    python - <<'PY'
+import importlib.metadata as md
 import pathlib
 import torch
 
@@ -252,7 +289,34 @@ assert "+cpu" in torch.__version__ or not torch.cuda.is_available(), (
     f"unexpected torch build: {torch.__version__}"
 )
 print("OK: CPU-only torch (no nvidia-* packages)")
+
+# Source-built wheels are the ones installed, with no bundled native copies.
+import cv2
+import pikepdf
+for name in ("opencv-python", "opencv-contrib-python"):
+    try:
+        md.distribution(name)
+    except md.PackageNotFoundError:
+        continue
+    raise AssertionError(f"{name} (bundled FFmpeg/OpenSSL/Qt) is installed")
+for libs in ("opencv_python.libs", "opencv_python_headless.libs", "pikepdf.libs"):
+    assert not (site / libs).exists(), f"bundled native libraries present: {libs}"
+info = cv2.getBuildInformation()
+video_io = [l for l in info.splitlines() if l.strip().startswith(("FFMPEG:", "GStreamer:", "v4l/v4l2:"))]
+assert all(l.rstrip().endswith("NO") for l in video_io), video_io
+print(f"OK: cv2 {cv2.__version__} (no video backends), pikepdf {pikepdf.__version__} qpdf {pikepdf.__libqpdf_version__}")
 PY
+
+# Record the Wolfi packages owning the shared libraries the venv's extensions
+# link against (the source-built wheels link system libraries); runtime-base
+# installs exactly those packages.
+RUN set -eu; \
+    LD=/usr/lib/ld-linux-x86-64.so.2; \
+    find /opt/venv -type f -name '*.so*' | while read -r f; do "$LD" --list "$f" 2>/dev/null || true; done \
+      | awk '/=> \/usr\/lib\//{print $3}' | sort -u | while read -r lib; do \
+          apk info -q --who-owns "$(readlink -f "$lib")" 2>/dev/null | sed -E 's/.* is owned by //'; \
+        done | sed -E 's/-[0-9][^-]*-r[0-9]+$//' | grep -vE '^(glibc|ld-linux)' | sort -u > /opt/venv-runtime-deps.txt; \
+    cat /opt/venv-runtime-deps.txt | tr '\n' ' '; echo
 
 # Merge OS CA bundle (incl. MITM roots) into certifi so huggingface_hub /
 # requests / urllib3 trust the same roots as the system store.
@@ -280,21 +344,23 @@ FROM ${WOLFI_IMAGE} AS runtime-base
 WORKDIR /app
 
 # System dependencies for document parsing.
-# mesa-gl + glib are required by OpenCV (cv2), which unstructured hi_res
-# imports for scanned-PDF OCR layout/table detection.
-# The gtk-3 / gsl / gc / ... libraries are the shared-library dependencies of
-# the Inkscape and libvisio builds copied from the native-tools stage.
+# Shared libraries needed by the Inkscape/libvisio builds (native-tools stage)
+# and by the source-built OpenCV/pikepdf wheels (builder stage) are installed
+# below from the sonames those stages recorded; the runtime stage then fails
+# the build if any shipped shared object has an unresolved library.
 # No curl: the health check uses Python's stdlib.
 RUN apk upgrade --no-cache && apk add --no-cache \
-      python-3.11 bash ca-certificates \
+      python-3.13 bash ca-certificates \
       tesseract tesseract-eng libmagic poppler-utils rsvg-convert \
-      mesa-gl glib fontconfig font-liberation libstdc++
+      fontconfig font-liberation libstdc++
 
 # Inkscape (EMF rendering), vsd2xhtml (Visio rendering) and DejaVu fonts,
 # built/pinned in the native-tools stage, plus the shared libraries they link
 # (recorded as apk `so:` names at build time so they track Wolfi versions).
 COPY --from=native-tools /opt/native-runtime-deps.txt /tmp/native-runtime-deps.txt
-RUN apk add --no-cache $(cat /tmp/native-runtime-deps.txt) && rm /tmp/native-runtime-deps.txt
+COPY --from=builder /opt/venv-runtime-deps.txt /tmp/venv-runtime-deps.txt
+RUN apk add --no-cache $(cat /tmp/native-runtime-deps.txt /tmp/venv-runtime-deps.txt | sort -u) \
+ && rm /tmp/native-runtime-deps.txt /tmp/venv-runtime-deps.txt
 COPY --from=native-tools /opt/inkscape /opt/inkscape
 COPY --from=native-tools /opt/libvisio /opt/libvisio
 COPY --from=native-tools /opt/fonts/dejavu /usr/share/fonts/dejavu
@@ -310,14 +376,14 @@ RUN set -eu; \
 # The application runs from /opt/venv (secured pip/setuptools live there).
 # Remove the OS Python's bundled tooling, which the runtime never uses.
 RUN set -eu; \
-    rm -rf /usr/lib/python3.11/site-packages/pip* \
-           /usr/lib/python3.11/site-packages/setuptools* \
-           /usr/lib/python3.11/site-packages/_distutils_hack \
-           /usr/lib/python3.11/site-packages/distutils-precedence.pth \
-           /usr/lib/python3.11/site-packages/pkg_resources \
-           /usr/lib/python3.11/site-packages/wheel* \
-           /usr/lib/python3.11/ensurepip/_bundled/*.whl \
-           /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.11; \
+    rm -rf /usr/lib/python3.13/site-packages/pip* \
+           /usr/lib/python3.13/site-packages/setuptools* \
+           /usr/lib/python3.13/site-packages/_distutils_hack \
+           /usr/lib/python3.13/site-packages/distutils-precedence.pth \
+           /usr/lib/python3.13/site-packages/pkg_resources \
+           /usr/lib/python3.13/site-packages/wheel* \
+           /usr/lib/python3.13/ensurepip/_bundled/*.whl \
+           /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.13; \
     ! python3 -c 'import pip' 2>/dev/null
 
 # Same optional custom roots as the builder (outbound LLM/embed HTTPS, etc.).
@@ -387,8 +453,9 @@ ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 # Example Artifactory remote:
 #   HF_ENDPOINT=https://artifactory.example.com/artifactory/api/huggingfaceml/huggingface-remote
 ARG HF_ENDPOINT=
-ARG HF_TOKEN=
-ARG HUGGING_FACE_HUB_TOKEN=
+# Optional Hugging Face token for the model download only: pass it as a
+# BuildKit secret (id=hf_token), never a build arg, so it is not recorded in
+# image history, provenance or layers. Not needed at runtime (models are baked).
 ENV SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} \
     SKIP_PDF_MODEL_PREFETCH=${SKIP_PDF_MODEL_PREFETCH} \
     SKIP_HF_MODEL_PREFETCH=${SKIP_HF_MODEL_PREFETCH} \
@@ -412,12 +479,13 @@ COPY hf-cache/ /opt/models/huggingface/
 COPY tiktoken-cache/ /app/.cache/tiktoken/
 
 COPY tests/fixtures/pdf/tiny_smoke.pdf tests/fixtures/pdf/tiny_smoke.pdf
-# Pass HF_ENDPOINT / token only on this RUN (bake). Prefer Artifactory remote URL
-# when public huggingface.co is blocked or slow. Token is not written into final ENV.
+# HF_ENDPOINT and the hf_token secret apply only to this RUN (bake). Prefer an
+# Artifactory remote URL when public huggingface.co is blocked or slow.
 # Do not export empty HF_ENDPOINT= — hub treats that as a blank base URL and fails.
 # Cache partitioning stays in this RUN so the export trees can hard-link the
 # freshly downloaded files instead of copying them in the intermediate stage.
-RUN set -eu; \
+RUN --mount=type=secret,id=hf_token \
+    set -eu; \
     echo "build SAURON_PREFETCH_INSECURE_SSL=${SAURON_PREFETCH_INSECURE_SSL} ALLOW_FAIL=${SAURON_PREFETCH_ALLOW_FAIL} SKIP=${SKIP_HF_MODEL_PREFETCH} HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co (default)}"; \
     export SAURON_PREFETCH_INSECURE_SSL="${SAURON_PREFETCH_INSECURE_SSL}" \
       SKIP_PDF_MODEL_PREFETCH="${SKIP_PDF_MODEL_PREFETCH}" \
@@ -428,10 +496,10 @@ RUN set -eu; \
       HF_HUB_DISABLE_XET=1 \
       HF_HUB_ENABLE_HF_TRANSFER=0; \
     if [ -n "${HF_ENDPOINT}" ]; then export HF_ENDPOINT="${HF_ENDPOINT}"; else unset HF_ENDPOINT || true; fi; \
-    if [ -n "${HF_TOKEN}" ]; then export HF_TOKEN="${HF_TOKEN}"; else unset HF_TOKEN || true; fi; \
-    if [ -n "${HUGGING_FACE_HUB_TOKEN}" ]; then export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN}"; \
-    elif [ -n "${HF_TOKEN:-}" ]; then export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"; \
-    else unset HUGGING_FACE_HUB_TOKEN || true; fi; \
+    if [ -s /run/secrets/hf_token ]; then \
+      HF_TOKEN="$(cat /run/secrets/hf_token)"; HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"; \
+      export HF_TOKEN HUGGING_FACE_HUB_TOKEN; echo "hf_token secret: provided"; \
+    else unset HF_TOKEN HUGGING_FACE_HUB_TOKEN || true; fi; \
     python scripts/prefetch_hf_models.py; \
     if [ "${SAURON_PREFETCH_ALLOW_FAIL}" != "1" ] && [ "${SKIP_HF_MODEL_PREFETCH}" != "1" ] && [ "${SKIP_PDF_MODEL_PREFETCH}" != "1" ]; then \
       test -f /app/.pdf_models_ready; \
@@ -472,6 +540,14 @@ COPY --from=builder /opt/venv-layers/15/ /opt/venv/
 ENV PATH="/opt/venv/bin:$PATH"
 
 RUN python scripts/inject_system_cas_into_certifi.py
+
+# Every shared object shipped must resolve against the runtime's libraries.
+RUN set -eu; \
+    LD=/usr/lib/ld-linux-x86-64.so.2; \
+    find /opt/venv /opt/inkscape /opt/libvisio -type f -name '*.so*' | while read -r f; do \
+      "$LD" --list "$f" 2>/dev/null | grep 'not found' | sed "s#^#${f}: #" || true; \
+    done > /tmp/unresolved; \
+    if [ -s /tmp/unresolved ]; then sort -u /tmp/unresolved | head -50; exit 1; fi
 
 COPY --from=model-builder /opt/model-layers/00/ /
 COPY --from=model-builder /opt/model-layers/01/ /

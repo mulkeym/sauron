@@ -29,8 +29,11 @@ x-sauron-build: &sauron-build
     # Artifactory / corporate HF mirror (huggingface_hub uses these during bake)
     # HF_ENDPOINT=https://artifactory.example.com/artifactory/api/huggingfaceml/huggingface-remote
     HF_ENDPOINT: ${HF_ENDPOINT:-}
-    HF_TOKEN: ${HF_TOKEN:-}
-    HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN:-}}
+  # Optional Hugging Face token (HF_TOKEN in .env or the shell) for the model
+  # download at build time only. Passed as a BuildKit secret so it never lands
+  # in image history, provenance or layers; the runtime needs no token.
+  secrets:
+    - hf_token
 
 services:
   # One-shot: the app runs as uid/gid 65532. Volumes written by older (root)
@@ -107,3 +110,7 @@ services:
 
 volumes:
   app_data:
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

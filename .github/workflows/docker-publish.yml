@@ -108,6 +108,9 @@ jobs:
           cache-to: type=gha,mode=min
           provenance: mode=max
           sbom: true
+          # Optional; only the model download uses it. Never a build arg.
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
 
       - name: Enforce sub-1 GB OCI layers
         run: |
@@ -123,8 +126,10 @@ jobs:
       - name: Check packaged runtime and offline startup
         run: bash scripts/check_packaged_runtime.sh sauron-ci:checked
 
-      # Full report for visibility, then block publishing on any Critical/High
-      # finding that already has a fixed version available.
+      # Two independent scanners: full reports for visibility, then block
+      # publishing on any Critical/High finding that already has a fix. Grype
+      # also fingerprints native libraries bundled inside Python wheels, which
+      # Trivy does not inspect.
       - name: Scan image for vulnerabilities
         run: |
           set -euo pipefail
@@ -137,13 +142,22 @@ jobs:
           trivy image --timeout 30m --scanners vuln --format json --output /out/trivy-full.json sauron-ci:checked
           trivy image --timeout 30m --scanners vuln --ignore-unfixed --severity CRITICAL,HIGH \
             --exit-code 1 sauron-ci:checked
+          grype() {
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$RUNNER_TEMP:/out" -v grype-db:/root/.cache/grype \
+              anchore/grype:v0.119.0 "$@"
+          }
+          grype sauron-ci:checked -q -o json --file /out/grype-full.json
+          grype sauron-ci:checked -q --only-fixed --fail-on high
 
       - name: Upload vulnerability report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-full-report
-          path: ${{ runner.temp }}/trivy-full.json
+          name: vulnerability-reports
+          path: |
+            ${{ runner.temp }}/trivy-full.json
+            ${{ runner.temp }}/grype-full.json
           if-no-files-found: ignore
 
       - name: Run regression tests against packaged source

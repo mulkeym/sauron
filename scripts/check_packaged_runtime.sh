@@ -30,6 +30,14 @@ assert os.getuid() != 0 and os.getgid() != 0, f"runs as root: {os.getuid()}:{os.
 assert os.access("/app/data", os.W_OK), "/app/data not writable by the app user"
 for path in ("/opt/models/huggingface/hub", "/app/src", "/opt/venv"):
     assert os.path.isdir(path) and not os.access(path, os.W_OK), f"{path} should be read-only"
+# No outdated native libraries bundled inside Python wheels (scanners that only
+# read package metadata cannot see these): OpenSSL 1.x, FFmpeg, Qt 5, and
+# libjpeg-turbo 1.x (libjpeg.so.62.0-62.2).
+import re
+site = pathlib.Path(importlib.util.find_spec("cv2").origin).parents[1]
+bundled = [f.name for d in site.glob("*.libs") for f in d.iterdir()]
+outdated = [n for n in bundled if re.search(r"^lib(ssl|crypto)\b.*\.so\.1\.|^libav(codec|format|filter|util|device)\b|^libQt5|^libjpeg\b.*\.so\.62\.[0-2]\.", n)]
+assert not outdated, f"outdated bundled native libraries: {outdated}"
 '
 # The offline embedding model (remote code via transformers' module cache)
 # must load as the unprivileged user.
