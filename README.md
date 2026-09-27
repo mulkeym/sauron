@@ -526,6 +526,29 @@ CI reads the linux/amd64 OCI manifest from GHCR and fails the workflow if any
 compressed layer is 1,000,000,000 bytes or larger. This improves pull retries
 and extraction behavior; it does not reduce the image's total size.
 
+### Container image and security
+
+- **Base:** [Wolfi](https://github.com/wolfi-dev) (`cgr.dev/chainguard/wolfi-base`,
+  glibc, continuously patched), pinned by digest via the `WOLFI_IMAGE` build arg;
+  the runtime stage runs `apk upgrade`. Mirror the base image for air-gapped builds.
+- **Native renderers:** Wolfi does not package Inkscape (EMF) or libvisio
+  (`vsd2xhtml`), so the Dockerfile's `native-tools` stage builds them, the
+  gtkmm-3 stack and DejaVu fonts from SHA-256-pinned sources
+  (`docker/native-sources.sha256`). A cold build compiles for roughly an hour;
+  later builds reuse the cached stage. Scanners cannot see these source-built
+  components, so track their upstream releases manually.
+- **Non-root:** the container runs as uid/gid `65532` (`nonroot`). Models live
+  read-only under `/opt/models`; only `/app/data`, `/tmp` and `$HOME` are
+  writable. With Compose, the one-shot `data-permissions` service re-owns a
+  volume written by an older (root) image on the first `docker compose up`;
+  the `api` service drops all Linux capabilities. Without Compose, re-own the
+  volume once:
+  `docker run --rm --user 0 -v VOLUME:/app/data --entrypoint chown IMAGE -R 65532:65532 /app/data`.
+  The Helm chart sets the matching non-root security context and `fsGroup`.
+- **Vulnerability gate:** CI stores a full Trivy report and refuses to publish
+  an image with any Critical/High finding that has a fix available. See
+  [docs/CERBERUS_REMEDIATION_2026-09.md](docs/CERBERUS_REMEDIATION_2026-09.md).
+
 Kubernetes / Run:ai: use the Helm chart under [`charts/sauron`](charts/sauron) (defaults to the GHCR image).
 
 Services:

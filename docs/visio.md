@@ -32,7 +32,7 @@ All settings are available in **Admin → Settings → All Settings**:
 
 Overall extraction memory/time limits and figure count/pixel/storage limits also apply. Both `figure_extraction_enabled` and `figure_store_enabled` must be on to retain PNGs. Disabling rendering keeps the structured source text and emits a warning.
 
-The image adds Debian `libvisio-tools`, `librsvg2-bin`, `fonts-dejavu-core`, and `fonts-liberation`; `lxml` was already present and is now an explicit requirement. The measured incremental installed-package size on Debian trixie ARM64, after Sauron's existing system dependencies, was 28,008 KiB (about 27.4 MiB). This is not a compressed OCI layer-size measurement; architecture/package updates can change it. The existing layer-size build check still applies.
+The image builds librevenge 0.0.5 and libvisio 0.1.8 (`vsd2xhtml`) from pinned sources in the Dockerfile's `native-tools` stage, because Wolfi does not package them, and installs Wolfi's `rsvg-convert`, `font-liberation` and the pinned DejaVu 2.37 fonts (Debian's former default sans-serif, so text measurement is unchanged). `lxml` is an explicit requirement. Scanners do not inventory the source-built libraries; bump their versions and hashes together. The existing layer-size build check still applies.
 
 ## Inspect without indexing
 

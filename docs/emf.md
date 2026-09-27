@@ -53,12 +53,13 @@ EMF vision analysis to use only PNG and OCR. Standalone EMFs require figure
 extraction and storage to be enabled. Re-ingest or use figure backfill to add
 images to existing documents; this does not rewrite previously ingested figures.
 
-Inkscape is installed without recommended packages in a separate Docker layer.
-A Debian slim test image measured approximately 323 MiB of additional installed
-packages for Inkscape plus Tesseract. Tesseract and some dependencies are already
-in Sauron's runtime, so this is not an exact production image delta. CI's existing
-under-1-GB layer check remains unchanged. No full production image build or
-vulnerability scan is implied by this dependency measurement.
+Wolfi does not package Inkscape, so the Dockerfile's `native-tools` stage
+builds Inkscape 1.4.4 (with the gtkmm-3 bindings it needs) from pinned sources
+into `/opt/inkscape`. Optional importers, spellcheck, D-Bus and translations are
+disabled; EMF import (bundled libUEMF) and PNG export are unaffected. The runtime
+installs only the shared libraries the build links against. Because the build is
+from source, vulnerability scanners do not inventory it; bump the version and
+hash in the Dockerfile and `docker/native-sources.sha256` together.
 
 ## Validation and remaining limitations
 
