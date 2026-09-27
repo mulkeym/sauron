@@ -133,8 +133,9 @@ jobs:
               -v "$RUNNER_TEMP:/out" -v trivy-cache:/root/.cache/trivy \
               aquasec/trivy:0.74.0 "$@"
           }
-          trivy image --scanners vuln --format json --output /out/trivy-full.json sauron-ci:checked
-          trivy image --scanners vuln --ignore-unfixed --severity CRITICAL,HIGH \
+          # The multi-GB image needs longer than Trivy's default 5 min analysis.
+          trivy image --timeout 30m --scanners vuln --format json --output /out/trivy-full.json sauron-ci:checked
+          trivy image --timeout 30m --scanners vuln --ignore-unfixed --severity CRITICAL,HIGH \
             --exit-code 1 sauron-ci:checked
 
       - name: Upload vulnerability report
